@@ -1,0 +1,70 @@
+# Hermes Companion design tokens
+# Minimalist cyberpunk: void, signal, type.
+# Dark only. One accent. No elevation.
+
+meta:
+  name: hermes-companion
+  thesis: "If a mock looks like a cyberpunk poster, it is wrong. If it looks like a calibrated instrument, it is right."
+
+color:
+  void: "#07080A"
+  void-elevated: "#0E1014"
+  line: "#1A1E26"
+  line-strong: "#2A3140"
+  text: "#E6EDF3"
+  text-dim: "#8B96A8"
+  text-mute: "#5C6570"
+  signal: "#00E5C3"
+  signal-dim: "#0A3D36"
+  warn: "#F5A524"
+  danger: "#FF4D6A"
+  # ok reuses signal — do not invent a second green
+
+type:
+  display:
+    family: "IBM Plex Sans"
+    fallback: "sans-serif"
+    size_sp: 22
+    line_sp: 28
+    tracking: 0.5
+  body:
+    family: "IBM Plex Sans"
+    fallback: "sans-serif"
+    size_sp: 15
+    line_sp: 22
+    tracking: 0
+  mono:
+    family: "IBM Plex Mono"
+    fallback: "monospace"
+    size_sp: 12
+    line_sp: 18
+    tracking: 0
+    features: ["tnum"]
+
+space:
+  steps_dp: [4, 8, 12, 16, 24, 40]
+  hairline_px: 1
+  radius_chrome_dp: 0
+  radius_chip_dp: 2
+
+motion:
+  snap_ms: 120
+  snap_easing: [0.2, 0.0, 0.0, 1.0]
+  crossfade_ms: 180
+  bounce: false
+  spring: false
+  stagger_max: 3
+
+elevation: none
+
+voice:
+  chrome_case: lowercase
+  machine_tokens: [GATEWAY, ARMED, DISARMED, DENY, ALLOW, LIVE, HERMES]
+  glyphs: ["●", "○", "◐", "◇", "▸"]
+  emoji_in_chrome: false
+
+hud:
+  dots: [GW, TG, DC, API]
+  on: signal
+  degraded: warn
+  off: text-mute

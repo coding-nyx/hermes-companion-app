@@ -1,0 +1,4 @@
+name: hermes-companion
+version: "0.1.0"
+description: Pair an Android companion as a device node and expose mobile_* tools.
+author: hermes-companion-app

@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hermes Companion — vision board</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --void: #07080A;
+      --void-elevated: #0E1014;
+      --line: #1A1E26;
+      --line-strong: #2A3140;
+      --text: #E6EDF3;
+      --text-dim: #8B96A8;
+      --text-mute: #5C6570;
+      --signal: #00E5C3;
+      --signal-dim: #0A3D36;
+      --warn: #F5A524;
+      --danger: #FF4D6A;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { background: var(--void); color: var(--text); font-family: "IBM Plex Sans", sans-serif; }
+    body { padding: 40px 24px 80px; }
+    .wrap { max-width: 1280px; margin: 0 auto; }
+    header.hero { border-bottom: 1px solid var(--line); padding-bottom: 32px; margin-bottom: 40px; }
+    .kicker { font-family: "IBM Plex Mono", monospace; font-size: 12px; letter-spacing: 0.14em; color: var(--signal); text-transform: uppercase; }
+    h1 { font-size: 22px; line-height: 28px; letter-spacing: 0.5px; font-weight: 400; margin-top: 12px; }
+    .thesis { color: var(--text-dim); font-size: 15px; line-height: 22px; max-width: 62ch; margin-top: 12px; }
+    section { margin: 48px 0; }
+    section h2 { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--text-mute); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 16px; font-weight: 400; }
+    .swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+    .swatch { width: 120px; border: 1px solid var(--line); }
+    .swatch .chip { height: 48px; }
+    .swatch figcaption { font-family: "IBM Plex Mono", monospace; font-size: 11px; padding: 8px; color: var(--text-dim); }
+    .type-row { display: grid; grid-template-columns: 160px 1fr; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 15px; line-height: 22px; }
+    .type-row dt { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--text-mute); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 32px; }
+    .phone {
+      width: 280px;
+      height: 560px;
+      background: var(--void);
+      border: 1px solid var(--line-strong);
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .phone.armed { box-shadow: inset 0 0 0 1px var(--signal); }
+    .status { height: 22px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; font-family: "IBM Plex Mono", monospace; font-size: 10px; color: var(--text-mute); }
+    .header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); min-height: 40px; }
+    .glyph { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--signal); border: 1px solid var(--signal); padding: 2px 5px; }
+    .title { font-size: 13px; flex: 1; white-space: nowrap; overflow: hidden; }
+    .hud { font-family: "IBM Plex Mono", monospace; font-size: 9px; letter-spacing: 0.08em; color: var(--text-mute); display: flex; gap: 6px; }
+    .hud .on { color: var(--signal); }
+    .hud .warn { color: var(--warn); }
+    .body { flex: 1; overflow: hidden; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+    .mono { font-family: "IBM Plex Mono", monospace; font-size: 11px; line-height: 16px; }
+    .dim { color: var(--text-dim); }
+    .mute { color: var(--text-mute); }
+    .signal { color: var(--signal); }
+    .row { display: flex; justify-content: space-between; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--line); }
+    .tick { width: 2px; background: var(--signal); margin-right: 8px; }
+    .thread { display: flex; gap: 8px; }
+    .composer { border-top: 1px solid var(--line); padding: 10px 12px; font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--text-mute); display: flex; justify-content: space-between; }
+    .strip { border-top: 1px solid var(--warn); background: var(--void-elevated); padding: 10px 12px; }
+    .strip .lab { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--warn); letter-spacing: 0.08em; }
+    .actions { display: flex; gap: 8px; margin-top: 8px; }
+    .btn { font-family: "IBM Plex Mono", monospace; font-size: 11px; padding: 6px 10px; border: 1px solid var(--line-strong); letter-spacing: 0.08em; }
+    .btn.allow { border-color: var(--signal); color: var(--signal); }
+    .btn.deny { border-color: var(--danger); color: var(--danger); }
+    .nav { border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(4, 1fr); font-family: "IBM Plex Mono", monospace; font-size: 9px; letter-spacing: 0.1em; text-align: center; padding: 10px 0; color: var(--text-mute); }
+    .nav .cur { color: var(--signal); }
+    .squares { display: flex; gap: 8px; }
+    .sq { width: 36px; height: 36px; border: 1px solid var(--line-strong); display: flex; align-items: center; justify-content: center; font-family: "IBM Plex Mono", monospace; font-size: 10px; color: var(--text-mute); }
+    .sq.on { border-color: var(--signal); color: var(--signal); }
+    .empty { flex: 1; display: flex; align-items: center; justify-content: center; font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--text-mute); letter-spacing: 0.08em; }
+    .code { font-family: "IBM Plex Mono", monospace; font-size: 28px; letter-spacing: 0.28em; color: var(--signal); text-align: center; margin: 24px 0 8px; }
+    .qr { width: 96px; height: 96px; margin: 12px auto; border: 1px solid var(--signal); background:
+      linear-gradient(90deg, var(--signal) 1px, transparent 1px) 0 0 / 8px 8px,
+      linear-gradient(var(--signal) 1px, transparent 1px) 0 0 / 8px 8px,
+      var(--void); }
+    .livechip { position: absolute; top: 28px; right: 8px; font-family: "IBM Plex Mono", monospace; font-size: 9px; letter-spacing: 0.14em; color: var(--void); background: var(--signal); padding: 2px 6px; z-index: 2; }
+    .film { display: flex; gap: 4px; margin-top: auto; }
+    .film div { flex: 1; height: 64px; border: 1px solid var(--line); background: var(--void-elevated); }
+    .cap { margin-top: 10px; font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--text-dim); }
+    .cap b { color: var(--text); font-weight: 400; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--text-mute); font-weight: 400; letter-spacing: 0.08em; }
+    .principles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+    .principles li { list-style: none; border: 1px solid var(--line); padding: 12px; font-size: 14px; line-height: 20px; color: var(--text-dim); }
+    .principles strong { display: block; color: var(--text); font-weight: 400; margin-bottom: 4px; font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+    .msg { font-size: 13px; line-height: 18px; }
+    .msg.user { color: var(--text-dim); }
+    .tool { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--text-mute); border: 1px solid var(--line); padding: 6px 8px; }
+    .cursor { display: inline-block; width: 7px; height: 13px; background: var(--signal); vertical-align: text-bottom; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <div class="kicker">Hermes Companion // vision board</div>
+      <h1>Void, signal, type.</h1>
+      <p class="thesis">Black field. One living color for “Hermes is here.” Hairline geometry. Monospace for machine state, humanist sans for human words. If a mock looks like a cyberpunk poster, it is wrong. If it looks like a calibrated instrument, it is right.</p>
+    </header>
+
+    <section>
+      <h2>01 · tokens</h2>
+      <div class="swatches">
+        <figure class="swatch"><div class="chip" style="background:#07080A;border-bottom:1px solid #1A1E26"></div><figcaption>void #07080A</figcaption></figure>
+        <figure class="swatch"><div class="chip" style="background:#0E1014"></div><figcaption>elevated #0E1014</figcaption></figure>
+        <figure class="swatch"><div class="chip" style="background:#1A1E26"></div><figcaption>line #1A1E26</figcaption></figure>
+        <figure class="swatch"><div class="chip" style="background:#E6EDF3"></div><figcaption>text #E6EDF3</figcaption></figure>
+        <figure class="swatch"><div class="chip" style="background:#8B96A8"></div><figcaption>dim #8B96A8</figcaption></figure>
+        <figure class="swatch"><div class="chip" style="background:#00E5C3"></div><figcaption>signal #00E5C3</figcaption></figure>
+        <figure class="swatch"><div class="chip" style="background:#0A3D36"></div><figcaption>signal-dim #0A3D36</figcaption></figure>
+        <figure class="swatch"><div class="chip" style="background:#F5A524"></div><figcaption>warn #F5A524</figcaption></figure>
+        <figure class="swatch"><div class="chip" style="background:#FF4D6A"></div><figcaption>danger #FF4D6A</figcaption></figure>
+      </div>
+    </section>
+
+    <section>
+      <h2>02 · type</h2>
+      <dl>
+        <div class="type-row"><dt>display 22/28</dt><dd style="font-size:22px;line-height:28px;letter-spacing:0.5px">Hermes in your pocket</dd></div>
+        <div class="type-row"><dt>body 15/22</dt><dd>continue a thread away from the desk. the agent stays on the host.</dd></div>
+        <div class="type-row"><dt>mono 12/18</dt><dd class="mono">ws 4401 · ticket expired &nbsp;&nbsp; GW ● &nbsp; TG ○ &nbsp; DC ● &nbsp; API ○</dd></div>
+      </dl>
+    </section>
+
+    <section>
+      <h2>03 · principles</h2>
+      <ul class="principles">
+        <li><strong>01 source of truth</strong>Hermes owns transcripts. Local DB is a cache. Server wins.</li>
+        <li><strong>02 one profile, one world</strong>Never mix sessions. The active profile is always visible.</li>
+        <li><strong>03 hands off by default</strong>Device control is an armed state with a visible tell and a one-gesture disarm.</li>
+        <li><strong>04 fail closed</strong>Unknown capability, expired ticket, missing a11y → refuse. Do not degrade silently.</li>
+        <li><strong>05 quiet chrome</strong>If a pixel is not status, content, or a primary action, it does not exist.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>04 · north-star frames</h2>
+      <div class="grid">
+
+        <figure>
+          <div class="phone">
+            <div class="status"><span>9:41</span><span>TS</span></div>
+            <div class="header"><span class="title mute">connect</span></div>
+            <div class="body" style="align-items:center;justify-content:center;text-align:center">
+              <div class="qr" aria-hidden="true"></div>
+              <div class="code">K7M2QX</div>
+              <div class="mono mute">pair with host · 09:41 left</div>
+              <div class="mono dim" style="margin-top:16px">http://100.x.x.x:9119</div>
+            </div>
+          </div>
+          <figcaption class="cap"><b>01 connect</b> — one code, hairline QR, no mascot.</figcaption>
+        </figure>
+
+        <figure>
+          <div class="phone">
+            <div class="status"><span>9:41</span><span>TS</span></div>
+            <div class="header">
+              <span class="glyph">COD</span>
+              <span class="title">threads</span>
+              <span class="hud"><span class="on">GW</span><span>TG</span><span>DC</span><span>API</span></span>
+            </div>
+            <div class="body" style="padding:0 12px">
+              <div class="thread"><div class="tick"></div><div style="flex:1">
+                <div class="row"><span>fix auth ticket</span><span class="mono mute">2m</span></div>
+              </div></div>
+              <div class="thread"><div class="tick" style="background:transparent"></div><div style="flex:1">
+                <div class="row"><span class="dim">cron: morning brief</span><span class="mono mute">1h</span></div>
+              </div></div>
+              <div class="thread"><div class="tick" style="background:transparent"></div><div style="flex:1">
+                <div class="row"><span class="dim">research: a11y tree</span><span class="mono mute">yday</span></div>
+              </div></div>
+              <div class="empty mute" style="flex:0;padding:24px 0">NO SESSIONS // waiting is a lie — three live</div>
+            </div>
+            <div class="nav"><span class="cur">THREADS</span><span>PROFILES</span><span>GATEWAY</span><span>DEVICE</span></div>
+          </div>
+          <figcaption class="cap"><b>02 threads</b> — unread is a 2px tick. timestamps in mono.</figcaption>
+        </figure>
+
+        <figure>
+          <div class="phone">
+            <div class="status"><span>9:41</span><span>TS</span></div>
+            <div class="header">
+              <span class="glyph">COD</span>
+              <span class="title">fix auth ticket</span>
+              <span class="hud"><span class="on">GW</span></span>
+            </div>
+            <div class="body">
+              <div class="msg user">the ws dies after 30s on gated dashboards</div>
+              <div class="tool">terminal · journalctl -u hermes-gateway · 1.2s</div>
+              <div class="msg">ticket is single-use. mint per connect, do not cache.<span class="cursor"></span></div>
+            </div>
+            <div class="composer"><span>message hermes</span><span class="signal">SEND</span></div>
+          </div>
+          <figcaption class="cap"><b>03 live turn</b> — block cursor, collapsed tool row, no bounce spinner.</figcaption>
+        </figure>
+
+        <figure>
+          <div class="phone">
+            <div class="status"><span>9:41</span><span>TS</span></div>
+            <div class="header">
+              <span class="glyph">OPS</span>
+              <span class="title">cleanup build</span>
+            </div>
+            <div class="body">
+              <div class="msg user">wipe the artifact dir</div>
+              <div class="tool">terminal · pending approval</div>
+            </div>
+            <div class="strip">
+              <div class="lab">APPROVAL · rm -rf build/</div>
+              <div class="actions"><span class="btn allow">ALLOW</span><span class="btn deny">DENY</span></div>
+            </div>
+          </div>
+          <figcaption class="cap"><b>04 approval</b> — full-width strip, not a modal. hardware back = deny.</figcaption>
+        </figure>
+
+        <figure>
+          <div class="phone">
+            <div class="status"><span>9:41</span><span>TS</span></div>
+            <div class="header">
+              <span class="title">profiles</span>
+            </div>
+            <div class="body">
+              <div class="squares">
+                <div class="sq on">COD</div>
+                <div class="sq">PER</div>
+                <div class="sq">OPS</div>
+              </div>
+              <div class="mono dim" style="margin-top:16px">coder<br>model  sonnet-4.6<br>sessions  14<br>gateway  running</div>
+            </div>
+            <div class="nav"><span>THREADS</span><span class="cur">PROFILES</span><span>GATEWAY</span><span>DEVICE</span></div>
+          </div>
+          <figcaption class="cap"><b>05 profiles</b> — fleet of squares, one accent border, no page jump.</figcaption>
+        </figure>
+
+        <figure>
+          <div class="phone">
+            <div class="status"><span>9:41</span><span>TS</span></div>
+            <div class="header"><span class="title">gateway</span></div>
+            <div class="body">
+              <div class="row"><span class="mono">GW</span><span class="mono signal">● running  pid 4412</span></div>
+              <div class="row"><span class="mono">TG</span><span class="mono" style="color:var(--warn)">◐ telegram reconnect</span></div>
+              <div class="row"><span class="mono">DC</span><span class="mono mute">○ device disarmed</span></div>
+              <div class="row"><span class="mono">API</span><span class="mono mute">○ :8642 loopback</span></div>
+            </div>
+            <div class="nav"><span>THREADS</span><span>PROFILES</span><span class="cur">GATEWAY</span><span>DEVICE</span></div>
+          </div>
+          <figcaption class="cap"><b>06 HUD</b> — four glyphs. on / degraded / off. no charts.</figcaption>
+        </figure>
+
+        <figure>
+          <div class="phone armed">
+            <div class="livechip">LIVE</div>
+            <div class="status"><span>9:41</span><span>TS</span></div>
+            <div class="header">
+              <span class="glyph">PER</span>
+              <span class="title">device</span>
+            </div>
+            <div class="body">
+              <div class="mono signal">ARMED</div>
+              <div class="mono dim">a11y bound · overlay on<br>idle disarm 04:12<br>last  device.snapshot  ok</div>
+              <div class="btn deny" style="margin-top:auto;align-self:flex-start">DISARM</div>
+            </div>
+            <div class="nav"><span>THREADS</span><span>PROFILES</span><span>GATEWAY</span><span class="cur">DEVICE</span></div>
+          </div>
+          <figcaption class="cap"><b>07 armed</b> — 1px cyan frame, LIVE chip, notification elsewhere. kill switch here.</figcaption>
+        </figure>
+
+        <figure>
+          <div class="phone armed">
+            <div class="livechip">LIVE</div>
+            <div class="status"><span>9:41</span><span>TS</span></div>
+            <div class="header">
+              <span class="glyph">PER</span>
+              <span class="title">order the usual</span>
+            </div>
+            <div class="body">
+              <div class="tool">mobile_snapshot · @e4 Submit</div>
+              <div class="tool">mobile_click · e4</div>
+              <div class="msg">tapped Submit. waiting on confirmation.</div>
+              <div class="film" aria-hidden="true"><div></div><div></div><div></div></div>
+              <div class="mono mute">filmstrip · 0.4 fps · not the chat</div>
+            </div>
+          </div>
+          <figcaption class="cap"><b>08 device live</b> — chat stays text. screenshots live in a drawer.</figcaption>
+        </figure>
+
+      </div>
+    </section>
+
+    <section>
+      <h2>05 · not this</h2>
+      <p class="thesis">No neon city. No rain. No kanji watermarks. No chrome bevels. No glassmorphism. No bounce spinners. No second accent green. No emoji in chrome.</p>
+    </section>
+
+    <section>
+      <h2>06 · milestones</h2>
+      <table>
+        <thead><tr><th>id</th><th>done when</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">M1 operator</td><td>gated dashboard, profile switch, resume a Desktop thread, send, approve, survive a WS drop without duplicate sends</td></tr>
+          <tr><td class="mono">M2 hands</td><td>arm, snapshot/click a fixture app, overlay + notification, disarm from notification, banking package refused</td></tr>
+          <tr><td class="mono">M3 wake</td><td>activity killed, host approval notifies, tap opens the strip, agent continues</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </div>
+</body>
+</html>
