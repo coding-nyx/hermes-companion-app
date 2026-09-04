@@ -1,6 +1,7 @@
 package app.hermes.companion.device
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Bitmap
@@ -30,6 +31,10 @@ class CompanionAccessibilityService : AccessibilityService() {
     private var lastVolumeDownMs = 0L
 
     override fun onServiceConnected() {
+        super.onServiceConnected()
+        val info = serviceInfo ?: AccessibilityServiceInfo()
+        info.flags = info.flags or AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
+        serviceInfo = info
         bound = true
         instance = this
     }

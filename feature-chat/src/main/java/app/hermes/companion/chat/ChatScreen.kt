@@ -53,6 +53,8 @@ fun ChatScreen(
     rewindTargetId: String? = null,
     onRewind: (ChatMessage) -> Unit = {},
     onCancelRewind: () -> Unit = {},
+    isListeningVoice: Boolean = false,
+    onVoiceClick: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -161,7 +163,24 @@ fun ChatScreen(
                 onValueChange = onDraftChange,
                 modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.width(CompanionSpace.Md))
+            Spacer(Modifier.width(CompanionSpace.Sm))
+            Text(
+                text = if (isListeningVoice) "..." else "MIC",
+                style = CompanionType.MonoSmall.copy(
+                    color = if (isListeningVoice) CompanionColor.Warn else CompanionColor.Signal,
+                ),
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier
+                    .testTag("chat.voice")
+                    .border(
+                        CompanionSpace.Hairline,
+                        if (isListeningVoice) CompanionColor.Warn else CompanionColor.LineStrong,
+                    )
+                    .clickable(onClick = onVoiceClick)
+                    .padding(horizontal = 10.dp, vertical = 10.dp),
+            )
+            Spacer(Modifier.width(CompanionSpace.Sm))
             val action = if (streaming) "INTERRUPT" to onInterrupt else "SEND" to onSend
             Text(
                 text = action.first,

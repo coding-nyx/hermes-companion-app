@@ -544,6 +544,97 @@ class DashboardClientTest {
         }
     }
 
+    @Test
+    fun authorizationHeaderContainsBearerToken() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
+            val client = DashboardClient(server.toOkHttp(), attachToken = true)
+            client.sessionToken = "secret-token-12345"
+            client.gated = false
+            val origin = server.url("/").toString().trimEnd('/')
+
+            client.probe(origin)
+            val recorded = server.takeRequest()
+            assertEquals("Bearer secret-token-12345", recorded.getHeader("Authorization"))
+            assertEquals("secret-token-12345", recorded.getHeader("X-Hermes-Session-Token"))
+        }
+    }
+
+    @Test
+    fun hostMetricsAndGitAndTerminalRemoteCalls() = runBlocking {
+        MockWebServer().use { server ->
+            // Metrics response
+            server.enqueue(
+                MockResponse().setBody(
+                    """
+                    {"ok":true,"metrics":{
+                        "cpu":{"percent":18.5,"cores":8,"load_avg":[1.2,1.5,1.8]},
+                        "memory":{"total_bytes":16000000000,"used_bytes":8000000000,"free_bytes":8000000000,"percent":50.0},
+                        "disk":{"total_bytes":500000000000,"used_bytes":200000000000,"free_bytes":300000000000,"percent":40.0},
+                        "system":{"platform":"Linux","release":"6.1","architecture":"x86_64","python_version":"3.11","uptime_seconds":3600},
+                        "hermes":{"pid":4242,"status":"running"}
+                    }}
+                    """.trimIndent(),
+                ),
+            )
+            // Git status response
+            server.enqueue(
+                MockResponse().setBody(
+                    """
+                    {"ok":true,"branch":"feat/term","tracking":"origin/feat/term","ahead":1,"behind":0,
+                     "staged_files":["file1.kt"],"modified_files":["file2.kt"],"untracked_files":["new.txt"]}
+                    """.trimIndent(),
+                ),
+            )
+            // Terminal exec response
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"ok":true,"exit_code":0,"stdout":"echo output\n","stderr":""}""",
+                ),
+            )
+
+            val client = DashboardClient(server.toOkHttp())
+            val origin = server.url("/").toString().trimEnd('/')
+
+            val metrics = client.getHostMetrics(origin)
+            assertEquals(18.5, metrics.cpu.percent, 0.01)
+            assertEquals(4242, metrics.hermes.pid)
+            assertEquals("running", metrics.hermes.status)
+
+            val git = client.getGitStatus(origin)
+            assertEquals("feat/term", git.branch)
+            assertEquals(listOf("file1.kt"), git.stagedFiles)
+            assertEquals(1, git.ahead)
+
+            val term = client.executeTerminalCommand(origin, "echo 'hello'")
+            assertTrue(term.ok)
+            assertEquals(0, term.exitCode)
+            assertEquals("echo output\n", term.stdout)
+        }
+    }
+
     private fun MockWebServer.toOkHttp() = okhttp3.OkHttpClient.Builder()
         .build()
+}
+
+
+class CleartextPolicyTest {
+    @Test
+    fun cleartextToPublicHostIsRefusedBeforeNetwork() = runBlocking {
+        val client = DashboardClient(okhttp3.OkHttpClient())
+        val failure = runCatching { client.probe("http://hermes.example.invalid:9120") }.exceptionOrNull()
+        assertTrue(failure != null)
+        assertTrue(failure!!.message.orEmpty().contains("cleartext_denied"))
+    }
+
+    @Test
+    fun cleartextToLoopbackIsAllowed() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"auth_required":false}"""))
+            val client = DashboardClient(okhttp3.OkHttpClient())
+            val origin = server.url("/").toString().trimEnd('/')
+            val status = client.probe(origin)
+            assertFalse(status.authRequired)
+        }
+    }
 }

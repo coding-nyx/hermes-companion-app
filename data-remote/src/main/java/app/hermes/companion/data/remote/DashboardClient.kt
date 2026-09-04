@@ -4,6 +4,7 @@ import app.hermes.companion.domain.AuthPolicy
 import app.hermes.companion.domain.DashboardUrls
 import app.hermes.companion.domain.DeviceLanePolicy
 import app.hermes.companion.domain.HistoryPaging
+import app.hermes.companion.domain.OriginPolicy
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.RewindPolicy
 import app.hermes.companion.domain.RewindSubmit
@@ -35,9 +36,28 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import app.hermes.companion.model.GitBranches
+import app.hermes.companion.model.GitDiffSummary
+import app.hermes.companion.model.GitStatus
+import app.hermes.companion.model.HostMetrics
+import app.hermes.companion.model.HostCpuMetrics
+import app.hermes.companion.model.HostMemoryMetrics
+import app.hermes.companion.model.HostDiskMetrics
+import app.hermes.companion.model.HostSystemMetrics
+import app.hermes.companion.model.HostHermesProcess
+import app.hermes.companion.model.RemoteFsItem
+import app.hermes.companion.model.TerminalExecResult
+import app.hermes.companion.model.CronJob
+import app.hermes.companion.model.ModelCatalog
+import app.hermes.companion.model.ModelOption
+import app.hermes.companion.model.HermesUpdateStatus
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -555,6 +575,16 @@ class DashboardClient internal constructor(
     private fun buildHttp(base: OkHttpClient, attachToken: Boolean): OkHttpClient =
         base.newBuilder()
             .cookieJar(cookies)
+            // Cleartext only toward LAN / Tailscale hosts. The manifest network-security config
+            // cannot express IP ranges, so the policy lives in OriginPolicy and is enforced here
+            // for REST, WebSocket (wsHttp derives from this client) and ntfy SSE alike.
+            .addInterceptor { chain ->
+                val url = chain.request().url
+                if (!url.isHttps && !OriginPolicy.privateHost(url.host)) {
+                    throw java.io.IOException(OriginPolicy.CLEARTEXT_DENIED)
+                }
+                chain.proceed(chain.request())
+            }
             .apply {
                 if (attachToken) {
                     addInterceptor { chain ->
@@ -562,7 +592,7 @@ class DashboardClient internal constructor(
                         val req = chain.request().newBuilder()
                         if (!gated && !token.isNullOrBlank()) {
                             req.header("X-Hermes-Session-Token", token)
-                            req.header("Authorization", "******")
+                            req.header("Authorization", "Bearer $token")
                         }
                         chain.proceed(req.build())
                     }
@@ -609,6 +639,189 @@ class DashboardClient internal constructor(
             parse(body)
         }
     }
+
+    suspend fun getHostMetrics(origin: String): HostMetrics {
+        return try {
+            get("$origin/companion/host/metrics") { body ->
+                val obj = Json.parseToJsonElement(body).jsonObject
+                val metricsObj = obj["metrics"] ?: return@get HostMetrics()
+                Json { ignoreUnknownKeys = true }.decodeFromJsonElement(HostMetrics.serializer(), metricsObj)
+            }
+        } catch (e: Exception) {
+            // Fallback to native Hermes /api/system/stats
+            get("$origin/api/system/stats") { body ->
+                val obj = Json.parseToJsonElement(body).jsonObject
+                val cpuPercent = obj["cpu_percent"]?.jsonPrimitive?.doubleOrNull ?: 0.0
+                val cpuCount = obj["cpu_count"]?.jsonPrimitive?.intOrNull ?: 1
+                val loadAvg = obj["load_avg"]?.jsonArray?.mapNotNull { it.jsonPrimitive.doubleOrNull } ?: emptyList()
+                val memObj = obj["memory"]?.jsonObject
+                val memTotal = memObj?.get("total")?.jsonPrimitive?.longOrNull ?: 0L
+                val memUsed = memObj?.get("used")?.jsonPrimitive?.longOrNull ?: 0L
+                val memAvail = memObj?.get("available")?.jsonPrimitive?.longOrNull ?: 0L
+                val memPercent = memObj?.get("percent")?.jsonPrimitive?.doubleOrNull ?: 0.0
+                val diskObj = obj["disk"]?.jsonObject
+                val diskTotal = diskObj?.get("total")?.jsonPrimitive?.longOrNull ?: 0L
+                val diskUsed = diskObj?.get("used")?.jsonPrimitive?.longOrNull ?: 0L
+                val diskFree = diskObj?.get("free")?.jsonPrimitive?.longOrNull ?: 0L
+                val diskPercent = diskObj?.get("percent")?.jsonPrimitive?.doubleOrNull ?: 0.0
+                val os = obj["os"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val hostname = obj["hostname"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val arch = obj["arch"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val pyVer = obj["python_version"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val uptime = obj["uptime_seconds"]?.jsonPrimitive?.longOrNull ?: 0L
+                val procObj = obj["process"]?.jsonObject
+                val pid = procObj?.get("pid")?.jsonPrimitive?.intOrNull ?: 0
+                HostMetrics(
+                    cpu = HostCpuMetrics(percent = cpuPercent, cores = cpuCount, loadAvg = loadAvg),
+                    memory = HostMemoryMetrics(totalBytes = memTotal, usedBytes = memUsed, freeBytes = memAvail, percent = memPercent),
+                    disk = HostDiskMetrics(totalBytes = diskTotal, usedBytes = diskUsed, freeBytes = diskFree, percent = diskPercent),
+                    system = HostSystemMetrics(platform = "$os ($hostname)", release = arch, pythonVersion = pyVer, uptimeSeconds = uptime),
+                    hermes = HostHermesProcess(pid = pid, status = "online"),
+                )
+            }
+        }
+    }
+
+    suspend fun getGitStatus(origin: String, repoPath: String = ""): GitStatus {
+        return try {
+            get("$origin/companion/git/status") { body ->
+                Json { ignoreUnknownKeys = true }.decodeFromString(GitStatus.serializer(), body)
+            }
+        } catch (e: Exception) {
+            val query = if (repoPath.isNotBlank()) "?path=$repoPath" else ""
+            get("$origin/api/git/status$query") { body ->
+                val obj = Json.parseToJsonElement(body).jsonObject
+                val branch = obj["branch"]?.jsonPrimitive?.contentOrNull ?: "main"
+                val files = obj["files"]?.jsonArray ?: emptyList()
+                val staged = mutableListOf<String>()
+                val modified = mutableListOf<String>()
+                val untracked = mutableListOf<String>()
+                for (f in files) {
+                    val fObj = f.jsonObject
+                    val path = fObj["path"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    if (fObj["staged"]?.jsonPrimitive?.booleanOrNull == true) staged.add(path)
+                    if (fObj["untracked"]?.jsonPrimitive?.booleanOrNull == true) untracked.add(path)
+                    else if (fObj["unstaged"]?.jsonPrimitive?.booleanOrNull == true) modified.add(path)
+                }
+                GitStatus(branch = branch, stagedFiles = staged, modifiedFiles = modified, untrackedFiles = untracked)
+            }
+        }
+    }
+
+    suspend fun getGitDiff(origin: String, file: String? = null, staged: Boolean = false): GitDiffSummary =
+        get(buildString {
+            append("$origin/companion/git/diff?staged=$staged")
+            if (!file.isNullOrBlank()) append("&file=$file")
+        }) { body ->
+            Json { ignoreUnknownKeys = true }.decodeFromString(GitDiffSummary.serializer(), body)
+        }
+
+    suspend fun getGitBranches(origin: String): GitBranches =
+        get("$origin/companion/git/branches") { body ->
+            Json { ignoreUnknownKeys = true }.decodeFromString(GitBranches.serializer(), body)
+        }
+
+    suspend fun stageGitFile(origin: String, path: String, stage: Boolean = true): Boolean =
+        post("$origin/companion/git/stage", """{"path":"$path","stage":$stage}""") { body ->
+            Json.parseToJsonElement(body).jsonObject["ok"]?.jsonPrimitive?.booleanOrNull ?: false
+        }
+
+    suspend fun commitGit(origin: String, message: String): Boolean =
+        post("$origin/companion/git/commit", """{"message":${message.json()}}""") { body ->
+            Json.parseToJsonElement(body).jsonObject["ok"]?.jsonPrimitive?.booleanOrNull ?: false
+        }
+
+    suspend fun executeTerminalCommand(origin: String, cmd: String): TerminalExecResult =
+        post("$origin/companion/terminal/exec", """{"cmd":${cmd.json()}}""") { body ->
+            Json { ignoreUnknownKeys = true }.decodeFromString(TerminalExecResult.serializer(), body)
+        }
+
+    suspend fun listWorkspaceFiles(origin: String, path: String = ""): List<RemoteFsItem> =
+        get("$origin/companion/fs/tree?path=$path") { body ->
+            val obj = Json.parseToJsonElement(body).jsonObject
+            val items = obj["items"]?.jsonArray ?: return@get emptyList()
+            Json { ignoreUnknownKeys = true }.decodeFromJsonElement(
+                kotlinx.serialization.builtins.ListSerializer(RemoteFsItem.serializer()),
+                items,
+            )
+        }
+
+    suspend fun readWorkspaceFile(origin: String, path: String): String =
+        get("$origin/companion/fs/read?path=$path") { body ->
+            Json.parseToJsonElement(body).jsonObject["content"]?.jsonPrimitive?.content.orEmpty()
+        }
+
+    suspend fun getCronJobs(origin: String): List<CronJob> =
+        get("$origin/api/cron/jobs") { body ->
+            Json { ignoreUnknownKeys = true }.decodeFromString(
+                kotlinx.serialization.builtins.ListSerializer(CronJob.serializer()),
+                body,
+            )
+        }
+
+    suspend fun triggerCronJob(origin: String, jobId: String): Boolean =
+        post("$origin/api/cron/jobs/$jobId/trigger", "{}") { true }
+
+    suspend fun toggleCronJob(origin: String, jobId: String, pause: Boolean): Boolean {
+        val endpoint = if (pause) "pause" else "resume"
+        return post("$origin/api/cron/jobs/$jobId/$endpoint", "{}") { true }
+    }
+
+    suspend fun getModelCatalog(origin: String): ModelCatalog =
+        get("$origin/api/model/options") { body ->
+            val obj = Json.parseToJsonElement(body).jsonObject
+            val currentModel = obj["model"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val currentProvider = obj["provider"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val providers = obj["providers"]?.jsonArray ?: emptyList()
+            val options = mutableListOf<ModelOption>()
+            for (p in providers) {
+                val pObj = p.jsonObject
+                val pSlug = pObj["slug"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val pName = pObj["name"]?.jsonPrimitive?.contentOrNull ?: pSlug
+                val models = pObj["models"]?.jsonArray ?: emptyList()
+                val caps = pObj["capabilities"]?.jsonObject
+                for (m in models) {
+                    val mName = m.jsonPrimitive.contentOrNull.orEmpty()
+                    val mCaps = caps?.get(mName)?.jsonObject
+                    val reasoning = mCaps?.get("reasoning")?.jsonPrimitive?.booleanOrNull ?: false
+                    val fast = mCaps?.get("fast")?.jsonPrimitive?.booleanOrNull ?: false
+                    options.add(ModelOption(id = mName, provider = pSlug, name = "$pName · $mName", reasoning = reasoning, fast = fast))
+                }
+            }
+            ModelCatalog(currentModel = currentModel, currentProvider = currentProvider, models = options)
+        }
+
+    suspend fun switchModel(origin: String, model: String, provider: String, profile: String? = null): Boolean {
+        val payload = """{"model":${model.json()},"provider":${provider.json()}}"""
+        return if (!profile.isNullOrBlank()) {
+            post("$origin/api/profiles/$profile/model", payload) { true }
+        } else {
+            post("$origin/api/model/set", payload) { true }
+        }
+    }
+
+    suspend fun checkHermesUpdate(origin: String): HermesUpdateStatus =
+        get("$origin/api/hermes/update/check") { body ->
+            val obj = Json.parseToJsonElement(body).jsonObject
+            val currentVer = obj["current_version"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val updateAvail = obj["update_available"]?.jsonPrimitive?.booleanOrNull ?: false
+            val canApply = obj["can_apply"]?.jsonPrimitive?.booleanOrNull ?: false
+            val behind = obj["behind"]?.jsonPrimitive?.intOrNull ?: 0
+            val cmd = obj["update_command"]?.jsonPrimitive?.contentOrNull ?: "hermes update"
+            val commits = obj["commits"]?.jsonArray
+            val firstSummary = commits?.firstOrNull()?.jsonObject?.get("summary")?.jsonPrimitive?.contentOrNull.orEmpty()
+            HermesUpdateStatus(
+                currentVersion = currentVer,
+                updateAvailable = updateAvail,
+                canApply = canApply,
+                behind = behind,
+                summary = firstSummary,
+                updateCommand = cmd,
+            )
+        }
+
+    suspend fun applyHermesUpdate(origin: String): Boolean =
+        post("$origin/api/hermes/update", "{}") { true }
 
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()

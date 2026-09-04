@@ -1,5 +1,6 @@
 package app.hermes.companion.model
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -185,3 +186,144 @@ data class GatewayHud(
     val discord: HudState = HudState.OFF,
     val api: HudState = HudState.OFF,
 )
+
+@Serializable
+data class HostCpuMetrics(
+    val percent: Double = 0.0,
+    val cores: Int = 1,
+    @SerialName("load_avg") val loadAvg: List<Double> = emptyList(),
+)
+
+@Serializable
+data class HostMemoryMetrics(
+    @SerialName("total_bytes") val totalBytes: Long = 0L,
+    @SerialName("used_bytes") val usedBytes: Long = 0L,
+    @SerialName("free_bytes") val freeBytes: Long = 0L,
+    val percent: Double = 0.0,
+)
+
+@Serializable
+data class HostDiskMetrics(
+    @SerialName("total_bytes") val totalBytes: Long = 0L,
+    @SerialName("used_bytes") val usedBytes: Long = 0L,
+    @SerialName("free_bytes") val freeBytes: Long = 0L,
+    val percent: Double = 0.0,
+)
+
+@Serializable
+data class HostSystemMetrics(
+    val platform: String = "",
+    val release: String = "",
+    val architecture: String = "",
+    @SerialName("python_version") val pythonVersion: String = "",
+    @SerialName("uptime_seconds") val uptimeSeconds: Long = 0L,
+)
+
+@Serializable
+data class HostHermesProcess(
+    val pid: Int = 0,
+    val status: String = "online",
+)
+
+@Serializable
+data class HostMetrics(
+    val cpu: HostCpuMetrics = HostCpuMetrics(),
+    val memory: HostMemoryMetrics = HostMemoryMetrics(),
+    val disk: HostDiskMetrics = HostDiskMetrics(),
+    val system: HostSystemMetrics = HostSystemMetrics(),
+    val hermes: HostHermesProcess = HostHermesProcess(),
+)
+
+@Serializable
+data class GitStatus(
+    val branch: String = "main",
+    val tracking: String = "",
+    val ahead: Int = 0,
+    val behind: Int = 0,
+    @SerialName("staged_files") val stagedFiles: List<String> = emptyList(),
+    @SerialName("modified_files") val modifiedFiles: List<String> = emptyList(),
+    @SerialName("untracked_files") val untrackedFiles: List<String> = emptyList(),
+)
+
+@Serializable
+data class GitDiffSummary(
+    @SerialName("raw_diff") val rawDiff: String = "",
+    @SerialName("files_changed") val filesChanged: Int = 0,
+    val insertions: Int = 0,
+    val deletions: Int = 0,
+)
+
+@Serializable
+data class GitBranches(
+    val current: String = "",
+    val branches: List<String> = emptyList(),
+)
+
+@Serializable
+data class RemoteFsItem(
+    val path: String = "",
+    val name: String = "",
+    @SerialName("is_dir") val isDir: Boolean = false,
+    @SerialName("size_bytes") val sizeBytes: Long = 0L,
+    @SerialName("modified_ms") val modifiedMs: Long = 0L,
+)
+
+@Serializable
+data class TerminalExecResult(
+    val ok: Boolean = false,
+    @SerialName("exit_code") val exitCode: Int = 0,
+    val stdout: String = "",
+    val stderr: String = "",
+)
+
+@Serializable
+data class CronJob(
+    val id: String,
+    val name: String = "",
+    val prompt: String = "",
+    @SerialName("schedule_display") val scheduleDisplay: String = "",
+    val enabled: Boolean = true,
+    val state: String = "scheduled",
+    @SerialName("next_run_at") val nextRunAt: String? = null,
+    @SerialName("last_run_at") val lastRunAt: String? = null,
+    @SerialName("last_status") val lastStatus: String? = null,
+    @SerialName("last_error") val lastError: String? = null,
+    val profile: String = "",
+    val deliver: String = "",
+)
+
+@Serializable
+data class ModelOption(
+    val id: String,
+    val provider: String,
+    val name: String,
+    val reasoning: Boolean = false,
+    val fast: Boolean = false,
+)
+
+@Serializable
+data class ModelCatalog(
+    val currentModel: String = "",
+    val currentProvider: String = "",
+    val models: List<ModelOption> = emptyList(),
+)
+
+@Serializable
+data class HermesUpdateStatus(
+    @SerialName("current_version") val currentVersion: String = "",
+    @SerialName("update_available") val updateAvailable: Boolean = false,
+    @SerialName("can_apply") val canApply: Boolean = false,
+    val behind: Int = 0,
+    val summary: String = "",
+    @SerialName("update_command") val updateCommand: String = "hermes update",
+)
+
+@Serializable
+data class SavedGateway(
+    val id: String,
+    val name: String,
+    val origin: String,
+    val token: String? = null,
+    val isActive: Boolean = false,
+)
+

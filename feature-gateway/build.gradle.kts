@@ -17,6 +17,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":core-model"))
     implementation(project(":core-design"))
     implementation(project(":domain"))
     implementation(platform(libs.compose.bom))
