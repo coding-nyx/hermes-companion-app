@@ -21,6 +21,7 @@ else
 fi
 echo
 echo "Next:"
-echo "  1. Start a new Hermes session (plugin + relay load then)."
+echo "  1. Start a new Hermes session (plugin + relay load then), or for boot-persistent"
+  echo "     dashboard + relay units: bash $DEST/install-services.sh"
 echo "  2. Phone origin: http://<this-host-tailscale-or-lan>:9120"
 echo "  3. Device tab PAIR, then: hermes companion approve CODE"

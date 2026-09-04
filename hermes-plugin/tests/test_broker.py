@@ -131,6 +131,49 @@ class BrokerTests(unittest.TestCase):
             broker.dispatch("device.snapshot")
         self.assertEqual(ctx.exception.code, "disarmed")
 
+    def test_click_safe_area_status_bar_rejected(self):
+        broker = Broker(device=MockDevice(armed=True))
+        handlers = make_handlers(broker)
+        # top safe_area is 104; y=50 is in status bar
+        resp = json.loads(handlers["mobile_click"]({"x": 500, "y": 50}))
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "safe_area_violation")
+
+    def test_click_safe_area_gesture_bar_rejected(self):
+        broker = Broker(device=MockDevice(armed=True))
+        handlers = make_handlers(broker)
+        # bottom safe_area is 68, height is 2400; y=2360 is in gesture bar
+        resp = json.loads(handlers["mobile_click"]({"x": 500, "y": 2360}))
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "safe_area_violation")
+
+    def test_click_safe_area_content_allowed(self):
+        broker = Broker(device=MockDevice(armed=True))
+        handlers = make_handlers(broker)
+        resp = json.loads(handlers["mobile_click"]({"x": 500, "y": 500}))
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["result"]["clicked"], [500, 500])
+
+    def test_authenticator_and_password_managers_protected(self):
+        broker = Broker(device=MockDevice(armed=True))
+        for pkg in [
+            "com.authy.authy",
+            "com.azure.authenticator",
+            "com.onepassword.android",
+            "com.bitwarden.mobile",
+            "com.x8bit.bitwarden",
+            "com.kunzisoft.keepass.free",
+            "com.beemdevelopment.aegis",
+            "com.google.android.permissioncontroller",
+            "com.samsung.android.spay",
+            "com.samsung.android.settings.deviceowner",
+            "com.phonepe.app",
+            "com.capitalone.mobile",
+        ]:
+            with self.assertRaises(BrokerError) as ctx:
+                broker.dispatch("device.open_app", {"package": pkg})
+            self.assertEqual(ctx.exception.code, "protected_package")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,14 +27,110 @@ ALLOWLIST = frozenset(
 
 META = frozenset({"device.arm", "device.disarm"})
 
+# Fail-closed denylist, mirrored from domain/DeviceLanePolicy.kt (keep both in sync).
+# Exact package ids, or a prefix rule ending in "*".
 PROTECTED_PACKAGES = frozenset(
     {
-        "com.google.android.apps.authenticator2",
-        "com.android.vending",
+        # platform: settings, permission grants, installs, keystore, billing
         "com.android.settings",
         "com.android.systemui",
+        "com.android.vending",
+        "com.android.packageinstaller",
+        "com.google.android.packageinstaller",
+        "com.android.permissioncontroller",
+        "com.google.android.permissioncontroller",
+        "com.android.keychain",
+        "com.android.certinstaller",
+        "com.google.android.gms",
+        "com.samsung.android.settings.*",
+        "com.samsung.android.lool",
+        "com.samsung.knox.*",
+        # authenticators
+        "com.google.android.apps.authenticator2",
+        "com.authy.authy",
+        "com.azure.authenticator",
+        "com.duosecurity.duomobile",
+        "com.beemdevelopment.aegis",
+        "org.fedorahosted.freeotp",
+        "com.yubico.yubioath",
+        "com.okta.android.auth",
+        "com.rsa.securidapp",
+        # password managers
+        "com.onepassword.android",
+        "com.agilebits.onepassword",
+        "com.lastpass.lpandroid",
+        "com.bitwarden.mobile",
+        "com.x8bit.bitwarden",
+        "com.kunzisoft.keepass.free",
+        "com.kunzisoft.keepass.libre",
+        "keepass2android.*",
+        "com.dashlane",
+        "com.nordpass.android.app.password.manager",
+        "proton.android.pass",
+        "com.enpass.app",
+        "com.samsung.android.samsungpass",
+        "com.samsung.android.authfw",
+        # payments / wallets
+        "com.google.android.apps.walletnfcrel",
+        "com.google.android.apps.nbu.paisa.user",
+        "com.samsung.android.spay",
+        "com.samsung.android.spayfw",
+        "com.paypal.android.p2pmobile",
+        "com.venmo",
+        "com.squareup.cash",
+        "com.phonepe.app",
+        "net.one97.paytm",
+        "in.org.npci.upiapp",
+        "in.amazon.mShop.android.shopping",
+        "com.coinbase.android",
+        "com.binance.dev",
+        # banking
+        "com.chase.sig.android",
+        "com.infonow.bofa",
+        "com.wf.wellsfargo",
+        "com.citi.citimobile",
+        "com.usbank.mobilebanking",
+        "com.capitalone.*",
+        "com.discoverfinancial.mobile",
+        "com.revolut.revolut",
+        "co.uk.getmondo",
+        "com.barclays.*",
+        "com.hsbc.*",
+        "com.sbi.*",
+        "com.csam.icici.bank.imobile",
+        "com.snapwork.hdfc",
+        "com.axis.mobile",
+        "com.msf.kbank.mobile",
+        "com.idbibank.*",
+        "com.db.pwcc.dbmobile",
+        "de.comdirect.android",
+        "com.ing.*",
+        "com.commbank.netbank",
+        "au.com.nab.mobile",
+        "org.westpac.bank",
+        "com.anz.android.gomoney",
+        "com.rbc.mobile.android",
+        "com.td",
+        "com.scotiabank.banking",
+        "com.cibc.android.mobi",
+        "com.bmo.mobile",
     }
 )
+
+
+def is_protected(package: str, extra=()) -> bool:
+    """True when ``package`` matches a built-in or caller-supplied denylist rule."""
+    pkg = (package or "").strip().lower()
+    if not pkg:
+        return False
+    for rule in (*PROTECTED_PACKAGES, *extra):
+        if rule.endswith("*"):
+            prefix = rule[:-1]
+            if pkg.startswith(prefix) or pkg == prefix.rstrip("."):
+                return True
+        elif pkg == rule:
+            return True
+    return False
 
 RATE_PER_SEC = 10
 
@@ -52,6 +148,8 @@ class MockDevice:
     foreground_app: str = "com.example.fixture"
     a11y_bound: bool = True
     overlay: bool = False
+    size: dict[str, int] = field(default_factory=lambda: {"w": 1080, "h": 2400})
+    safe_area: dict[str, int] = field(default_factory=lambda: {"top": 104, "bottom": 68, "left": 0, "right": 0})
     handler: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None
 
     def execute(self, action: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -62,6 +160,8 @@ class MockDevice:
         if action == "device.snapshot":
             return {
                 "app": self.foreground_app,
+                "size": dict(self.size),
+                "safe_area": dict(self.safe_area),
                 "nodes": [
                     {
                         "ref": "e1",
@@ -111,6 +211,8 @@ class LiveDevice:
     foreground_app: str = ""
     a11y_bound: bool = True
     overlay: bool = True
+    size: dict[str, int] = field(default_factory=lambda: {"w": 1080, "h": 2400})
+    safe_area: dict[str, int] = field(default_factory=lambda: {"top": 104, "bottom": 68, "left": 0, "right": 0})
 
     def execute(self, action: str, arguments: dict[str, Any]) -> dict[str, Any]:
         result = self.send(action, arguments)
@@ -124,6 +226,10 @@ class LiveDevice:
                 self.a11y_bound = bool(result["a11y_bound"])
             if "overlay" in result:
                 self.overlay = bool(result["overlay"])
+            if "size" in result and isinstance(result["size"], dict):
+                self.size = result["size"]
+            if "safe_area" in result and isinstance(result["safe_area"], dict):
+                self.safe_area = result["safe_area"]
             return result
         return {"ok": True}
 
@@ -145,8 +251,25 @@ class Broker:
             raise BrokerError("disarmed", "device is DISARMED")
         app = self.device.foreground_app
         target = str(arguments.get("package") or "") or app
-        if action not in META and (app in PROTECTED_PACKAGES or target in PROTECTED_PACKAGES):
+        if action not in META and (is_protected(app) or is_protected(target)):
             raise BrokerError("protected_package", target)
+        if action == "device.click" and "xy" in arguments:
+            xy = arguments["xy"]
+            if isinstance(xy, (list, tuple)) and len(xy) == 2:
+                x, y = xy[0], xy[1]
+                size = getattr(self.device, "size", {}) or {}
+                safe = getattr(self.device, "safe_area", {}) or {}
+                w = size.get("w", 0)
+                h = size.get("h", 0)
+                top = safe.get("top", 0)
+                bottom = safe.get("bottom", 0)
+                left = safe.get("left", 0)
+                right = safe.get("right", 0)
+                if (top > 0 and y < top) or \
+                   (bottom > 0 and h > 0 and y > (h - bottom)) or \
+                   (left > 0 and x < left) or \
+                   (right > 0 and w > 0 and x > (w - right)):
+                    raise BrokerError("safe_area_violation", f"click ({x}, {y}) is within system safe area")
         now = self.clock()
         self.hits = [t for t in self.hits if now - t < 1.0]
         if len(self.hits) >= RATE_PER_SEC:

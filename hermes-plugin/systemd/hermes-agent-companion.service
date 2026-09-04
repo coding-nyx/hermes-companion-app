@@ -1,0 +1,22 @@
+[Unit]
+Description=Hermes companion relay (0.0.0.0:9120 -> dashboard 127.0.0.1:9119)
+After=network-online.target hermes-dashboard.service
+Wants=network-online.target hermes-dashboard.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=@VENV@/bin/python -u -m relay
+WorkingDirectory=@HERMES_HOME@/plugins/hermes-companion
+Environment="HERMES_HOME=@HERMES_HOME@"
+Environment="HERMES_WORKSPACE=@HOME@"
+Restart=always
+RestartSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

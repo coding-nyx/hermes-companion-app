@@ -32,6 +32,22 @@ hermes companion lanes
 
 Pairing file: `~/.hermes/companion-devices.json` (mode 600).
 
+## Boot persistence (systemd user units)
+
+The phone needs two processes alive on the host: the Hermes dashboard on `127.0.0.1:9119`
+(the API the app talks to) and this relay on `0.0.0.0:9120`. Install both as systemd *user*
+units so they survive a power cycle:
+
+```bash
+bash ~/.hermes/plugins/hermes-companion/install-services.sh
+```
+
+Writes `~/.config/systemd/user/hermes-dashboard.service` and `hermes-agent-companion.service`
+from the templates in `systemd/`, enables them in `default.target`, turns on `loginctl
+enable-linger`, and stops any hand-started copies. Check with
+`systemctl --user status hermes-dashboard hermes-agent-companion`. Without the dashboard the
+relay has nothing to proxy and the phone sees `unexpected end of stream`.
+
 ## Relay
 
 Dashboard is usually `127.0.0.1:9119`. The phone cannot use that. The plugin binds `0.0.0.0:9120` and proxies. If something else already owns `:9120`:

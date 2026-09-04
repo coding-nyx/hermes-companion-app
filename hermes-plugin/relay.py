@@ -14,9 +14,13 @@ import socket
 import struct
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
+from fs_explorer import list_dir_tree, read_file_content
+from git_workspace import commit_git, get_git_branches, get_git_diff, get_git_status, stage_git_file
+from host_metrics import collect_metrics
 from pairing import PairingError, PairingStore, default_store_path
+from terminal_pty import PtySession, execute_quick_command
 from tickets import ALLOWLIST, PROTOCOL, TICKET_PREFIX, TicketError, TicketStore, parse_subprotocols
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -297,6 +301,45 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 result = self.state.wait_result(command_id)
                 result["command_id"] = command_id
                 return self._json(result)
+            if path in ("/companion/host/metrics", "/companion/host/status") and self.command == "GET":
+                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
+                return self._json(collect_metrics(repo_dir))
+            if path == "/companion/git/status" and self.command == "GET":
+                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
+                return self._json(get_git_status(repo_dir))
+            if path == "/companion/git/diff" and self.command == "GET":
+                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
+                query = parse_qs(urlparse(self.path).query)
+                file_arg = query.get("file", [None])[0]
+                staged_arg = query.get("staged", ["false"])[0].lower() in ("true", "1")
+                return self._json(get_git_diff(repo_dir, file_path=file_arg, staged=staged_arg))
+            if path == "/companion/git/branches" and self.command == "GET":
+                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
+                return self._json(get_git_branches(repo_dir))
+            if path == "/companion/git/stage" and self.command == "POST":
+                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
+                body = self._read_json()
+                return self._json(stage_git_file(repo_dir, str(body.get("path") or ""), bool(body.get("stage", True))))
+            if path == "/companion/git/commit" and self.command == "POST":
+                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
+                body = self._read_json()
+                return self._json(commit_git(repo_dir, str(body.get("message") or "")))
+            if path == "/companion/terminal/exec" and self.command == "POST":
+                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
+                body = self._read_json()
+                return self._json(execute_quick_command(str(body.get("cmd") or ""), cwd=repo_dir))
+            if path == "/companion/terminal/ws":
+                return self._terminal_ws()
+            if path == "/companion/fs/tree" and self.command == "GET":
+                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
+                query = parse_qs(urlparse(self.path).query)
+                subpath = query.get("path", [""])[0]
+                return self._json(list_dir_tree(repo_dir, subpath))
+            if path == "/companion/fs/read" and self.command == "GET":
+                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
+                query = parse_qs(urlparse(self.path).query)
+                filepath = query.get("path", [""])[0]
+                return self._json(read_file_content(repo_dir, filepath))
             if path == "/companion/device/ws":
                 return self._device_ws()
             return self._json({"error": "not_found"}, 404)
@@ -348,6 +391,65 @@ class CompanionHandler(BaseHTTPRequestHandler):
             with self.state.lock:
                 if self.state.lanes.get(issued.device_id) is self.wfile:
                     self.state.lanes.pop(issued.device_id, None)
+        self.close_connection = True
+        return None
+
+    def _terminal_ws(self):
+        if self.headers.get("Upgrade", "").lower() != "websocket":
+            return self._json({"error": "upgrade_required"}, 426)
+        key = self.headers.get("Sec-WebSocket-Key", "")
+        if not key:
+            return self._json({"error": "missing_ws_key"}, 400)
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", _ws_accept(key))
+        self.end_headers()
+
+        repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
+        pty_session = PtySession(cwd=repo_dir)
+
+        def _pump_pty():
+            try:
+                while pty_session.alive:
+                    chunk = pty_session.read(max_bytes=4096, timeout=0.05)
+                    if chunk is None:
+                        break
+                    if chunk:
+                        msg = json.dumps({"type": "terminal.data", "data": chunk.decode("utf-8", errors="replace")})
+                        self.wfile.write(_ws_text(msg))
+                        self.wfile.flush()
+            except (OSError, BrokenPipeError):
+                pass
+            finally:
+                pty_session.kill()
+
+        pump_thread = threading.Thread(target=_pump_pty, daemon=True)
+        pump_thread.start()
+
+        try:
+            while pty_session.alive:
+                raw = _ws_recv(self.rfile, self.wfile)
+                if raw is None:
+                    break
+                if not raw:
+                    continue
+                try:
+                    frame = json.loads(raw)
+                    ftype = frame.get("type", "")
+                    if ftype == "terminal.input":
+                        pty_session.write(frame.get("data", ""))
+                    elif ftype == "terminal.resize":
+                        pty_session.resize(int(frame.get("cols", 80)), int(frame.get("rows", 24)))
+                    elif ftype == "terminal.kill":
+                        pty_session.kill()
+                        break
+                except (json.JSONDecodeError, AttributeError):
+                    pty_session.write(raw)
+        finally:
+            pty_session.kill()
+            pump_thread.join(timeout=0.5)
+
         self.close_connection = True
         return None
 

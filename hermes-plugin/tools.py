@@ -67,7 +67,23 @@ def make_handlers(broker: Broker):
         if "ref" in args:
             payload["ref"] = args["ref"]
         if "x" in args and "y" in args:
-            payload["xy"] = [args["x"], args["y"]]
+            x, y = args["x"], args["y"]
+            device = broker.device
+            if device is not None:
+                size = getattr(device, "size", {}) or {}
+                safe = getattr(device, "safe_area", {}) or {}
+                w = size.get("w", 0)
+                h = size.get("h", 0)
+                top = safe.get("top", 0)
+                bottom = safe.get("bottom", 0)
+                left = safe.get("left", 0)
+                right = safe.get("right", 0)
+                if (top > 0 and y < top) or \
+                   (bottom > 0 and h > 0 and y > (h - bottom)) or \
+                   (left > 0 and x < left) or \
+                   (right > 0 and w > 0 and x > (w - right)):
+                    return _err(BrokerError("safe_area_violation", f"click ({x}, {y}) is within system safe area"))
+            payload["xy"] = [x, y]
         try:
             result = broker.dispatch("device.click", payload)
             return _dump({"ok": True, "result": result})

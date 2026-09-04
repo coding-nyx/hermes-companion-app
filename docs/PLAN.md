@@ -571,6 +571,109 @@ Do **not** restore laptop SSH hops. Origin stays `http://<tailscale>:9120`.
 
 Order: **A6.1 → A6.2** (app) in parallel with **A6.3** (plugin). Then **A6.4**, **A6.5**, **A6.6**.
 
+#### P7 — Production Hardening & Architecture
+See [docs/WORK_ITEMS.md](WORK_ITEMS.md) for full acceptance criteria and dependencies.
+
+| ID | Work item | Status |
+|---|---|:---:|
+| A7.1 | Hotfix corrupted `"******"` Authorization header in `DashboardClient.kt` | Planned |
+| A7.2 | Network security config: restrict cleartext to LAN / Tailscale subnets | Planned |
+| A7.3 | Encrypted `OperatorCredStore` in Keystore for background/reboot reconnects | Planned |
+| A7.4 | De-monolith `CompanionViewModel`: extract `DeviceNodeCoordinator` and `SyncEngine` | Planned |
+| A7.5 | Fix Android 12+ notification disarm trampoline in `HandsService.kt` | Planned |
+| A7.6 | Dynamic & expanded package denylist (password managers, banking, authenticators) | Planned |
+| A7.7 | Production release signing configuration & R8/Proguard minification | Planned |
+| A7.8 | Automated CI/CD GitHub Actions workflow (`.github/workflows/ci.yml`) | Planned |
+| A7.9 | Bundle official IBM Plex Sans & IBM Plex Mono `.ttf` in `core-design` | Planned |
+| A7.10 | Deep link origin validation & anti-CSRF protection | Planned |
+
+#### P8 — Multi-Host Gateway Book & Switching
+
+| ID | Work item | Status |
+|---|---|:---:|
+| A8.1 | Multi-host Room database schema & DAO (`hosts` table) | Planned |
+| A8.2 | Gateway book UI & 1-tap host switcher in header/connect | Planned |
+| A8.3 | Per-host cache and credential isolation | Planned |
+| A8.4 | Multi-host background health heartbeat monitor | Planned |
+
+#### P9 — Model Inspector & Dynamic Model Switching
+
+| ID | Work item | Status |
+|---|---|:---:|
+| A9.1 | Host model discovery via `GET /v1/models` and profile configs | Planned |
+| A9.2 | Model switcher UI bottom sheet in chat and profiles | Planned |
+| A9.3 | Protocol model override in `session.create` / `prompt.submit` | Planned |
+| A9.4 | Sampling parameter tuning drawer (temperature, top_p) | Planned |
+
+#### P10 — Reminders & Scheduled Tasks Surface (Hermes Cron)
+
+| ID | Work item | Status |
+|---|---|:---:|
+| A10.1 | Hermes cron protocol integration (`cron.*` RPC & `cron.changed` bus) | Planned |
+| A10.2 | Reminders & Scheduled Jobs UI screen | Planned |
+| A10.3 | Natural language reminder creation dispatched to agent | Planned |
+| A10.4 | Android system alarms (`AlarmManager`) & high-priority alert notifications | Planned |
+| A10.5 | Interactive notification actions (Snooze, Complete, Open Thread) | Planned |
+
+#### P11 — Voice & Wake-On-Voice (Hands-Free Hermes)
+
+| ID | Work item | Status |
+|---|---|:---:|
+| A11.1 | Push-to-talk Speech-to-Text (STT) mic button in composer | Planned |
+| A11.2 | Agent voice Text-to-Speech (TTS) stream player | Planned |
+| A11.3 | On-device wake word spotter ("Hey Hermes" offline keyword model) | Planned |
+| A11.4 | Hands-free continuous conversational loop (Wake -> Transcribe -> Stream -> Speak) | Planned |
+| A11.5 | Voice privacy controls, mic indicators, and battery saver backoff | Planned |
+
+#### P12 — Locked Device Access & Secure Ambient Control
+
+| ID | Work item | Status |
+|---|---|:---:|
+| A12.1 | Lock-screen activity presentation (`setShowWhenLocked`, `setTurnScreenOn`) | Planned |
+| A12.2 | Keyguard state machine & privacy shield (redact chat on locked screen) | Planned |
+| A12.3 | Biometric & PIN dismissal for high-privilege tool approvals | Planned |
+| A12.4 | Safe lock-screen device automation (wake & ambient control; fail-closed on PIN) | Planned |
+| A12.5 | Lock-screen ambient HUD & hardware volume chord emergency disarm | Planned |
+
+#### P13 — Advanced Operator & Multimodal Capabilities
+
+| ID | Work item | Status |
+|---|---|:---:|
+| A13.1 | Multimodal camera & image attachments in chat | Planned |
+| A13.2 | Android NotificationListenerService forwarding to Hermes | Planned |
+| A13.3 | Slash command autocomplete palette (`/` popup) | Planned |
+| A13.4 | Expanded tool inspection drawer (full stdout/stderr, execution time) | Planned |
+| A13.5 | Room full-text search (FTS4) across cached sessions and messages | Planned |
+
+#### P14 — Host Machine Console & Remote Terminal Access
+
+| ID | Work item | Status |
+|---|---|:---:|
+| A14.1 | PTY WebSocket transport & host daemon relay (`terminal.*` RPC) | Planned |
+| A14.2 | Mobile ANSI monospace terminal Compose surface (xterm-256) | Planned |
+| A14.3 | Virtual programmer keyboard & modifier bar (Ctrl, Alt, Esc, Tab, D-pad) | Planned |
+| A14.4 | Host system diagnostics HUD (CPU/RAM/GPU/VRAM/Disk & process monitor) | Planned |
+| A14.5 | Live journalctl & gateway log streamer with regex filter | Planned |
+
+#### P15 — Code Review, Diff Inspector & Git Workspace
+
+| ID | Work item | Status |
+|---|---|:---:|
+| A15.1 | Unified diff engine & grammar lexer (intra-line token diffing) | Planned |
+| A15.2 | Git workspace & changes overview (staged/modified/untracked) | Planned |
+| A15.3 | Mobile-optimized syntax-highlighted diff viewer (unified & split) | Planned |
+| A15.4 | Interactive line review comments & agent fix loop prompt | Planned |
+| A15.5 | Git commit composer & branch manager | Planned |
+
+#### P16 — Host Workspace Files, Artifacts & Skill Hub
+
+| ID | Work item | Status |
+|---|---|:---:|
+| A16.1 | Remote workspace file browser & code viewer (`fs.list`, `fs.read`) | Planned |
+| A16.2 | Agent artifacts & output gallery (images, plots, plans) | Planned |
+| A16.3 | Hermes skills & tool registry inspector (JSON schema & profile toggles) | Planned |
+| A16.4 | Android Quick Settings tile & ambient voice widget | Planned |
+
 #### Hermes plugin work items (parallel)
 
 | ID | Work item |
@@ -582,6 +685,7 @@ Order: **A6.1 → A6.2** (app) in parallel with **A6.3** (plugin). Then **A6.4**
 | P3.4 | Fail-closed + deny-list mirror + audit log |
 | P3.5 | Mock device for tests (no phone required) |
 | P3.6 | System-prompt injection only when ARMED |
+| P3.7 | Terminal PTY broker (`terminal.spawn`, `input`, `resize`, `data`, `kill`) |
 | H1–H6 | Upstream PRs as in §4.3 — start H2 and H4 early; H3 if plugin WS hook is ugly |
 
 ### 5.3 Suggested PR order (app repo)
@@ -595,7 +699,17 @@ Order: **A6.1 → A6.2** (app) in parallel with **A6.3** (plugin). Then **A6.4**
 7. **feat: device node snapshot/click/type**
 8. **feat: arming UX, overlay, denylist**
 9. **feat: push wake and background connection**
-10. **docs: protocol + install**
+10. **fix(security): auth header, cleartext policy, operator keystore (A7.1–A7.3)**
+11. **refactor(arch): extract device node coordinator and sync engine (A7.4–A7.5)**
+12. **feat: multi-host gateway book (A8.1–A8.4)**
+13. **feat: model inspector and dynamic switching (A9.1–A9.4)**
+14. **feat: reminders and cron dashboard (A10.1–A10.5)**
+15. **feat: voice push-to-talk, TTS and wake-on-voice (A11.1–A11.5)**
+16. **feat: secure lock-screen ambient access (A12.1–A12.5)**
+17. **feat: multimodal attachments and tool drawer (A13.1–A13.5)**
+18. **feat: remote terminal PTY, virtual keyboard & system metrics HUD (A14.1–A14.5)**
+19. **feat: code review, diff inspector & git workspace (A15.1–A15.5)**
+20. **feat: workspace files browser, artifact gallery & skill hub (A16.1–A16.4)**
 
 Hermes upstream PRs are a separate stack against `NousResearch/hermes-agent`, not this repo.
 
@@ -611,9 +725,9 @@ Hermes upstream PRs are a separate stack against `NousResearch/hermes-agent`, no
 
 **M1 Operator (P0–P2):** From a cold install, pair to a gated dashboard, switch profile, resume a Desktop thread, send a turn, approve a tool, survive a WS drop without duplicate sends.
 
-**M2 Hands (P3–P4):** Arm device, from a Telegram or companion chat tell Hermes to open a fixture app and tap a labeled button, see overlay + notification, disarm from the notification, confirm banking package is refused.
+**M2 Hands (P3–P4, P6):** Arm device, from a Telegram or companion chat tell Hermes to open a fixture app and tap a labeled button, see overlay + notification, disarm from the notification, confirm banking package is refused.
 
-**M3 Wake (P5):** Kill the activity, trigger an approval on the host, phone notifies, tap opens the strip, respond, agent continues.
+**M3 Wake & Ambient (P5, P11–P12):** Kill activity, trigger approval or speak "Hey Hermes", phone wakes, renders ambient prompt or executes command, agent continues.
 
 ---
 
@@ -628,6 +742,8 @@ Hermes upstream PRs are a separate stack against `NousResearch/hermes-agent`, no
 | Plugin breaks on Hermes update | Med | Depend on documented dashboard plugin WS helpers; pin tested Hermes versions in README |
 | Live screen share as a privacy incident | Med | Screenshots on demand only in M2; MediaProjection is explicit, later, and off by default |
 | Users expose `:9119` to the internet with basic auth | Med | In-app copy: Tailscale or OAuth; refuse cleartext WAN |
+| Microphone power drain from wake-word engine | Med | Optimized offline keyword spotter (Porcupine/Vosk); pause when battery < 15% |
+| Unauthorized lock-screen device manipulation | High | Keyguard detection; biometric/PIN requirement for destructive tools |
 
 ---
 
@@ -640,8 +756,7 @@ Hermes upstream PRs are a separate stack against `NousResearch/hermes-agent`, no
 - Multi-user / family sharing
 - Play Store listing for the node build
 - Editing `config.yaml` / `.env` from the phone
-- Kanban, memory editor, skill hub (read-only “inspector” can wait)
-- Voice wake word
+- Kanban boards and vector memory raw editor (skills inspector and workspace diffs are in-scope)
 
 ---
 
