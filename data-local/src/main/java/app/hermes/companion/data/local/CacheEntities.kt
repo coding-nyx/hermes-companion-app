@@ -2,10 +2,14 @@ package app.hermes.companion.data.local
 
 import androidx.room.Entity
 import androidx.room.Index
+import app.hermes.companion.model.ChatBlock
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
 import app.hermes.companion.model.OutboxItem
 import app.hermes.companion.model.SessionRef
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 @Entity(
     tableName = "sessions",
@@ -35,6 +39,7 @@ data class MessageEntity(
     val text: String,
     val toolName: String?,
     val toolDetail: String?,
+    val blocksJson: String = "",
 )
 
 internal fun SessionEntity.toRef(): SessionRef = SessionRef(
@@ -61,6 +66,7 @@ internal fun MessageEntity.toModel(): ChatMessage = ChatMessage(
     toolName = toolName,
     toolDetail = toolDetail,
     streaming = false,
+    blocks = decodeBlocks(blocksJson),
 )
 
 internal fun ChatMessage.toEntity(
@@ -78,6 +84,7 @@ internal fun ChatMessage.toEntity(
     text = text,
     toolName = toolName,
     toolDetail = toolDetail,
+    blocksJson = encodeBlocks(blocks),
 )
 
 @Entity(
@@ -94,6 +101,7 @@ data class OutboxEntity(
     val createdAtEpochMs: Long,
     val attempts: Int,
     val lastError: String,
+    val attachmentsJson: String = "",
 )
 
 internal fun persistableMessages(messages: List<ChatMessage>): List<ChatMessage> =
@@ -108,6 +116,7 @@ internal fun OutboxEntity.toItem(): OutboxItem = OutboxItem(
     createdAtEpochMs = createdAtEpochMs,
     attempts = attempts,
     lastError = lastError,
+    attachmentsJson = attachmentsJson,
 )
 
 internal fun OutboxItem.toEntity(): OutboxEntity = OutboxEntity(
@@ -119,7 +128,16 @@ internal fun OutboxItem.toEntity(): OutboxEntity = OutboxEntity(
     createdAtEpochMs = createdAtEpochMs,
     attempts = attempts,
     lastError = lastError,
+    attachmentsJson = attachmentsJson,
 )
+
+private val blocksJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+private fun encodeBlocks(blocks: List<ChatBlock>): String =
+    if (blocks.isEmpty()) "" else runCatching { blocksJson.encodeToString(blocks) }.getOrDefault("")
+
+private fun decodeBlocks(raw: String): List<ChatBlock> =
+    if (raw.isBlank()) emptyList() else runCatching { blocksJson.decodeFromString<List<ChatBlock>>(raw) }.getOrDefault(emptyList())
 
 internal fun OutboxItem.toQueuedMessage(): ChatMessage = ChatMessage(
     id = id,

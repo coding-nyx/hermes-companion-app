@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [SessionEntity::class, MessageEntity::class, OutboxEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class CompanionDatabase : RoomDatabase() {

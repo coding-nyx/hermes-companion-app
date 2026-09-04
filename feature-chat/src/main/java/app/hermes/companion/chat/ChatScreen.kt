@@ -30,8 +30,13 @@ import androidx.compose.ui.unit.dp
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
+import app.hermes.companion.design.FetchPane
+import app.hermes.companion.design.FetchRow
+import app.hermes.companion.design.FetchSkeleton
 import app.hermes.companion.design.Hairline
 import app.hermes.companion.model.ApprovalPrompt
+import app.hermes.companion.model.ChatAttachment
+import app.hermes.companion.model.ChatBlock
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -55,6 +60,19 @@ fun ChatScreen(
     onCancelRewind: () -> Unit = {},
     isListeningVoice: Boolean = false,
     onVoiceClick: () -> Unit = {},
+    loading: Boolean = false,
+    onRetryHistory: () -> Unit = {},
+    modelOverride: String = "",
+    pendingAttachments: List<ChatAttachment> = emptyList(),
+    attachOpen: Boolean = false,
+    onToggleAttach: () -> Unit = {},
+    onPickPhoto: () -> Unit = {},
+    onPickCamera: () -> Unit = {},
+    onPickVideo: () -> Unit = {},
+    onPickFile: () -> Unit = {},
+    onRemoveAttachment: (String) -> Unit = {},
+    onOpenMedia: (ChatBlock) -> Unit = {},
+    onFetchMedia: suspend (String) -> ByteArray? = { null },
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
@@ -75,9 +93,20 @@ fun ChatScreen(
             .fillMaxSize()
             .background(CompanionColor.Void)
             .imePadding()
-            .navigationBarsPadding()
             .testTag("chat.surface"),
     ) {
+        if (!loading && messages.isEmpty()) {
+            FetchPane(
+                label = if (!error.isNullOrBlank()) "history failed" else "no messages",
+                hint = if (!error.isNullOrBlank()) error else "// idle",
+                scanning = false,
+                retryLabel = if (!error.isNullOrBlank()) "RETRY" else null,
+                onRetry = if (!error.isNullOrBlank()) onRetryHistory else null,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag(if (!error.isNullOrBlank()) "chat.history.failed" else "chat.empty"),
+            )
+        } else {
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -86,28 +115,43 @@ fun ChatScreen(
                 .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md),
             verticalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
         ) {
+            if (loading) {
+                item(key = "history.loading") {
+                    FetchRow(
+                        label = "loading transcript",
+                        padded = false,
+                        modifier = Modifier.testTag("chat.loading"),
+                    )
+                }
+                if (messages.isEmpty()) {
+                    item(key = "history.skeleton") { FetchSkeleton(lines = 4, padded = false) }
+                }
+            }
             if (hasMoreOlder || loadingOlder) {
                 item(key = "history.older") {
-                    Text(
-                        text = if (loadingOlder) "loading older" else "older",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
-                        modifier = Modifier.testTag("chat.older"),
-                    )
+                    if (loadingOlder) {
+                        FetchRow(
+                            label = "loading older",
+                            padded = false,
+                            modifier = Modifier.testTag("chat.older"),
+                        )
+                    } else {
+                        Text(
+                            text = "older",
+                            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+                            modifier = Modifier.testTag("chat.older"),
+                        )
+                    }
                 }
             }
             items(messages, key = { it.id }) { message ->
                 when (message.role) {
-                    MessageRole.USER -> Column {
-                        val rewinding = rewindTargetId == message.id
-                        Text(
-                            text = message.text,
-                            style = CompanionType.Body.copy(
-                                color = if (rewinding) CompanionColor.Signal else CompanionColor.TextDim,
-                            ),
-                            modifier = Modifier
-                                .testTag("chat.user")
-                                .clickable { onRewind(message) },
-                        )
+                    MessageRole.USER -> Column(
+                        modifier = Modifier
+                            .testTag("chat.user")
+                            .clickable { onRewind(message) },
+                    ) {
+                        MessageBlocks(message, onFetchMedia, onOpenMedia)
                         if (message.queued) {
                             Text(
                                 text = "queued",
@@ -116,11 +160,12 @@ fun ChatScreen(
                             )
                         }
                     }
-                    MessageRole.TOOL -> ToolRow(message)
-                    MessageRole.ASSISTANT -> Row {
-                        Text(
-                            text = message.text,
-                            style = CompanionType.Body.copy(color = CompanionColor.Text),
+                    MessageRole.TOOL -> ToolRow(message, onFetchMedia, onOpenMedia)
+                    MessageRole.ASSISTANT -> Row(verticalAlignment = Alignment.Bottom) {
+                        MessageBlocks(
+                            message = message,
+                            onFetchMedia = onFetchMedia,
+                            onOpenMedia = onOpenMedia,
                             modifier = Modifier.weight(1f, fill = false),
                         )
                         if (message.streaming) {
@@ -138,7 +183,8 @@ fun ChatScreen(
                 }
             }
         }
-        if (!error.isNullOrBlank()) {
+        }
+        if (!error.isNullOrBlank() && (loading || messages.isNotEmpty())) {
             Text(
                 text = error,
                 style = CompanionType.Mono.copy(color = CompanionColor.Danger),
@@ -152,12 +198,77 @@ fun ChatScreen(
             RewindStrip(onCancelRewind)
         }
         Hairline()
+        if (pendingAttachments.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
+                    .testTag("chat.attach.pending"),
+                horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
+            ) {
+                pendingAttachments.forEach { item ->
+                    Text(
+                        text = "${item.kind.name} · ${item.name}  ×",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                        modifier = Modifier
+                            .border(CompanionSpace.Hairline, CompanionColor.Signal)
+                            .clickable { onRemoveAttachment(item.id) }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+            }
+        }
+        if (attachOpen) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
+                    .testTag("chat.attach.menu"),
+                horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
+            ) {
+                listOf(
+                    "PHOTO" to onPickPhoto,
+                    "CAMERA" to onPickCamera,
+                    "VIDEO" to onPickVideo,
+                    "FILE" to onPickFile,
+                ).forEach { (label, action) ->
+                    Text(
+                        text = label,
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                        modifier = Modifier
+                            .testTag("chat.attach.${label.lowercase()}")
+                            .border(CompanionSpace.Hairline, CompanionColor.Signal)
+                            .clickable(onClick = action)
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                    )
+                }
+            }
+        }
+        if (modelOverride.isNotBlank()) {
+            Text(
+                text = "model · $modelOverride",
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                modifier = Modifier
+                    .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
+                    .testTag("chat.model"),
+            )
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md),
             verticalAlignment = Alignment.Bottom,
         ) {
+            Text(
+                text = "+",
+                style = CompanionType.Mono.copy(color = CompanionColor.Signal),
+                modifier = Modifier
+                    .testTag("chat.attach")
+                    .border(CompanionSpace.Hairline, CompanionColor.Signal)
+                    .clickable(onClick = onToggleAttach)
+                    .padding(horizontal = 10.dp, vertical = 10.dp),
+            )
+            Spacer(Modifier.width(CompanionSpace.Sm))
             MarkdownComposer(
                 value = draft,
                 onValueChange = onDraftChange,
@@ -278,18 +389,33 @@ private fun ApprovalStrip(prompt: ApprovalPrompt, onApproval: (String) -> Unit) 
 }
 
 @Composable
-private fun ToolRow(message: ChatMessage) {
+private fun ToolRow(
+    message: ChatMessage,
+    onFetchMedia: suspend (String) -> ByteArray?,
+    onOpenMedia: (ChatBlock) -> Unit,
+) {
     val name = message.toolName ?: "tool"
-    val detail = message.toolDetail ?: message.text
-    Text(
-        text = "$name · $detail",
-        style = CompanionType.Mono,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
+    val media = message.blocks.filter { it.kind != app.hermes.companion.model.ChatBlockKind.TEXT }
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .border(CompanionSpace.Hairline, CompanionColor.Line)
             .padding(horizontal = 8.dp, vertical = 6.dp)
             .testTag("chat.tool"),
-    )
+    ) {
+        if (media.isEmpty()) {
+            Text(
+                text = "$name · ${message.toolDetail ?: message.text}",
+                style = CompanionType.Mono,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        } else {
+            Text(
+                text = name,
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+            )
+            MessageBlocks(message.copy(blocks = media), onFetchMedia, onOpenMedia)
+        }
+    }
 }

@@ -8,14 +8,16 @@ import app.hermes.companion.data.local.OutboxStore
 import app.hermes.companion.data.local.StickyStore
 import app.hermes.companion.data.local.TranscriptCache
 import app.hermes.companion.data.remote.DashboardClient
+import app.hermes.companion.data.remote.HostClientPool
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 
 class CompanionApp : Application() {
-    lateinit var dashboard: DashboardClient
-        private set
+    /** One DashboardClient per host (A8.5): token, cookies and sockets never cross hosts. */
+    val clients: HostClientPool = HostClientPool { DashboardClient() }
+    fun clientFor(origin: String): DashboardClient = clients.forOrigin(origin)
     lateinit var sticky: StickyStore
         private set
     lateinit var cache: TranscriptCache
@@ -39,17 +41,23 @@ class CompanionApp : Application() {
     val launchNonce: String = java.util.UUID.randomUUID().toString()
     var watchJob: Job? = null
     var hudJob: Job? = null
-    var wakeJob: Job? = null
+    /** ntfy wake subscriptions, one per host with a topic. */
+    val wakeJobs: MutableMap<String, Job> = mutableMapOf()
 
     override fun onCreate() {
         super.onCreate()
-        dashboard = DashboardClient()
         sticky = StickyStore(this)
         val db = CompanionDatabase.create(this)
         cache = TranscriptCache(db)
         outbox = OutboxStore(db)
         deviceCreds = DeviceCredStore.encrypted(this)
         operatorCreds = OperatorCredStore.encrypted(this)
-        deviceNode = DeviceNodeCoordinator(this, dashboard, deviceCreds, sticky, appScope)
+        deviceNode = DeviceNodeCoordinator(this, clients, deviceCreds, sticky, appScope)
+    }
+
+    /** Display name for a host: gateway-book name, else bare host. */
+    fun hostName(origin: String?): String {
+        if (origin.isNullOrBlank()) return ""
+        return operatorCreds.hostName(origin)
     }
 }

@@ -60,4 +60,9 @@ abstract class CompanionDao {
 
     @Query("DELETE FROM outbox WHERE id = :id")
     abstract suspend fun deleteOutbox(id: String)
+
+    @Query(
+        "DELETE FROM outbox WHERE origin = :origin AND profileId = :profileId AND sessionId = :sessionId",
+    )
+    abstract suspend fun deleteOutboxForSession(origin: String, profileId: String, sessionId: String)
 }

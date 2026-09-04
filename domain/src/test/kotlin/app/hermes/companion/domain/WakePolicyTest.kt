@@ -20,6 +20,21 @@ class WakePolicyTest {
     }
 
     @Test
+    fun pingCarriesHostFromPayloadOrTopic() {
+        val fromTopic = WakePolicy.parse(
+            """{"type":"clarify","session_id":"s","profile":"coder"}""",
+            origin = "http://lab:9120",
+        )!!
+        assertEquals("http://lab:9120", fromTopic.origin)
+        val fromPayload = WakePolicy.parse(
+            """{"type":"clarify","session_id":"s","profile":"coder","origin":"http://hub:9120"}""",
+            origin = "http://lab:9120",
+        )!!
+        assertEquals("http://hub:9120", fromPayload.origin)
+        assertEquals("", WakePolicy.parse("""{"type":"error","session_id":"s","profile":"p"}""")!!.origin)
+    }
+
+    @Test
     fun ignoresTranscriptAndUnknownType() {
         assertNull(WakePolicy.parse("""{"type":"chat.delta","session_id":"s","profile":"coder","body":"secret"}"""))
         val ping = WakePolicy.parse(
@@ -35,7 +50,13 @@ class WakePolicyTest {
         assertNull(WakePolicy.sseUrl("ntfy.local/hermes"))
         val link = WakePolicy.deepLink("sess-1", "coder")
         assertEquals("hermes-companion://open?session=sess-1&profile=coder", link)
-        assertEquals("sess-1" to "coder", WakePolicy.parseDeepLink(link))
+        assertEquals(DeepLink("sess-1", "coder", ""), WakePolicy.parseDeepLink(link))
         assertNull(WakePolicy.parseDeepLink("https://evil.example/open?session=s&profile=p"))
+        val hosted = WakePolicy.deepLink("sess-1", "coder", "http://100.88.4.63:9120")
+        assertEquals(
+            "hermes-companion://open?session=sess-1&profile=coder&host=http%3A%2F%2F100.88.4.63%3A9120",
+            hosted,
+        )
+        assertEquals(DeepLink("sess-1", "coder", "http://100.88.4.63:9120"), WakePolicy.parseDeepLink(hosted))
     }
 }

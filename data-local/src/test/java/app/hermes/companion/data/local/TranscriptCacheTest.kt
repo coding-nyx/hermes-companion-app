@@ -94,6 +94,16 @@ class TranscriptCacheTest {
         assertTrue(cache.sessions(MOCK, "coder").isEmpty())
     }
 
+    @Test
+    fun deleteSessionPurgesMessages() = runBlocking {
+        val sid = "s-del"
+        cache.replaceSessions(MOCK, "coder", listOf(session(sid, "coder", "gone")))
+        cache.replaceMessages(MOCK, "coder", sid, listOf(ChatMessage("u1", MessageRole.USER, "hi")))
+        cache.deleteSession(MOCK, "coder", sid)
+        assertTrue(cache.sessions(MOCK, "coder").isEmpty())
+        assertTrue(cache.messages(MOCK, "coder", sid).isEmpty())
+    }
+
     private fun session(id: String, profile: String, title: String) = SessionRef(
         id = id,
         profileId = profile,

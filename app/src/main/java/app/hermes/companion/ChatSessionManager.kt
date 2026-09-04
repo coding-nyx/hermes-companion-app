@@ -4,22 +4,30 @@ import androidx.lifecycle.ViewModel
 import app.hermes.companion.data.local.OutboxStore
 import app.hermes.companion.data.local.TranscriptCache
 import app.hermes.companion.data.remote.DashboardClient
+import app.hermes.companion.data.remote.HostClientPool
 import app.hermes.companion.data.remote.DashboardException
+import app.hermes.companion.domain.ChatContent
 import app.hermes.companion.domain.HistoryPaging
 import app.hermes.companion.domain.OutboxPolicy
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.RewindPolicy
 import app.hermes.companion.domain.RewindSubmit
 import app.hermes.companion.domain.SendFate
+import app.hermes.companion.model.ChatAttachment
 import app.hermes.companion.model.ChatEvent
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
 import app.hermes.companion.model.OutboxItem
 import app.hermes.companion.model.SessionRef
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,7 +41,7 @@ import kotlinx.coroutines.sync.Mutex
  * ViewModel scope because every job here is bound to what the user is looking at.
  */
 class ChatSessionManager(
-    private val client: DashboardClient,
+    private val clients: HostClientPool,
     private val cache: TranscriptCache,
     private val outbox: OutboxStore,
     private val _state: MutableStateFlow<CompanionState>,
@@ -42,6 +50,13 @@ class ChatSessionManager(
     private var turnJob: Job? = null
     private var retryJob: Job? = null
     private val outboxMutex = Mutex()
+    private fun client(origin: String): DashboardClient = clients.forOrigin(origin)
+
+    var onAssistantDelta: ((String) -> Unit)? = null
+    var onTurnCompleted: (() -> Unit)? = null
+    var onTurnInterrupted: (() -> Unit)? = null
+
+    private fun turnModel(): String? = _state.value.modelOverride.trim().takeIf { it.isNotBlank() }
 
     /** Cancel the streaming turn (profile switch, chat close). */
     fun cancelTurn() {
@@ -70,7 +85,7 @@ class ChatSessionManager(
             _state.update {
                 it.copy(
                     openSessionId = owned.id,
-                    loading = true,
+                    transcriptLoading = true,
                     error = null,
                     draft = "",
                     approval = null,
@@ -81,21 +96,24 @@ class ChatSessionManager(
                 )
             }
             try {
-                val page = client.pageMessages(origin, owned.id, profile)
+                val page = client(origin).pageMessages(origin, owned.id, profile)
                 runCatching { cache.replaceMessages(origin, profile, owned.id, page.messages) }
-                val approval = runCatching { client.pendingApproval(origin, owned.id, profile) }.getOrNull()
+                val approval = runCatching { client(origin).pendingApproval(origin, owned.id, profile) }.getOrNull()
                 val merged = withQueued(origin, profile, owned.id, page.messages)
                 _state.update { state ->
                     if (state.openSessionId != owned.id) state
                     else state.copy(
-                        loading = false,
+                        transcriptLoading = false,
                         messages = merged,
                         approval = approval,
                         historyHasMore = page.hasMore,
                     )
                 }
             } catch (t: Throwable) {
-                _state.update { it.copy(loading = false, error = t.toMonoError()) }
+                _state.update { state ->
+                    if (state.openSessionId != owned.id) state
+                    else state.copy(transcriptLoading = false, error = t.toMonoError())
+                }
             }
         }
     }
@@ -112,6 +130,7 @@ class ChatSessionManager(
                 rewindTargetId = null,
                 historyHasMore = false,
                 historyLoading = false,
+                transcriptLoading = false,
             )
         }
     }
@@ -126,7 +145,7 @@ class ChatSessionManager(
         scope.launch {
             _state.update { it.copy(historyLoading = true) }
             try {
-                val page = client.pageMessages(origin, session.id, profile, beforeId = before)
+                val page = client(origin).pageMessages(origin, session.id, profile, beforeId = before)
                 val seen = _state.value.messages.map { it.id }.toSet()
                 val older = page.messages.filter { it.id !in seen }
                 _state.update { state ->
@@ -152,7 +171,7 @@ class ChatSessionManager(
         scope.launch {
             try {
                 ProfileScope.requireOwnedSession(session, profile)
-                client.respondPrompt(origin, session.id, profile, prompt, decision)
+                client(origin).respondPrompt(origin, session.id, profile, prompt, decision)
                 val note = if (decision == "deny") "denied ${prompt.command}" else "allowed ${prompt.command}"
                 _state.update {
                     it.copy(
@@ -176,7 +195,7 @@ class ChatSessionManager(
         val profile = _state.value.activeProfileId ?: return
         scope.launch {
             try {
-                val created = client.createSession(origin, profile)
+                val created = client(origin).createSession(origin, profile, model = turnModel())
                 runCatching { cache.upsertSession(origin, created) }
                 _state.update { it.copy(sessions = listOf(created) + it.sessions, error = null) }
                 openSession(created)
@@ -203,7 +222,8 @@ class ChatSessionManager(
         val session = _state.value.openSession ?: return
         val profile = _state.value.activeProfileId ?: return
         val text = _state.value.draft.trim()
-        if (text.isBlank()) return
+        val attachments = _state.value.pendingAttachments
+        if (text.isBlank() && attachments.isEmpty()) return
         try {
             ProfileScope.requireOwnedSession(session, profile)
         } catch (t: Throwable) {
@@ -220,6 +240,7 @@ class ChatSessionManager(
             role = MessageRole.USER,
             text = text,
             queued = true,
+            blocks = ChatContent.userBlocks(text, attachments),
         )
         scope.launch {
             outbox.enqueue(
@@ -230,10 +251,61 @@ class ChatSessionManager(
                     sessionId = session.id,
                     text = text,
                     createdAtEpochMs = System.currentTimeMillis(),
+                    attachmentsJson = encodeAttachments(attachments),
                 ),
             )
             _state.update {
-                it.copy(draft = "", error = null, messages = it.messages + user)
+                it.copy(
+                    draft = "",
+                    error = null,
+                    messages = it.messages + user,
+                    pendingAttachments = emptyList(),
+                    attachOpen = false,
+                )
+            }
+            flushOutbox()
+        }
+    }
+
+    /** Direct prompt submission for voice stream without overwriting unfinished keyboard drafts. */
+    fun sendPrompt(text: String) {
+        val origin = _state.value.origin ?: return
+        val profile = _state.value.activeProfileId ?: return
+        val clean = text.trim()
+        if (clean.isBlank()) return
+        scope.launch {
+            var session = _state.value.openSession
+            var attempts = 0
+            while (session == null && attempts < 10) {
+                delay(200)
+                session = _state.value.openSession
+                attempts++
+            }
+            if (session == null) return@launch
+            try {
+                ProfileScope.requireOwnedSession(session, profile)
+            } catch (t: Throwable) {
+                _state.update { it.copy(error = t.toMonoError()) }
+                return@launch
+            }
+            val user = ChatMessage(
+                id = "u-${UUID.randomUUID()}",
+                role = MessageRole.USER,
+                text = clean,
+                queued = true,
+            )
+            outbox.enqueue(
+                OutboxItem(
+                    id = user.id,
+                    origin = origin,
+                    profileId = profile,
+                    sessionId = session.id,
+                    text = clean,
+                    createdAtEpochMs = System.currentTimeMillis(),
+                ),
+            )
+            _state.update {
+                it.copy(error = null, messages = it.messages + user)
             }
             flushOutbox()
         }
@@ -278,9 +350,12 @@ class ChatSessionManager(
                 }
                 coroutineScope {
                     val job = launch {
-                        client.streamTurn(origin, session.id, profile, text, spec).collect { event ->
+                        client(origin).streamTurn(origin, session.id, profile, text, spec, turnModel()).collect { event ->
                             if (_state.value.openSessionId == session.id) {
                                 _state.update { applyEvent(it, event, assistantId) }
+                                if (event is ChatEvent.AssistantDelta) {
+                                    onAssistantDelta?.invoke(event.text)
+                                }
                             }
                         }
                     }
@@ -290,11 +365,14 @@ class ChatSessionManager(
                 if (_state.value.openSessionId == session.id) {
                     _state.update { finishStream(it, assistantId) }
                     persistOpenMessages()
+                    onTurnCompleted?.invoke()
                 }
             } catch (c: CancellationException) {
+                onTurnInterrupted?.invoke()
                 throw c
             } catch (t: Throwable) {
-                runCatching { client.pageMessages(origin, session.id, profile) }.onSuccess { page ->
+                onTurnCompleted?.invoke()
+                runCatching { client(origin).pageMessages(origin, session.id, profile) }.onSuccess { page ->
                     runCatching { cache.replaceMessages(origin, profile, session.id, page.messages) }
                     if (_state.value.openSessionId == session.id) {
                         _state.update {
@@ -312,15 +390,72 @@ class ChatSessionManager(
         }
     }
 
+    fun requestDelete(session: SessionRef) {
+        val profile = _state.value.activeProfileId
+        val owned = try {
+            ProfileScope.requireOwnedSession(session, profile)
+        } catch (t: Throwable) {
+            _state.update { it.copy(error = t.toMonoError()) }
+            return
+        }
+        _state.update { it.copy(pendingDelete = owned) }
+    }
+
+    fun cancelDelete() {
+        _state.update { it.copy(pendingDelete = null) }
+    }
+
+    fun confirmDelete() {
+        val origin = _state.value.origin ?: return
+        val profile = _state.value.activeProfileId ?: return
+        val session = _state.value.pendingDelete ?: return
+        val owned = try {
+            ProfileScope.requireOwnedSession(session, profile)
+        } catch (t: Throwable) {
+            _state.update { it.copy(pendingDelete = null, error = t.toMonoError()) }
+            return
+        }
+        scope.launch {
+            val previous = _state.value.sessions
+            val wasOpen = _state.value.openSessionId == owned.id
+            if (wasOpen) cancelTurn()
+            _state.update {
+                it.copy(
+                    pendingDelete = null,
+                    sessions = it.sessions.filter { row -> row.id != owned.id },
+                    openSessionId = if (wasOpen) null else it.openSessionId,
+                    messages = if (wasOpen) emptyList() else it.messages,
+                    streaming = if (wasOpen) false else it.streaming,
+                    transcriptLoading = if (wasOpen) false else it.transcriptLoading,
+                    approval = if (wasOpen) null else it.approval,
+                    rewindTargetId = if (wasOpen) null else it.rewindTargetId,
+                    draft = if (wasOpen) "" else it.draft,
+                    error = null,
+                )
+            }
+            runCatching { cache.deleteSession(origin, profile, owned.id) }
+            runCatching { outbox.removeForSession(origin, profile, owned.id) }
+            try {
+                client(origin).deleteSession(origin, owned.id, profile)
+            } catch (t: Throwable) {
+                val restored = runCatching { client(origin).listSessions(origin, profile) }
+                    .getOrDefault(previous)
+                runCatching { cache.replaceSessions(origin, profile, restored) }
+                _state.update { it.copy(sessions = restored, error = t.toMonoError()) }
+            }
+        }
+    }
+
     fun interrupt() {
         turnJob?.cancel()
         val origin = _state.value.origin
         val session = _state.value.openSession
         val profile = _state.value.activeProfileId
         _state.update { it.copy(streaming = false, messages = it.messages.map { m -> m.copy(streaming = false) }) }
+        onTurnInterrupted?.invoke()
         if (origin == null || session == null || profile == null) return
         scope.launch {
-            runCatching { client.interruptTurn(origin, session.id, profile) }
+            runCatching { client(origin).interruptTurn(origin, session.id, profile) }
         }
     }
 
@@ -334,7 +469,14 @@ class ChatSessionManager(
             .filter { it.sessionId == sessionId }
         val seen = messages.map { it.id }.toSet()
         return messages + pending.filter { it.id !in seen }.map {
-            ChatMessage(id = it.id, role = MessageRole.USER, text = it.text, queued = true)
+            val attached = decodeAttachments(it.attachmentsJson)
+            ChatMessage(
+                id = it.id,
+                role = MessageRole.USER,
+                text = it.text,
+                queued = true,
+                blocks = ChatContent.userBlocks(it.text, attached),
+            )
         }
     }
 
@@ -360,11 +502,24 @@ class ChatSessionManager(
                 }
                 try {
                     var cancelled = false
+                    val attachments = decodeAttachments(item.attachmentsJson)
+                    val uploaded = uploadAttachments(origin, attachments)
+                    val partsJson = ChatContent.toSubmitParts(item.text, uploaded)
                     coroutineScope {
                         val job = launch {
-                            client.streamTurn(origin, item.sessionId, profile, item.text).collect { event ->
+                            client(origin).streamTurn(
+                                origin,
+                                item.sessionId,
+                                profile,
+                                item.text,
+                                model = turnModel(),
+                                partsJson = partsJson,
+                            ).collect { event ->
                                 if (_state.value.openSessionId == item.sessionId) {
                                     _state.update { applyEvent(it, event, assistantId) }
+                                    if (event is ChatEvent.AssistantDelta) {
+                                        onAssistantDelta?.invoke(event.text)
+                                    }
                                 }
                             }
                         }
@@ -380,10 +535,13 @@ class ChatSessionManager(
                     if (_state.value.openSessionId == item.sessionId) {
                         _state.update { finishStream(it, assistantId) }
                         persistOpenMessages()
+                        onTurnCompleted?.invoke()
                     }
                 } catch (c: CancellationException) {
+                    onTurnInterrupted?.invoke()
                     throw c
                 } catch (t: Throwable) {
+                    onTurnCompleted?.invoke()
                     val code = (t as? DashboardException)?.code.orEmpty()
                     val fate = OutboxPolicy.classify(code, "${t.message.orEmpty()} ${t.javaClass.simpleName}")
                     outbox.markAttempt(item.id, origin, profile, "$code ${t.message}")
@@ -450,6 +608,25 @@ class ChatSessionManager(
         val sessionId = st.openSessionId ?: return
         runCatching { cache.replaceMessages(origin, profile, sessionId, st.messages) }
     }
+
+    private suspend fun uploadAttachments(origin: String, items: List<ChatAttachment>): List<ChatAttachment> {
+        if (items.isEmpty()) return items
+        val api = client(origin)
+        return items.map { item ->
+            if (item.uploadedUrl.isNotBlank()) item
+            else {
+                val bytes = withContext(Dispatchers.IO) {
+                    val file = java.io.File(item.localUri.removePrefix("file://"))
+                    if (file.isFile) file.readBytes() else ByteArray(0)
+                }
+                if (bytes.isEmpty()) item
+                else {
+                    val url = runCatching { api.uploadMedia(origin, bytes, item.name, item.mime) }.getOrDefault("")
+                    item.copy(uploadedUrl = url)
+                }
+            }
+        }
+    }
 }
 
 internal fun applyEvent(state: CompanionState, event: ChatEvent, assistantId: String): CompanionState =
@@ -485,16 +662,30 @@ internal fun applyEvent(state: CompanionState, event: ChatEvent, assistantId: St
         is ChatEvent.ToolCompleted -> {
             val updated = state.messages.toMutableList()
             val idx = updated.indexOfLast { it.role == MessageRole.TOOL && it.toolName == event.name }
+            val shot = ChatContent.screenshotBlocks(event.name, event.detail, event.detail)
             if (idx >= 0) {
                 val dur = if (event.durationMs > 0) " · ${event.durationMs / 1000.0}s" else ""
-                updated[idx] = updated[idx].copy(toolDetail = event.detail + dur, text = event.detail + dur)
+                updated[idx] = updated[idx].copy(
+                    toolDetail = event.detail + dur,
+                    text = event.detail + dur,
+                    blocks = shot.ifEmpty { updated[idx].blocks },
+                )
             }
             state.copy(messages = updated)
         }
         is ChatEvent.Rewound -> state.copy(
             messages = RewindPolicy.rebindUserRowIds(state.messages, event.userRowIds),
         )
-        ChatEvent.Completed -> finishStream(state, assistantId)
+        ChatEvent.Completed -> {
+            val done = finishStream(state, assistantId)
+            done.copy(
+                messages = done.messages.map { msg ->
+                    if (msg.id == assistantId && msg.blocks.isEmpty() && msg.text.isNotBlank()) {
+                        msg.copy(blocks = ChatContent.fromMarkdown(msg.text))
+                    } else msg
+                },
+            )
+        }
     }
 
 internal fun finishStream(state: CompanionState, assistantId: String): CompanionState =
@@ -507,3 +698,12 @@ internal fun Throwable.toMonoError(): String = when (this) {
     is DashboardException -> "$code · $message"
     else -> message ?: javaClass.simpleName
 }
+
+private val attachmentJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+private fun encodeAttachments(items: List<ChatAttachment>): String =
+    if (items.isEmpty()) "" else runCatching { attachmentJson.encodeToString(items) }.getOrDefault("")
+
+private fun decodeAttachments(raw: String): List<ChatAttachment> =
+    if (raw.isBlank()) emptyList()
+    else runCatching { attachmentJson.decodeFromString<List<ChatAttachment>>(raw) }.getOrDefault(emptyList())

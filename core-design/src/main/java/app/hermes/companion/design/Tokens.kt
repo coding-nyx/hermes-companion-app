@@ -34,4 +34,6 @@ object CompanionSpace {
 object CompanionMotion {
     const val SnapMs = 120
     const val CrossfadeMs = 180
+    const val BlinkMs = 420
+    const val ScanMs = 1400
 }

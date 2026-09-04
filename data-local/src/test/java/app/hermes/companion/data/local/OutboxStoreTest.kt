@@ -48,6 +48,14 @@ class OutboxStoreTest {
         assertTrue(outbox.pending(MOCK, "coder").isEmpty())
     }
 
+    @Test
+    fun removeForSessionLeavesOtherSessions() = runBlocking {
+        outbox.enqueue(item("a", MOCK, "coder", 1).copy(sessionId = "s1"))
+        outbox.enqueue(item("b", MOCK, "coder", 2).copy(sessionId = "s2"))
+        outbox.removeForSession(MOCK, "coder", "s1")
+        assertEquals(listOf("b"), outbox.pending(MOCK, "coder").map { it.id })
+    }
+
     private fun item(id: String, origin: String, profile: String, created: Long) = OutboxItem(
         id = id,
         origin = origin,

@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
+import app.hermes.companion.design.FetchPane
 import app.hermes.companion.design.Hairline
 import app.hermes.companion.design.HairlineField
 import app.hermes.companion.domain.OriginPolicy
@@ -58,6 +59,25 @@ fun ConnectScreen(
             .navigationBarsPadding()
             .imePadding(),
     ) {
+        if (loading) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("connect.loading"),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(text = "HERMES", style = CompanionType.Display)
+                Spacer(Modifier.height(CompanionSpace.Md))
+                Hairline(Modifier.width(96.dp))
+                FetchPane(
+                    label = "CONNECTING",
+                    hint = origin.substringAfter("://").ifBlank { origin }.ifBlank { "// handshake" },
+                    scanning = true,
+                )
+            }
+            return@BoxWithConstraints
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -126,12 +146,12 @@ fun ConnectScreen(
         }
         Spacer(Modifier.height(CompanionSpace.Lg))
         Text(
-            text = if (loading) "CONNECTING" else "CONNECT",
+            text = "CONNECT",
             style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
             modifier = Modifier
                 .testTag("connect.go")
                 .border(CompanionSpace.Hairline, CompanionColor.Signal)
-                .clickable(enabled = !loading, onClick = onConnect)
+                .clickable(onClick = onConnect)
                 .padding(horizontal = 16.dp, vertical = 10.dp),
         )
         if (!error.isNullOrBlank()) {

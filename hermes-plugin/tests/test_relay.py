@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import time
@@ -9,6 +10,7 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -43,11 +45,12 @@ class RelayTests(unittest.TestCase):
         relay = None
         try:
             host, port = up.server_address
-            relay = make_server(f"127.0.0.1:0", f"http://{host}:{port}")
-            threading.Thread(target=relay.serve_forever, daemon=True).start()
-            rhost, rport = relay.server_address
-            with urllib.request.urlopen(f"http://{rhost}:{rport}/api/status", timeout=5) as resp:
-                payload = json.loads(resp.read().decode())
+            with patch.dict(os.environ, {"HERMES_COMPANION_STANDALONE": "0"}, clear=False):
+                relay = make_server(f"127.0.0.1:0", f"http://{host}:{port}")
+                threading.Thread(target=relay.serve_forever, daemon=True).start()
+                rhost, rport = relay.server_address
+                with urllib.request.urlopen(f"http://{rhost}:{rport}/api/status", timeout=5) as resp:
+                    payload = json.loads(resp.read().decode())
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["path"], "/api/status")
         finally:
@@ -152,6 +155,38 @@ class RelayTests(unittest.TestCase):
         with self.assertRaises(TicketError) as ctx:
             state.wait_result(command_id, timeout=0.05)
         self.assertEqual(ctx.exception.code, "timeout")
+
+    def test_proxy_closed_upstream_returns_502(self):
+        with patch.dict(os.environ, {"HERMES_COMPANION_STANDALONE": "0"}, clear=False):
+            relay = make_server("127.0.0.1:0", "http://127.0.0.1:1")
+            threading.Thread(target=relay.serve_forever, daemon=True).start()
+            try:
+                host, port = relay.server_address
+                try:
+                    urllib.request.urlopen(f"http://{host}:{port}/api/status", timeout=5)
+                    self.fail("expected 502")
+                except urllib.error.HTTPError as exc:
+                    self.assertEqual(exc.code, 502)
+                    payload = json.loads(exc.read().decode())
+                    self.assertEqual(payload["error"], "dashboard_unreachable")
+                    self.assertIn("127.0.0.1:1", payload["upstream"])
+            finally:
+                relay.shutdown()
+                relay.server_close()
+
+    def test_companion_health_no_auth(self):
+        relay = make_server("127.0.0.1:0", "http://127.0.0.1:1")
+        threading.Thread(target=relay.serve_forever, daemon=True).start()
+        try:
+            host, port = relay.server_address
+            with urllib.request.urlopen(f"http://{host}:{port}/companion/health", timeout=5) as resp:
+                payload = json.loads(resp.read().decode())
+            self.assertEqual(payload["relay"], "ok")
+            self.assertIn(payload["mode"], ("standalone", "proxy"))
+            self.assertIn(payload["upstream"], ("reachable", "refused", "unused"))
+        finally:
+            relay.shutdown()
+            relay.server_close()
 
 
 if __name__ == "__main__":

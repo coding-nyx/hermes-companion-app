@@ -74,6 +74,47 @@ class DashboardClientTest {
     }
 
     @Test
+    fun createAndStreamCarryModelOverride() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse().setResponseCode(201).setBody(
+                    """{"session":{"id":"n1","profile":"coder","title":"new thread"}}""",
+                ),
+            )
+            val sse = Buffer().writeUtf8(
+                "event: assistant.delta\ndata: {\"text\":\"ok\"}\n\nevent: run.completed\ndata: {}\n\n",
+            )
+            server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(sse))
+            val client = DashboardClient(server.toOkHttp())
+            val origin = server.url("/").toString().trimEnd('/')
+            val created = client.createSession(origin, "coder", model = "sonnet-4.6")
+            assertEquals("n1", created.id)
+            val createdBody = server.takeRequest().body.readUtf8()
+            assertTrue(createdBody.contains("\"model\":\"sonnet-4.6\""))
+            client.streamTurn(origin, "n1", "coder", "ping", model = "sonnet-4.6").toList()
+            val posted = server.takeRequest().body.readUtf8()
+            assertTrue(posted.contains("\"model\":\"sonnet-4.6\""))
+        }
+    }
+
+    @Test
+    fun deleteSessionSendsProfileAndSurfacesForbidden() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+            val client = DashboardClient(server.toOkHttp())
+            val origin = server.url("/").toString().trimEnd('/')
+            client.deleteSession(origin, "sess-cod-1", "coder")
+            val recorded = server.takeRequest()
+            assertEquals("DELETE", recorded.method)
+            assertEquals("/api/sessions/sess-cod-1?profile=coder", recorded.path)
+            server.enqueue(MockResponse().setResponseCode(403).setBody("""{"error":"profile_mismatch"}"""))
+            val forbidden = runCatching { client.deleteSession(origin, "sess-ops-1", "coder") }.exceptionOrNull()
+            assertTrue(forbidden is DashboardException)
+            assertEquals("http_403", (forbidden as DashboardException).code)
+        }
+    }
+
+    @Test
     fun pageMessagesSendsBeforeAndClipsTail() = runBlocking {
         MockWebServer().use { server ->
             val body = (1..120).joinToString(",", prefix = """{"messages":[""", postfix = "]}") { i ->
@@ -613,6 +654,45 @@ class DashboardClientTest {
         }
     }
 
+    @Test
+    fun fiveOhTwoDashboardUnreachableMapsHostDown() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse().setResponseCode(502).setBody("""{"error":"dashboard_unreachable"}"""),
+            )
+            val client = DashboardClient(server.toOkHttp())
+            val origin = server.url("/").toString().trimEnd('/')
+            val thrown = runCatching { client.listSessions(origin, "coder") }.exceptionOrNull()
+            assertTrue(thrown is DashboardException)
+            assertEquals("host_dashboard_down", (thrown as DashboardException).code)
+            assertTrue(thrown.message.orEmpty().contains("start hermes dashboard"))
+        }
+    }
+
+    @Test
+    fun streamTurnPostsImageParts() = runBlocking {
+        MockWebServer().use { server ->
+            val sse = Buffer().writeUtf8(
+                "event: assistant.delta\ndata: {\"text\":\"ok\"}\n\nevent: run.completed\ndata: {}\n\n",
+            )
+            server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(sse))
+            val client = DashboardClient(server.toOkHttp())
+            val origin = server.url("/").toString().trimEnd('/')
+            val events = client.streamTurn(
+                origin,
+                "sess-1",
+                "coder",
+                "see this",
+                partsJson = ""","parts":[{"type":"image","url":"/companion/media/abc"}]""",
+            ).toList()
+            assertTrue(events.any { it is ChatEvent.Completed })
+            val posted = server.takeRequest().body.readUtf8()
+            assertTrue(posted.contains("\"parts\""))
+            assertTrue(posted.contains("/companion/media/abc"))
+            assertTrue(posted.contains("\"type\":\"image\""))
+        }
+    }
+
     private fun MockWebServer.toOkHttp() = okhttp3.OkHttpClient.Builder()
         .build()
 }
@@ -636,5 +716,41 @@ class CleartextPolicyTest {
             val status = client.probe(origin)
             assertFalse(status.authRequired)
         }
+    }
+}
+
+class HostClientPoolTest {
+    @Test
+    fun tokensAndCookiesNeverCrossHosts() = runBlocking {
+        MockWebServer().use { lab ->
+            MockWebServer().use { hub ->
+                lab.enqueue(MockResponse().setBody("""{"profiles":[]}"""))
+                hub.enqueue(MockResponse().setBody("""{"profiles":[]}"""))
+                val pool = HostClientPool { DashboardClient(okhttp3.OkHttpClient(), attachToken = true) }
+                val labOrigin = lab.url("/").toString().trimEnd('/')
+                val hubOrigin = hub.url("/").toString().trimEnd('/')
+                val labClient = pool.forOrigin(labOrigin)
+                val hubClient = pool.forOrigin(hubOrigin)
+                assertTrue(labClient !== hubClient)
+                assertTrue(pool.forOrigin("$labOrigin/") === labClient)
+                labClient.sessionToken = "lab-only"
+                labClient.listProfiles(labOrigin)
+                hubClient.listProfiles(hubOrigin)
+                val labReq = lab.takeRequest()
+                val hubReq = hub.takeRequest()
+                assertEquals("Bearer lab-only", labReq.getHeader("Authorization"))
+                assertEquals(null, hubReq.getHeader("Authorization"))
+                assertEquals(null, hubReq.getHeader("X-Hermes-Session-Token"))
+                pool.evict(labOrigin)
+                assertTrue(pool.existing(labOrigin) == null)
+            }
+        }
+    }
+
+    @Test
+    fun poolKeyNormalises() {
+        assertEquals("http://100.85.151.99:9120", HostClientPool.key("HTTP://100.85.151.99:9120/x"))
+        assertEquals("https://h.ts.net", HostClientPool.key("https://h.ts.net:443/"))
+        assertEquals("", HostClientPool.key(""))
     }
 }

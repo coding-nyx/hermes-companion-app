@@ -17,10 +17,16 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Text
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,10 +34,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import app.hermes.companion.profiles.ProfileBottomSheet
 import app.hermes.companion.chat.ChatScreen
 import app.hermes.companion.connect.ConnectScreen
 import app.hermes.companion.console.ConsoleScreen
@@ -44,7 +54,9 @@ import app.hermes.companion.design.HudDot
 import app.hermes.companion.design.ProfileGlyph
 import app.hermes.companion.domain.DeviceLanePolicy
 import app.hermes.companion.gateway.GatewayScreen
+import androidx.compose.material3.ExperimentalMaterial3Api
 import app.hermes.companion.model.ChatMessage
+import app.hermes.companion.model.DeviceArm
 import app.hermes.companion.model.HudState
 import app.hermes.companion.model.SavedGateway
 import app.hermes.companion.model.SessionRef
@@ -53,7 +65,7 @@ import app.hermes.companion.reminders.RemindersScreen
 import app.hermes.companion.review.CodeReviewScreen
 import app.hermes.companion.threads.ThreadsScreen
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun CompanionShell(
     state: CompanionState,
@@ -65,6 +77,9 @@ fun CompanionShell(
     onTab: (MainTab) -> Unit,
     onOpenSession: (SessionRef) -> Unit,
     onNewThread: () -> Unit,
+    onRequestDelete: (SessionRef) -> Unit = {},
+    onConfirmDelete: () -> Unit = {},
+    onCancelDelete: () -> Unit = {},
     onCloseChat: () -> Unit,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
@@ -74,6 +89,7 @@ fun CompanionShell(
     onRewind: (ChatMessage) -> Unit = {},
     onCancelRewind: () -> Unit = {},
     onVoiceClick: () -> Unit = {},
+    onToggleVoiceStream: () -> Unit = {},
     onPair: () -> Unit = {},
     onCancelPair: () -> Unit = {},
     onRevokePair: () -> Unit = {},
@@ -106,6 +122,14 @@ fun CompanionShell(
     onAddGateway: (String, String) -> Unit = { _, _ -> },
     onCheckUpdate: () -> Unit = {},
     onApplyUpdate: () -> Unit = {},
+    onToggleAttach: () -> Unit = {},
+    onPickPhoto: () -> Unit = {},
+    onPickCamera: () -> Unit = {},
+    onPickVideo: () -> Unit = {},
+    onPickFile: () -> Unit = {},
+    onRemoveAttachment: (String) -> Unit = {},
+    onOpenMedia: (app.hermes.companion.model.ChatBlock) -> Unit = {},
+    onFetchMedia: suspend (String) -> ByteArray? = { null },
 ) {
     if (state.origin == null) {
         ConnectScreen(
@@ -137,29 +161,29 @@ fun CompanionShell(
             // Tap on empty chrome drops focus (and with it the IME). Clickable children win first.
             .pointerInput(Unit) { detectTapGestures { focusManager.clearFocus() } },
     ) {
-        // Header glyph is the profile switcher (A18.6): tap → inline picker under the header.
-        var profilePicker by rememberSaveable { mutableStateOf(false) }
+        var showProfileSheet by rememberSaveable { mutableStateOf(false) }
         Header(
             state = state,
             inChat = inChat,
             onCloseChat = onCloseChat,
-            onProfileTap = { profilePicker = !profilePicker },
+            onProfileTap = { showProfileSheet = true },
         )
         Hairline()
-        if (profilePicker) {
-            ProfilePicker(
-                state = state,
+        if (showProfileSheet) {
+            ProfileBottomSheet(
+                profiles = state.profiles,
+                activeProfileId = state.activeProfileId,
                 onSelect = { id ->
-                    profilePicker = false
+                    showProfileSheet = false
                     onSelectProfile(id)
                 },
                 onOpenAll = {
-                    profilePicker = false
+                    showProfileSheet = false
                     if (inChat) onCloseChat()
                     onTab(MainTab.PROFILES)
                 },
+                onDismiss = { showProfileSheet = false },
             )
-            Hairline()
         }
         state.pendingDeepLink?.let { req ->
             DeepLinkStrip(req, onConfirmDeepLink, onDismissDeepLink)
@@ -186,14 +210,32 @@ fun CompanionShell(
                 onCancelRewind = onCancelRewind,
                 isListeningVoice = state.isListeningVoice,
                 onVoiceClick = onVoiceClick,
+                loading = state.transcriptLoading,
+                onRetryHistory = { state.openSession?.let(onOpenSession) },
+                modelOverride = state.modelOverride,
+                pendingAttachments = state.pendingAttachments,
+                attachOpen = state.attachOpen,
+                onToggleAttach = onToggleAttach,
+                onPickPhoto = onPickPhoto,
+                onPickCamera = onPickCamera,
+                onPickVideo = onPickVideo,
+                onPickFile = onPickFile,
+                onRemoveAttachment = onRemoveAttachment,
+                onOpenMedia = onOpenMedia,
+                onFetchMedia = onFetchMedia,
                 modifier = body,
             )
         } else {
             when (state.tab) {
                 MainTab.THREADS -> ThreadsScreen(
                     sessions = state.visibleSessions,
+                    loading = state.sessionsLoading,
+                    pendingDelete = state.pendingDelete,
                     onOpen = onOpenSession,
                     onNew = onNewThread,
+                    onDeleteRequest = onRequestDelete,
+                    onConfirmDelete = onConfirmDelete,
+                    onCancelDelete = onCancelDelete,
                     modifier = body,
                 )
                 MainTab.CONSOLE -> ConsoleScreen(
@@ -234,6 +276,7 @@ fun CompanionShell(
                     hud = state.hud,
                     hostMetrics = state.hostMetrics,
                     modelCatalog = state.modelCatalog,
+                    modelOverride = state.modelOverride,
                     savedGateways = state.savedGateways,
                     updateStatus = state.updateStatus,
                     ntfyTopic = state.ntfyTopic,
@@ -246,6 +289,9 @@ fun CompanionShell(
                     onAddGateway = onAddGateway,
                     onCheckUpdate = onCheckUpdate,
                     onApplyUpdate = onApplyUpdate,
+                    hostLoading = state.hostLoading,
+                    modelLoading = state.modelLoading,
+                    updateLoading = state.updateLoading,
                     modifier = body,
                 )
                 MainTab.DEVICE -> DeviceScreen(
@@ -281,11 +327,30 @@ fun CompanionShell(
                     modifier = body,
                 )
             }
-            // The bar gives its height to the keyboard while typing (A18.4 / A18.7).
-            if (!imeVisible) {
-                Hairline()
-                NavBar(state.tab, onTab)
-            }
+        }
+        // The bar gives its height to the keyboard while typing (A18.4 / A18.7).
+        if (!imeVisible) {
+            Hairline()
+            NavBar(
+                state = state,
+                inChat = inChat,
+                onTab = { tab ->
+                    if (inChat && tab != MainTab.THREADS) {
+                        onCloseChat()
+                    }
+                    onTab(tab)
+                },
+                onProfileClick = { showProfileSheet = true },
+                onProfileLongClick = {
+                    val profiles = state.profiles
+                    if (profiles.isNotEmpty()) {
+                        val curr = profiles.indexOfFirst { it.id == state.activeProfileId }
+                        val next = if (curr in profiles.indices) (curr + 1) % profiles.size else 0
+                        onSelectProfile(profiles[next].id)
+                    }
+                },
+                onToggleVoiceStream = onToggleVoiceStream,
+            )
         }
     }
 }
@@ -349,7 +414,8 @@ private fun DeepLinkStrip(req: DeepLinkRequest, onConfirm: () -> Unit, onDismiss
         horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
     ) {
         Text(
-            text = "open ${req.sessionId} · ${req.profileId}?",
+            text = if (req.origin.isBlank()) "open ${req.sessionId} · ${req.profileId}?"
+            else "open ${req.sessionId} · ${req.profileId} @ ${req.origin.substringAfter("://")}?",
             style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -401,8 +467,9 @@ private fun Header(
                     .padding(end = CompanionSpace.Sm),
             )
         }
+        val hostPrefix = if (inChat || state.hostName.isBlank()) "" else "${state.hostName} · "
         Text(
-            text = when {
+            text = hostPrefix + when {
                 inChat -> state.openSession?.title ?: "chat"
                 state.tab == MainTab.THREADS -> "threads"
                 state.tab == MainTab.CONSOLE -> "console"
@@ -435,37 +502,195 @@ private fun HudGlyph(label: String, state: HudState) {
 }
 
 @Composable
-private fun NavBar(tab: MainTab, onTab: (MainTab) -> Unit) {
+private fun NavBar(
+    state: CompanionState,
+    inChat: Boolean,
+    onTab: (MainTab) -> Unit,
+    onProfileClick: () -> Unit,
+    onProfileLongClick: () -> Unit,
+    onToggleVoiceStream: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .background(CompanionColor.VoidElevated)
             .navigationBarsPadding()
-            .padding(vertical = CompanionSpace.Sm),
-        horizontalArrangement = Arrangement.SpaceEvenly,
+            .height(56.dp)
+            .padding(horizontal = CompanionSpace.Sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Xs),
     ) {
-        NavItem("CHAT", MainTab.THREADS, tab, onTab)
-        NavItem("TERM", MainTab.CONSOLE, tab, onTab)
-        NavItem("DIFF", MainTab.REVIEW, tab, onTab)
-        NavItem("CRON", MainTab.REMINDERS, tab, onTab)
-        NavItem("HOST", MainTab.GATEWAY, tab, onTab)
-        NavItem("HANDS", MainTab.DEVICE, tab, onTab)
+        // Zone 1: Profile glyph box (tap opens sheet, long-press cycles)
+        val active = state.activeProfile
+        val profileGlyph = active?.glyph ?: "---"
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .border(CompanionSpace.Hairline, CompanionColor.LineStrong)
+                .background(CompanionColor.Void)
+                .testTag("nav.profile")
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = { onProfileClick() },
+                        onLongPress = { onProfileLongClick() },
+                    )
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = profileGlyph,
+                style = CompanionType.Mono.copy(color = CompanionColor.Signal),
+            )
+        }
+
+        // Zone 2: Cyberpunk tab glyphs
+        Row(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            NavGlyphItem(
+                glyph = "▤",
+                label = "chat",
+                tab = MainTab.THREADS,
+                isSelected = (state.tab == MainTab.THREADS && !inChat) || inChat,
+                hasBadge = state.sessions.isNotEmpty(),
+                badgeColor = CompanionColor.Signal,
+                onTab = onTab,
+            )
+            NavGlyphItem(
+                glyph = ">_",
+                label = "term",
+                tab = MainTab.CONSOLE,
+                isSelected = state.tab == MainTab.CONSOLE && !inChat,
+                onTab = onTab,
+            )
+            NavGlyphItem(
+                glyph = "±",
+                label = "diff",
+                tab = MainTab.REVIEW,
+                isSelected = state.tab == MainTab.REVIEW && !inChat,
+                onTab = onTab,
+            )
+            NavGlyphItem(
+                glyph = "◷",
+                label = "cron",
+                tab = MainTab.REMINDERS,
+                isSelected = state.tab == MainTab.REMINDERS && !inChat,
+                onTab = onTab,
+            )
+            NavGlyphItem(
+                glyph = "⌂",
+                label = "host",
+                tab = MainTab.GATEWAY,
+                isSelected = state.tab == MainTab.GATEWAY && !inChat,
+                hasBadge = state.hud.gateway != HudState.ON,
+                badgeColor = CompanionColor.Warn,
+                onTab = onTab,
+            )
+            NavGlyphItem(
+                glyph = "✋",
+                label = "hands",
+                tab = MainTab.DEVICE,
+                isSelected = state.tab == MainTab.DEVICE && !inChat,
+                hasBadge = state.arm != DeviceArm.DISARMED,
+                badgeColor = CompanionColor.Warn,
+                onTab = onTab,
+            )
+        }
+
+        // Zone 3: Live Conversational Stream Toggle
+        VoiceStreamButton(
+            state = state.voiceStreamState,
+            onClick = onToggleVoiceStream,
+        )
     }
 }
 
 @Composable
-private fun NavItem(label: String, value: MainTab, current: MainTab, onTab: (MainTab) -> Unit) {
-    val selected = current == value
-    Text(
-        text = label,
-        style = CompanionType.MonoSmall.copy(
-            color = if (selected) CompanionColor.Signal else CompanionColor.TextMute,
-        ),
-        maxLines = 1,
-        overflow = TextOverflow.Clip,
-        softWrap = false,
+private fun NavGlyphItem(
+    glyph: String,
+    label: String,
+    tab: MainTab,
+    isSelected: Boolean,
+    hasBadge: Boolean = false,
+    badgeColor: Color = CompanionColor.Signal,
+    onTab: (MainTab) -> Unit,
+) {
+    val fg = if (isSelected) CompanionColor.Signal else CompanionColor.TextMute
+    Column(
         modifier = Modifier
-            .testTag("nav.${value.name.lowercase()}")
-            .clickable { onTab(value) }
-            .padding(horizontal = CompanionSpace.Xs, vertical = CompanionSpace.Sm),
-    )
+            .testTag("nav.${tab.name.lowercase()}")
+            .clickable { onTab(tab) }
+            .padding(horizontal = 2.dp, vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(contentAlignment = Alignment.TopEnd) {
+            Text(
+                text = glyph,
+                style = CompanionType.Mono.copy(
+                    color = fg,
+                    fontSize = 13.sp,
+                ),
+                maxLines = 1,
+            )
+            if (hasBadge) {
+                Box(
+                    modifier = Modifier
+                        .padding(start = 12.dp)
+                        .size(4.dp)
+                        .background(badgeColor, CircleShape),
+                )
+            }
+        }
+        Text(
+            text = label,
+            style = CompanionType.MonoSmall.copy(
+                color = fg,
+                fontSize = 9.sp,
+            ),
+            maxLines = 1,
+        )
+        Spacer(Modifier.height(2.dp))
+        Box(
+            modifier = Modifier
+                .width(16.dp)
+                .height(2.dp)
+                .background(if (isSelected) CompanionColor.Signal else Color.Transparent),
+        )
+    }
+}
+
+@Composable
+private fun VoiceStreamButton(
+    state: VoiceStreamState,
+    onClick: () -> Unit,
+) {
+    val isActive = state != VoiceStreamState.IDLE
+    val borderColor = if (isActive) CompanionColor.Signal else CompanionColor.LineStrong
+    val bgColor = if (isActive) CompanionColor.SignalDim else CompanionColor.Void
+    val iconColor = if (isActive) CompanionColor.Signal else CompanionColor.TextDim
+
+    val iconText = when (state) {
+        VoiceStreamState.LISTENING -> "ılı."
+        VoiceStreamState.SPEAKING -> "🔊"
+        VoiceStreamState.THINKING -> "◐"
+        VoiceStreamState.IDLE -> "🎙"
+    }
+
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .border(CompanionSpace.Hairline, borderColor)
+            .background(bgColor)
+            .testTag("nav.stream")
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = iconText,
+            style = CompanionType.Mono.copy(color = iconColor, fontSize = 13.sp),
+        )
+    }
 }

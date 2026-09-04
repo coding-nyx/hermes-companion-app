@@ -12,6 +12,7 @@ import app.hermes.companion.model.ApprovalPrompt
 import app.hermes.companion.model.BusFrame
 import app.hermes.companion.model.ChatEvent
 import app.hermes.companion.model.ChatMessage
+import app.hermes.companion.model.CompanionHealth
 import app.hermes.companion.model.DashboardStatus
 import app.hermes.companion.model.DeviceCommand
 import app.hermes.companion.model.DeviceCred
@@ -107,6 +108,55 @@ class DashboardClient internal constructor(
 
     suspend fun probe(origin: String): DashboardStatus =
         get(DashboardUrls.machine(origin, "/api/status")) { parseStatus(it) }
+
+    suspend fun companionHealth(origin: String): CompanionHealth =
+        get(DashboardUrls.machine(origin, "/companion/health")) { body ->
+            val obj = DashboardJson.parseToJsonElement(body).jsonObject
+            CompanionHealth(
+                relay = obj["relay"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                mode = obj["mode"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                upstream = obj["upstream"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                hermesVersion = obj["hermes_version"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                profilesDir = obj["profiles_dir"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                drift = obj["drift"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            )
+        }
+
+    suspend fun uploadMedia(
+        origin: String,
+        bytes: ByteArray,
+        filename: String,
+        mime: String,
+    ): String {
+        val b64 = java.util.Base64.getEncoder().encodeToString(bytes)
+        val payload = """{"filename":${filename.json()},"mime":${mime.json()},"data":${b64.json()}}"""
+        return try {
+            post("$origin/companion/media", payload) { body ->
+                val obj = DashboardJson.parseToJsonElement(body).jsonObject
+                val path = obj["url"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (path.startsWith("http")) path else origin.trimEnd('/') + path
+            }
+        } catch (e: DashboardException) {
+            if (e.code != "http_404") throw e
+            post("$origin/api/chat/image-upload", payload) { body ->
+                val obj = DashboardJson.parseToJsonElement(body).jsonObject
+                val path = obj["url"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    .ifBlank { obj["path"]?.jsonPrimitive?.contentOrNull.orEmpty() }
+                if (path.startsWith("http")) path else origin.trimEnd('/') + path
+            }
+        }
+    }
+
+    suspend fun fetchBytes(url: String): ByteArray = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(url).get().build()
+        http.newCall(request).execute().use { response ->
+            val bytes = response.body?.bytes() ?: ByteArray(0)
+            if (!response.isSuccessful) {
+                throw httpError(response.code, bytes.decodeToString(), url)
+            }
+            bytes
+        }
+    }
 
     fun useLoopback() {
         gated = false
@@ -360,12 +410,18 @@ class DashboardClient internal constructor(
         liveByStored.clear()
     }
 
-    suspend fun createSession(origin: String, profileId: String, title: String = ""): SessionRef {
+    suspend fun createSession(
+        origin: String,
+        profileId: String,
+        title: String = "",
+        model: String? = null,
+    ): SessionRef {
+        val extra = modelField(model)
         val socket = rpc
         if (socket != null && socket.isOpen) {
             val result = socket.request(
                 "session.create",
-                """{"profile":${profileId.json()},"title":${title.json()}}""",
+                """{"profile":${profileId.json()},"title":${title.json()}$extra}""",
             )
             val live = result.str("session_id").ifBlank { result.str("id") }
             val created = parseRpcSession(result, profileId)
@@ -373,8 +429,13 @@ class DashboardClient internal constructor(
             return created
         }
         val url = DashboardUrls.rest(origin, "/api/sessions", profileId)
-        val payload = """{"profile":${profileId.json()},"title":${title.json()}}"""
+        val payload = """{"profile":${profileId.json()},"title":${title.json()}$extra}"""
         return post(url, payload) { parseCreatedSession(it, profileId) }
+    }
+
+    suspend fun deleteSession(origin: String, sessionId: String, profileId: String) {
+        ProfileScope.requireProfileId(profileId)
+        delete(DashboardUrls.rest(origin, "/api/sessions/$sessionId", profileId))
     }
 
     suspend fun interruptTurn(origin: String, sessionId: String, profileId: String) {
@@ -390,21 +451,32 @@ class DashboardClient internal constructor(
         profileId: String,
         text: String,
         rewind: RewindSubmit? = null,
+        model: String? = null,
+        partsJson: String = "",
     ): Flow<ChatEvent> {
         val socket = rpc
         if (rewind != null) {
             if (socket == null || !socket.isOpen) {
                 return flow { throw DashboardException("rpc_required", "rewind needs live gateway") }
             }
-            return streamTurnRpc(socket, sessionId, profileId, text, rewind)
+            return streamTurnRpc(socket, sessionId, profileId, text, rewind, model, partsJson)
         }
-        if (socket != null && socket.isOpen) return streamTurnRpc(socket, sessionId, profileId, text)
-        return streamTurnSse(origin, sessionId, profileId, text)
+        if (socket != null && socket.isOpen) {
+            return streamTurnRpc(socket, sessionId, profileId, text, model = model, partsJson = partsJson)
+        }
+        return streamTurnSse(origin, sessionId, profileId, text, model, partsJson)
     }
 
-    private fun streamTurnSse(origin: String, sessionId: String, profileId: String, text: String): Flow<ChatEvent> = flow {
+    private fun streamTurnSse(
+        origin: String,
+        sessionId: String,
+        profileId: String,
+        text: String,
+        model: String? = null,
+        partsJson: String = "",
+    ): Flow<ChatEvent> = flow {
         val url = DashboardUrls.rest(origin, "/api/sessions/$sessionId/chat/stream", profileId)
-        val payload = """{"input":${text.json()},"profile":${profileId.json()}}"""
+        val payload = """{"input":${text.json()},"profile":${profileId.json()}${modelField(model)}$partsJson}"""
         val request = Request.Builder()
             .url(url)
             .header("Accept", "text/event-stream")
@@ -412,7 +484,7 @@ class DashboardClient internal constructor(
             .build()
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
-                throw DashboardException("http_${response.code}", "http ${response.code} · chat/stream")
+                throw httpError(response.code, response.body?.string().orEmpty(), url)
             }
             val source = response.body?.source() ?: return@use
             var event = "message"
@@ -436,6 +508,8 @@ class DashboardClient internal constructor(
         profileId: String,
         text: String,
         rewind: RewindSubmit? = null,
+        model: String? = null,
+        partsJson: String = "",
     ): Flow<ChatEvent> = callbackFlow {
         if (liveByStored[sessionId] == null) {
             runCatching { resumeSession(sessionId, profileId) }
@@ -457,7 +531,7 @@ class DashboardClient internal constructor(
                 val extra = RewindPolicy.jsonExtras(rewind)
                 val result = socket.request(
                     "prompt.submit",
-                    """{"session_id":${bound.json()},"text":${text.json()},"profile":${profileId.json()}$extra}""",
+                    """{"session_id":${bound.json()},"text":${text.json()},"profile":${profileId.json()}${modelField(model)}$partsJson$extra}""",
                     timeoutMs = 180_000,
                 )
                 if (rewind != null) {
@@ -605,7 +679,7 @@ class DashboardClient internal constructor(
         http.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw DashboardException("http_${response.code}", "http ${response.code} · /")
+                throw httpError(response.code, body, url)
             }
             body
         }
@@ -616,12 +690,26 @@ class DashboardClient internal constructor(
         http.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw DashboardException(
-                    "http_${response.code}",
-                    "http ${response.code} · ${url.substringAfter(response.request.url.host)}",
-                )
+                throw httpError(response.code, body, url)
             }
             parse(body)
+        }
+    }
+
+    private fun modelField(model: String?): String =
+        if (model.isNullOrBlank()) "" else ""","model":${model.json()}"""
+
+    private suspend fun delete(url: String) = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(url)
+            .delete()
+            .header("Accept", "application/json")
+            .build()
+        http.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw httpError(response.code, body, url)
+            }
         }
     }
 
@@ -634,7 +722,7 @@ class DashboardClient internal constructor(
         http.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw DashboardException("http_${response.code}", "http ${response.code} · post")
+                throw httpError(response.code, body, url)
             }
             parse(body)
         }
@@ -822,6 +910,18 @@ class DashboardClient internal constructor(
 
     suspend fun applyHermesUpdate(origin: String): Boolean =
         post("$origin/api/hermes/update", "{}") { true }
+
+    private fun httpError(code: Int, body: String, url: String): DashboardException {
+        val err = runCatching {
+            DashboardJson.parseToJsonElement(body).jsonObject["error"]?.jsonPrimitive?.contentOrNull
+        }.getOrNull()
+        if (code == 502 && err == "dashboard_unreachable") {
+            val host = url.substringAfter("://").substringBefore("/").substringBefore(':')
+            return DashboardException("host_dashboard_down", "start hermes dashboard on $host")
+        }
+        val path = url.substringAfter("://").substringAfter("/", missingDelimiterValue = url)
+        return DashboardException("http_$code", "http $code · /$path")
+    }
 
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()

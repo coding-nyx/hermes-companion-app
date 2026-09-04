@@ -1,9 +1,12 @@
 package app.hermes.companion.voice
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import java.util.Locale
@@ -15,9 +18,11 @@ class VoiceInputManager(private val context: Context) {
         onPartial: (String) -> Unit = {},
         onResult: (String) -> Unit,
         onError: (String) -> Unit = {},
+        onErrorCode: ((Int) -> Unit)? = null,
         onStateChange: (Boolean) -> Unit = {},
     ) {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+            onErrorCode?.invoke(-1)
             onError("Speech recognition not available on this device")
             return
         }
@@ -27,11 +32,28 @@ class VoiceInputManager(private val context: Context) {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         }
 
-        recognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
+        val googleService = ComponentName(
+            "com.google.android.googlequicksearchbox",
+            "com.google.android.voicesearch.serviceapi.GoogleRecognitionService",
+        )
+        val hasGoogleService = runCatching {
+            val queryIntent = Intent(RecognitionService.SERVICE_INTERFACE).setComponent(googleService)
+            context.packageManager.queryIntentServices(queryIntent, 0).isNotEmpty()
+        }.getOrDefault(false)
+
+        val speechRecognizer = when {
+            hasGoogleService -> runCatching { SpeechRecognizer.createSpeechRecognizer(context, googleService) }.getOrNull()
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(context) ->
+                runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(context) }.getOrNull()
+            else -> null
+        } ?: SpeechRecognizer.createSpeechRecognizer(context)
+
+        recognizer = speechRecognizer.apply {
             setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) { onStateChange(true) }
                 override fun onBeginningOfSpeech() {}
@@ -40,6 +62,7 @@ class VoiceInputManager(private val context: Context) {
                 override fun onEndOfSpeech() { onStateChange(false) }
                 override fun onError(error: Int) {
                     onStateChange(false)
+                    onErrorCode?.invoke(error)
                     onError("Speech error: $error")
                 }
 
@@ -67,8 +90,8 @@ class VoiceInputManager(private val context: Context) {
     }
 
     fun stopListening() {
-        recognizer?.stopListening()
-        recognizer?.destroy()
+        runCatching { recognizer?.cancel() }
+        runCatching { recognizer?.destroy() }
         recognizer = null
     }
 }

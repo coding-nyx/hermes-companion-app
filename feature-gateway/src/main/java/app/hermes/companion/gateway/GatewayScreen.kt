@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
+import app.hermes.companion.design.FetchRow
 import app.hermes.companion.design.Hairline
 import app.hermes.companion.design.HairlineField
 import app.hermes.companion.design.rememberDismissKeyboard
@@ -50,6 +51,7 @@ fun GatewayScreen(
     hud: GatewayHud,
     hostMetrics: HostMetrics? = null,
     modelCatalog: ModelCatalog? = null,
+    modelOverride: String = "",
     savedGateways: List<SavedGateway> = emptyList(),
     updateStatus: HermesUpdateStatus? = null,
     ntfyTopic: String = "",
@@ -62,6 +64,9 @@ fun GatewayScreen(
     onAddGateway: (String, String) -> Unit = { _, _ -> },
     onCheckUpdate: () -> Unit = {},
     onApplyUpdate: () -> Unit = {},
+    hostLoading: Boolean = false,
+    modelLoading: Boolean = false,
+    updateLoading: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var newGatewayName by remember { mutableStateOf("") }
@@ -133,8 +138,14 @@ fun GatewayScreen(
             if (status.exitReason.isNotBlank()) MonoLine("exit", status.exitReason)
             if (status.memoryPressure.isNotBlank()) MonoLine("memory", status.memoryPressure)
             if (status.diskPressure.isNotBlank()) MonoLine("disk", status.diskPressure)
+        } else if (hostLoading) {
+            FetchRow(
+                label = "SYNCING TELEMETRY",
+                padded = false,
+                modifier = Modifier.testTag("gateway.telemetry.loading"),
+            )
         } else {
-            Text(text = "NO TELEMETRY", style = CompanionType.Mono)
+            Text(text = "NO TELEMETRY // idle", style = CompanionType.Mono)
         }
 
         Spacer(Modifier.height(CompanionSpace.Lg))
@@ -146,6 +157,10 @@ fun GatewayScreen(
         Spacer(Modifier.height(CompanionSpace.Sm))
         if (modelCatalog != null && modelCatalog.models.isNotEmpty()) {
             MonoLine("current model", "${modelCatalog.currentProvider} / ${modelCatalog.currentModel}")
+            if (modelOverride.isNotBlank() && modelOverride != modelCatalog.currentModel) {
+                Spacer(Modifier.height(CompanionSpace.Xs))
+                MonoLine("turn override", modelOverride)
+            }
             Spacer(Modifier.height(CompanionSpace.Sm))
             Text(text = "available models (tap to switch):", style = CompanionType.MonoSmall)
             Spacer(Modifier.height(CompanionSpace.Xs))
@@ -156,7 +171,8 @@ fun GatewayScreen(
                 horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
             ) {
                 for (opt in modelCatalog.models.take(15)) {
-                    val isSelected = opt.id == modelCatalog.currentModel
+                    val selectedId = modelOverride.ifBlank { modelCatalog.currentModel }
+                    val isSelected = opt.id == selectedId
                     Box(
                         modifier = Modifier
                             .background(if (isSelected) CompanionColor.SignalDim else CompanionColor.VoidElevated)
@@ -173,8 +189,14 @@ fun GatewayScreen(
                     }
                 }
             }
+        } else if (modelLoading) {
+            FetchRow(
+                label = "LOADING MODELS",
+                padded = false,
+                modifier = Modifier.testTag("gateway.model.loading"),
+            )
         } else {
-            MonoLine("model", "gpt-5.6-terra")
+            Text(text = "NO MODEL CATALOG // idle", style = CompanionType.Mono)
         }
 
         Spacer(Modifier.height(CompanionSpace.Lg))
@@ -299,11 +321,12 @@ fun GatewayScreen(
         ) {
             Text(text = "updates", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
             Text(
-                text = "[CHECK NOW]",
+                text = if (updateLoading) "SYNCING" else "[CHECK NOW]",
                 style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
                 modifier = Modifier
-                    .clickable(onClick = onCheckUpdate)
-                    .padding(CompanionSpace.Xs),
+                    .clickable(enabled = !updateLoading, onClick = onCheckUpdate)
+                    .padding(CompanionSpace.Xs)
+                    .testTag("gateway.update.check"),
             )
         }
         Spacer(Modifier.height(CompanionSpace.Sm))
@@ -327,6 +350,12 @@ fun GatewayScreen(
             } else {
                 Text(text = "HERMES IS UP TO DATE", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
             }
+        } else if (updateLoading) {
+            FetchRow(
+                label = "QUERYING HOST",
+                padded = false,
+                modifier = Modifier.testTag("gateway.update.loading"),
+            )
         } else {
             Text(text = "TAP CHECK NOW TO QUERY HOST", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute))
         }

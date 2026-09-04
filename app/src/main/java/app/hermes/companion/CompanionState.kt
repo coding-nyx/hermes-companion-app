@@ -4,6 +4,7 @@ import app.hermes.companion.console.TerminalLogEntry
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.WakePing
 import app.hermes.companion.model.ApprovalPrompt
+import app.hermes.companion.model.ChatAttachment
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.CronJob
 import app.hermes.companion.model.DashboardStatus
@@ -22,16 +23,28 @@ import app.hermes.companion.model.SessionRef
 
 enum class MainTab { THREADS, CONSOLE, REVIEW, REMINDERS, PROFILES, GATEWAY, DEVICE }
 
+/** Real-time conversational voice stream lifecycle states. */
+enum class VoiceStreamState { IDLE, LISTENING, THINKING, SPEAKING }
+
 /** External `hermes-companion://open` request awaiting user confirmation (A7.10). */
-data class DeepLinkRequest(val profileId: String, val sessionId: String)
+data class DeepLinkRequest(val profileId: String, val sessionId: String, val origin: String = "")
 
 data class CompanionState(
     val originInput: String = "",
     val origin: String? = null,
+    /** Gateway-book name of [origin] (bare host if unnamed). Shown in the header and every notification. */
+    val hostName: String = "",
     val username: String = "",
     val password: String = "",
     val authRequired: Boolean = false,
     val loading: Boolean = false,
+    /** Thread roster in flight (profile switch / connect). Distinct from connect [loading]. */
+    val sessionsLoading: Boolean = false,
+    /** First history page in flight for the open thread. Cached tail still shown. */
+    val transcriptLoading: Boolean = false,
+    val hostLoading: Boolean = false,
+    val modelLoading: Boolean = false,
+    val updateLoading: Boolean = false,
     val error: String? = null,
     val profiles: List<ProfileRef> = emptyList(),
     val activeProfileId: String? = null,
@@ -77,10 +90,18 @@ data class CompanionState(
     val awakeOnVoice: Boolean = false,
     val lockedAccess: Boolean = false,
     val isListeningVoice: Boolean = false,
+    val voiceStreamState: VoiceStreamState = VoiceStreamState.IDLE,
     val protectedCustom: List<String> = emptyList(),
     val protectedError: String? = null,
     val pendingDeepLink: DeepLinkRequest? = null,
+    val pendingDelete: SessionRef? = null,
+    /** Optional per-turn model on session.create / prompt.submit (A9.3). */
+    val modelOverride: String = "",
+    val pendingAttachments: List<ChatAttachment> = emptyList(),
+    val attachOpen: Boolean = false,
 ) {
+    val isVoiceStreamActive: Boolean
+        get() = voiceStreamState != VoiceStreamState.IDLE
     val visibleSessions: List<SessionRef>
         get() = ProfileScope.visibleSessions(sessions, activeProfileId)
     val activeProfile: ProfileRef?

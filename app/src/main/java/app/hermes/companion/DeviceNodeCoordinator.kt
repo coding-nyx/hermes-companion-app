@@ -6,6 +6,7 @@ import androidx.core.content.ContextCompat
 import app.hermes.companion.data.local.DeviceCredStore
 import app.hermes.companion.data.local.StickyStore
 import app.hermes.companion.data.remote.DashboardClient
+import app.hermes.companion.data.remote.HostClientPool
 import app.hermes.companion.device.CompanionAccessibilityService
 import app.hermes.companion.device.HandsBridge
 import app.hermes.companion.device.HandsService
@@ -51,6 +52,9 @@ data class DeviceNodeState(
     val arm: DeviceArm = DeviceArm.DISARMED,
     val protectedCustom: List<String> = emptyList(),
     val protectedError: String? = null,
+    /** Hosts this phone is paired with (normalised origins) and the lanes currently open (A8.5). */
+    val pairedHosts: List<String> = emptyList(),
+    val openLanes: Set<String> = emptySet(),
 )
 
 /**
@@ -63,14 +67,16 @@ data class DeviceNodeState(
  */
 class DeviceNodeCoordinator(
     private val app: CompanionApp,
-    private val client: DashboardClient,
+    private val clients: HostClientPool,
     private val deviceCreds: DeviceCredStore,
     private val sticky: StickyStore,
     private val scope: CoroutineScope,
 ) {
     private val _state = MutableStateFlow(
-        DeviceNodeState(protectedCustom = sticky.protectedPackages.sorted())
-            .withCred(deviceCreds.load(), null),
+        DeviceNodeState(
+            protectedCustom = sticky.protectedPackages.sorted(),
+            pairedHosts = deviceCreds.loadAll().map { it.origin },
+        ),
     )
     val state: StateFlow<DeviceNodeState> = _state
 
@@ -80,7 +86,8 @@ class DeviceNodeCoordinator(
 
     @Volatile
     private var origin: String? = null
-    private var laneJob: Job? = null
+    private val lanes = mutableMapOf<String, Job>()
+    private fun client(origin: String): DashboardClient = clients.forOrigin(origin)
     private var idleJob: Job? = null
     private var pairJob: Job? = null
     private var lastRefs: Set<String> = emptySet()
@@ -93,18 +100,31 @@ class DeviceNodeCoordinator(
         HandsBridge.onDisarm = { disarm() }
     }
 
+    /** Every paired host keeps its lane, so Hermes on lab can still move the phone while hub is active. */
+    fun startAllLanes() {
+        deviceCreds.loadAll().forEach { startLane(it.origin) }
+    }
+
     // ---- operator lifecycle -------------------------------------------------------------
 
     /** Operator connected to [origin]: restore pairing from the stored credential, open the lane. */
     fun bind(origin: String) {
         this.origin = origin
-        _state.update { it.withCred(deviceCreds.load(), origin) }
-        startLane()
+        // A pre-A8.5 pairing was stored without an origin; it belongs to the host it was made on.
+        if (deviceCreds.load(origin) == null) deviceCreds.adoptLegacy(origin)
+        _state.update {
+            it.withCred(deviceCreds.load(origin), origin).copy(
+                pairedHosts = deviceCreds.loadAll().map { c -> c.origin },
+                laneOpen = HostClientPool.key(origin) in it.openLanes,
+            )
+        }
+        startAllLanes()
+        if (_state.value.arm != DeviceArm.DISARMED) syncHands(armed = true)
     }
 
-    /** Operator gone with nothing armed: drop the lane. Arm state is untouched. */
+    /** Operator gone with nothing armed: drop every lane. Arm state is untouched. */
     fun unbind() {
-        stopLane()
+        lanes.keys.toList().forEach { stopLane(it) }
         origin = null
     }
 
@@ -150,13 +170,17 @@ class DeviceNodeCoordinator(
         }
     }
 
-    /** Kill-switch notification follows the arm state, whether or not an Activity is alive. */
+    /**
+     * Kill-switch notification follows the arm state, whether or not an Activity is alive, and names
+     * the hosts whose lanes are live (falling back to the paired hosts) — A8.5.
+     */
     private fun syncHands(armed: Boolean) {
-        val intent = Intent(app, HandsService::class.java)
         if (armed) {
-            runCatching { ContextCompat.startForegroundService(app, intent) }
+            val st = _state.value
+            val hosts = (st.openLanes.ifEmpty { st.pairedHosts.toSet() }).map { app.hostName(it) }.filter { it.isNotBlank() }
+            runCatching { ContextCompat.startForegroundService(app, HandsService.start(app, hosts)) }
         } else {
-            runCatching { app.stopService(intent) }
+            runCatching { app.stopService(Intent(app, HandsService::class.java)) }
         }
     }
 
@@ -194,7 +218,7 @@ class DeviceNodeCoordinator(
             val started = System.currentTimeMillis()
             _state.update { it.copy(pairingPhase = PairingPhase.WAITING, pairingCode = code) }
             try {
-                var status = client.offerPair(origin, code, profile)
+                var status = client(origin).offerPair(origin, code, profile)
                 while (isActive) {
                     if (status.approved) {
                         deviceCreds.save(
@@ -211,9 +235,10 @@ class DeviceNodeCoordinator(
                                 pairingCode = "",
                                 deviceId = status.deviceId,
                                 deviceProfileId = status.profileId.ifBlank { profile },
+                                pairedHosts = deviceCreds.loadAll().map { c -> c.origin },
                             )
                         }
-                        startLane()
+                        startLane(origin)
                         return@launch
                     }
                     if (PairingPolicy.expired(started)) {
@@ -222,7 +247,7 @@ class DeviceNodeCoordinator(
                         return@launch
                     }
                     delay(PairingPolicy.POLL_MS)
-                    status = runCatching { client.pollPair(origin, code) }.getOrNull() ?: status
+                    status = runCatching { client(origin).pollPair(origin, code) }.getOrNull() ?: status
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -246,12 +271,19 @@ class DeviceNodeCoordinator(
         val id = _state.value.deviceId
         scope.launch {
             if (!origin.isNullOrBlank() && !id.isNullOrBlank()) {
-                runCatching { client.revokeDevice(origin, id) }
+                runCatching { client(origin).revokeDevice(origin, id) }
             }
-            deviceCreds.clear()
-            stopLane()
-            idleJob?.cancel()
-            idleJob = null
+            // Only this host's pairing goes; other hosts keep their lanes.
+            if (!origin.isNullOrBlank()) {
+                deviceCreds.clear(origin)
+                stopLane(origin)
+            }
+            val remaining = deviceCreds.loadAll().map { it.origin }
+            val stillPaired = remaining.isNotEmpty()
+            if (!stillPaired) {
+                idleJob?.cancel()
+                idleJob = null
+            }
             _state.update {
                 it.copy(
                     pairingPhase = PairingPhase.IDLE,
@@ -259,51 +291,64 @@ class DeviceNodeCoordinator(
                     deviceId = null,
                     deviceProfileId = null,
                     laneOpen = false,
-                    arm = DeviceArm.DISARMED,
+                    pairedHosts = remaining,
+                    arm = if (stillPaired) it.arm else DeviceArm.DISARMED,
                 )
             }
-            syncHands(armed = false)
+            if (!stillPaired) syncHands(armed = false) else if (_state.value.arm != DeviceArm.DISARMED) syncHands(true)
         }
     }
 
     // ---- device lane ------------------------------------------------------------------------
 
-    private fun startLane() {
-        val origin = origin ?: return
-        val cred = deviceCreds.load() ?: return
-        if (cred.origin.isNotBlank() && cred.origin != origin) return
-        laneJob?.cancel()
-        laneJob = scope.launch {
+    private fun startLane(laneOrigin: String) {
+        val key = HostClientPool.key(laneOrigin)
+        if (key.isBlank()) return
+        val cred = deviceCreds.load(laneOrigin) ?: return
+        if (lanes[key]?.isActive == true) return
+        lanes[key] = scope.launch {
             var backoff = 1_000L
             while (isActive) {
                 try {
-                    client.openDeviceLane(origin, cred)
-                    _state.update { it.copy(laneOpen = true) }
+                    client(laneOrigin).openDeviceLane(laneOrigin, cred)
+                    markLane(key, open = true)
                     backoff = 1_000L
-                    client.deviceCommands().collect { handleCommand(it) }
+                    client(laneOrigin).deviceCommands().collect { handleCommand(laneOrigin, it) }
                 } catch (c: CancellationException) {
                     throw c
                 } catch (_: Throwable) {
-                    _state.update { it.copy(laneOpen = false) }
+                    markLane(key, open = false)
                 }
-                client.closeDeviceLane()
-                _state.update { it.copy(laneOpen = false) }
+                client(laneOrigin).closeDeviceLane()
+                markLane(key, open = false)
                 delay(backoff)
                 backoff = (backoff * 2).coerceAtMost(30_000L)
             }
         }
     }
 
-    private fun stopLane() {
-        laneJob?.cancel()
-        laneJob = null
-        client.closeDeviceLane()
-        lastRefs = emptySet()
-        lastNodes = emptyList()
-        _state.update { it.copy(laneOpen = false) }
+    private fun markLane(key: String, open: Boolean) {
+        _state.update {
+            val lanesNow = if (open) it.openLanes + key else it.openLanes - key
+            it.copy(
+                openLanes = lanesNow,
+                laneOpen = origin?.let { o -> HostClientPool.key(o) in lanesNow } ?: false,
+            )
+        }
+        // The kill-switch notification names live lanes; keep it current while armed.
+        if (_state.value.arm != DeviceArm.DISARMED) syncHands(armed = true)
     }
 
-    private suspend fun handleCommand(command: DeviceCommand) {
+    private fun stopLane(laneOrigin: String) {
+        val key = HostClientPool.key(laneOrigin)
+        lanes.remove(key)?.cancel()
+        clients.existing(laneOrigin)?.closeDeviceLane()
+        lastRefs = emptySet()
+        lastNodes = emptyList()
+        markLane(key, open = false)
+    }
+
+    private suspend fun handleCommand(laneOrigin: String, command: DeviceCommand) {
         val st = _state.value
         val args = command.argumentsJson
         val ref = jsonField(args, "ref") ?: jsonField(args, "from_ref")
@@ -311,7 +356,7 @@ class DeviceNodeCoordinator(
         val fg = CompanionAccessibilityService.foregroundApp
         if (!DeviceGestures.allowRate(System.currentTimeMillis(), rateHits)) {
             noteAudit(command.action, fg, false, "rate_limited")
-            client.replyDevice(DeviceLanePolicy.fail(command.commandId, "rate_limited"))
+            client(laneOrigin).replyDevice(DeviceLanePolicy.fail(command.commandId, "rate_limited"))
             return
         }
         val code = DeviceLanePolicy.reject(
@@ -326,7 +371,7 @@ class DeviceNodeCoordinator(
         )
         if (code != null) {
             noteAudit(command.action, target ?: fg, false, code)
-            client.replyDevice(DeviceLanePolicy.fail(command.commandId, code))
+            client(laneOrigin).replyDevice(DeviceLanePolicy.fail(command.commandId, code))
             return
         }
         bumpIdle()
@@ -338,7 +383,7 @@ class DeviceNodeCoordinator(
             }
         }
         noteAudit(command.action, target ?: fg, result.ok, result.errorCode)
-        client.replyDevice(result)
+        client(laneOrigin).replyDevice(result)
         _state.update {
             it.copy(
                 arm = DeviceArming.endExec(it.arm),
@@ -538,7 +583,8 @@ class DeviceNodeCoordinator(
 
 /** Pairing phase derives from the stored credential, but only for the origin it was issued by. */
 private fun DeviceNodeState.withCred(cred: DeviceCred?, origin: String?): DeviceNodeState {
-    val mismatch = cred != null && cred.origin.isNotBlank() && !origin.isNullOrBlank() && cred.origin != origin
+    val mismatch = cred != null && cred.origin.isNotBlank() && !origin.isNullOrBlank() &&
+        HostClientPool.key(cred.origin) != HostClientPool.key(origin)
     if (cred == null || mismatch) {
         return copy(pairingPhase = PairingPhase.IDLE, pairingCode = "", deviceId = null, deviceProfileId = null)
     }

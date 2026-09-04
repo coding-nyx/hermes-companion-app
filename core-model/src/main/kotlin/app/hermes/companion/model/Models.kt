@@ -51,6 +51,31 @@ data class SessionRef(
 enum class MessageRole { USER, ASSISTANT, TOOL }
 
 @Serializable
+enum class ChatBlockKind { TEXT, IMAGE, VIDEO, FILE }
+
+@Serializable
+data class ChatBlock(
+    val kind: ChatBlockKind = ChatBlockKind.TEXT,
+    val text: String = "",
+    val url: String = "",
+    val alt: String = "",
+    val name: String = "",
+    val mime: String = "",
+    val sizeBytes: Long = 0L,
+)
+
+@Serializable
+data class ChatAttachment(
+    val id: String,
+    val localUri: String,
+    val name: String,
+    val mime: String,
+    val kind: ChatBlockKind,
+    val uploadedUrl: String = "",
+    val sizeBytes: Long = 0L,
+)
+
+@Serializable
 data class ChatMessage(
     val id: String,
     val role: MessageRole,
@@ -59,6 +84,7 @@ data class ChatMessage(
     val toolDetail: String? = null,
     val streaming: Boolean = false,
     val queued: Boolean = false,
+    val blocks: List<ChatBlock> = emptyList(),
 )
 
 @Serializable
@@ -71,6 +97,17 @@ data class OutboxItem(
     val createdAtEpochMs: Long,
     val attempts: Int = 0,
     val lastError: String = "",
+    val attachmentsJson: String = "",
+)
+
+@Serializable
+data class CompanionHealth(
+    val relay: String = "",
+    val mode: String = "",
+    val upstream: String = "",
+    val hermesVersion: String = "",
+    val profilesDir: String = "",
+    val drift: String = "",
 )
 
 @Serializable
@@ -325,5 +362,7 @@ data class SavedGateway(
     val origin: String,
     val token: String? = null,
     val isActive: Boolean = false,
+    /** Host kind: `hermes` today, `openclaw` later (P19). */
+    val kind: String = "hermes",
 )
 

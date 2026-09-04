@@ -16,6 +16,10 @@ class OutboxStore(private val dao: CompanionDao) {
         dao.deleteOutbox(id)
     }
 
+    suspend fun removeForSession(origin: String, profileId: String, sessionId: String) {
+        dao.deleteOutboxForSession(origin, profileId, sessionId)
+    }
+
     suspend fun markAttempt(id: String, origin: String, profileId: String, error: String) {
         val row = pending(origin, profileId).find { it.id == id } ?: return
         dao.upsertOutbox(

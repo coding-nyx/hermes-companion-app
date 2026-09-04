@@ -40,7 +40,9 @@ import androidx.compose.ui.unit.dp
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
+import app.hermes.companion.design.FetchPane
 import app.hermes.companion.design.Hairline
+import app.hermes.companion.design.SignalCursor
 import app.hermes.companion.model.TerminalExecResult
 
 data class TerminalLogEntry(
@@ -153,12 +155,13 @@ fun ConsoleScreen(
                 .padding(CompanionSpace.Md),
         ) {
             if (logs.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = "READY FOR COMMANDS // TAP PRESET OR TYPE BELOW",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                    )
-                }
+                FetchPane(
+                    label = "READY FOR COMMANDS",
+                    hint = "// tap preset or type",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("console.empty"),
+                )
             } else {
                 LazyColumn(
                     state = listState,
@@ -186,10 +189,14 @@ fun ConsoleScreen(
                             }
                             Spacer(Modifier.height(CompanionSpace.Xs))
                             if (entry.isRunning) {
-                                Text(
-                                    text = "executing on host...",
-                                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    SignalCursor()
+                                    Spacer(Modifier.width(CompanionSpace.Sm))
+                                    Text(
+                                        text = "executing on host",
+                                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                                    )
+                                }
                             } else if (entry.result != null) {
                                 val res = entry.result
                                 if (res.stdout.isNotBlank()) {

@@ -16,9 +16,12 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from drift import self_test
 from fs_explorer import list_dir_tree, read_file_content
 from git_workspace import commit_git, get_git_branches, get_git_diff, get_git_status, stage_git_file
 from host_metrics import collect_metrics
+from media import MediaError, MediaStore
+from standalone import Operator, OperatorError
 from pairing import PairingError, PairingStore, default_store_path
 from terminal_pty import PtySession, execute_quick_command
 from tickets import ALLOWLIST, PROTOCOL, TICKET_PREFIX, TicketError, TicketStore, parse_subprotocols
@@ -27,6 +30,14 @@ WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 DEFAULT_BIND = os.environ.get("HERMES_COMPANION_BIND", "0.0.0.0:9120")
 DEFAULT_UPSTREAM = os.environ.get("HERMES_DASHBOARD", "http://127.0.0.1:9119")
+
+
+def standalone_enabled() -> bool:
+    return os.environ.get("HERMES_COMPANION_STANDALONE", "1").strip().lower() not in ("0", "false", "no")
+
+
+class UpstreamError(OSError):
+    pass
 
 
 def parse_bind(bind: str) -> tuple[str, int]:
@@ -117,9 +128,21 @@ def _pipe(src: socket.socket, dst: socket.socket) -> None:
     # Never SHUT_WR — uvicorn drops the request if the client half-closes.
 
 
+def probe_upstream(host: str, port: int, timeout: float = 1.5) -> str:
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+        sock.close()
+        return "reachable"
+    except OSError:
+        return "refused"
+
+
 def proxy_tcp(client: socket.socket, already: bytes, upstream_host: str, upstream_port: int) -> None:
     _keepalive(client)
-    up = socket.create_connection((upstream_host, upstream_port), timeout=8)
+    try:
+        up = socket.create_connection((upstream_host, upstream_port), timeout=8)
+    except OSError as exc:
+        raise UpstreamError(str(exc)) from exc
     _keepalive(up)
     up.settimeout(None)
     try:
@@ -141,9 +164,17 @@ def proxy_tcp(client: socket.socket, already: bytes, upstream_host: str, upstrea
 
 
 class RelayState:
-    def __init__(self, pairing: PairingStore | None = None, tickets: TicketStore | None = None):
+    def __init__(
+        self,
+        pairing: PairingStore | None = None,
+        tickets: TicketStore | None = None,
+        operator: Operator | None = None,
+        media: MediaStore | None = None,
+    ):
         self.pairing = pairing or PairingStore()
         self.tickets = tickets or TicketStore()
+        self.operator = operator or Operator()
+        self.media = media or MediaStore()
         self.lanes: dict[str, object] = {}
         self.lock = threading.Lock()
         self.seq = 0
@@ -238,6 +269,10 @@ class CompanionHandler(BaseHTTPRequestHandler):
         if path.startswith("/companion/"):
             self._companion(path)
             return
+        if standalone_enabled():
+            if not self._standalone(parsed):
+                self._json({"error": "not_found", "path": parsed.path}, 404)
+            return
         self._proxy()
 
     def _json(self, payload: dict, status: int = 200):
@@ -254,6 +289,185 @@ class CompanionHandler(BaseHTTPRequestHandler):
         if not raw:
             return {}
         return json.loads(raw.decode() or "{}")
+
+    def _read_body(self) -> bytes:
+        length = int(self.headers.get("Content-Length") or 0)
+        return self.rfile.read(length) if length else b""
+
+    def _health(self):
+        host, port = self.upstream
+        upstream = "unused" if standalone_enabled() else probe_upstream(host, port)
+        if standalone_enabled():
+            payload = self.state.operator.health()
+            payload["upstream"] = probe_upstream(host, port)
+            payload["mode"] = "standalone"
+        else:
+            drift = self_test()
+            payload = {
+                "relay": "ok",
+                "mode": "proxy",
+                "upstream": upstream,
+                "hermes_version": drift.get("hermes_version") or "",
+                "profiles_dir": drift.get("profiles_dir") or "",
+                "drift": "proxy",
+                "warnings": [],
+            }
+        payload["upstream_url"] = f"http://{host}:{port}"
+        return self._json(payload)
+
+    def _media_put(self):
+        body = self._read_json()
+        raw = body.get("data") or body.get("content") or ""
+        try:
+            blob = base64.b64decode(raw) if isinstance(raw, str) else b""
+        except Exception as exc:
+            raise MediaError("bad_base64") from exc
+        rec = self.state.media.put(blob, str(body.get("filename") or "file"), str(body.get("mime") or body.get("content_type") or ""))
+        return self._json(rec, 201)
+
+    def _media_get(self, media_id: str):
+        found = self.state.media.get(media_id)
+        if found is None:
+            return self._json({"error": "not_found"}, 404)
+        data, meta = found
+        self.send_response(200)
+        self.send_header("Content-Type", str(meta.get("mime") or "application/octet-stream"))
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "private, max-age=86400")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _standalone(self, parsed) -> bool:
+        path = parsed.path
+        query = parse_qs(parsed.query)
+        if path.startswith("/api/ws") and (self.headers.get("Upgrade") or "").lower() == "websocket":
+            self._operator_ws(query)
+            return True
+        if path.startswith("/api/sessions/") and path.endswith("/chat/stream") and self.command == "POST":
+            self._operator_stream(path, query)
+            return True
+        if path == "/api/chat/image-upload" and self.command == "POST":
+            try:
+                self._media_put()
+            except MediaError as extra:
+                self._json({"error": extra.code}, extra.status)
+            return True
+        raw = self._read_body()
+        try:
+            body = json.loads(raw.decode() or "{}") if raw else {}
+        except json.JSONDecodeError:
+            body = {}
+        headers = {k: self.headers.get(k) for k in ("Authorization", "Cookie", "X-Hermes-Session-Token") if self.headers.get(k)}
+        try:
+            handled = self.state.operator.handle_rest(self.command, path, query, headers, body if isinstance(body, dict) else {})
+        except OperatorError as extra:
+            self._json({"error": extra.error}, extra.status)
+            return True
+        if handled is None:
+            return False
+        status, ctype, payload = handled
+        extra_headers = {}
+        if path == "/auth/password-login" and status == 200:
+            extra_headers["Set-Cookie"] = "hermes_session=standalone; Path=/"
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(payload)))
+        for key, value in extra_headers.items():
+            self.send_header(key, value)
+        self.end_headers()
+        self.wfile.write(payload)
+        return True
+
+    def _operator_stream(self, path: str, query: dict):
+        sid = path.split("/")[3]
+        profile = (query.get("profile") or [None])[0] or ""
+        body = self._read_json()
+        text = str(body.get("input") or body.get("text") or "")
+        parts = body.get("parts") if isinstance(body.get("parts"), list) else None
+        try:
+            submitted = self.state.operator.submit(sid, profile, text, str(body.get("model") or ""), parts)
+        except OperatorError as extra:
+            return self._json({"error": extra.error}, extra.status)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        def ev(event, data):
+            frame = f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+            self.wfile.write(frame)
+            self.wfile.flush()
+
+        reply = submitted.get("reply") or ""
+        for i in range(0, max(len(reply), 1), 48):
+            ev("assistant.delta", {"text": reply[i : i + 48]})
+        ev("run.completed", {"ok": True})
+        return None
+
+    def _operator_ws(self, query: dict):
+        if self.state.operator.auth_required():
+            ticket = (query.get("ticket") or [None])[0]
+            if (query.get("token") or [None])[0]:
+                return self._json({"error": "gated_no_token"}, 401)
+            if not self.state.operator.consume_ticket(ticket or ""):
+                return self._json({"error": "bad_ticket"}, 401)
+        key = self.headers.get("Sec-WebSocket-Key", "")
+        if not key:
+            return self._json({"error": "missing_ws_key"}, 400)
+        profile = (query.get("profile") or [None])[0]
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", _ws_accept(key))
+        self.end_headers()
+        ready = {
+            "jsonrpc": "2.0",
+            "method": "event",
+            "params": {
+                "type": "gateway.ready",
+                "payload": {
+                    "change_events": True,
+                    "heartbeat": True,
+                    "instance_id": "companion-standalone",
+                    "profile": profile or "default",
+                },
+            },
+        }
+        self.wfile.write(_ws_text(json.dumps(ready)))
+        self.wfile.flush()
+        while True:
+            raw = _ws_recv(self.rfile, self.wfile)
+            if raw is None:
+                break
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    req = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                rid = req.get("id")
+                method = req.get("method") or ""
+                params = req.get("params") if isinstance(req.get("params"), dict) else {}
+                try:
+                    result, events = self.state.operator.rpc(method, params, profile)
+                except OperatorError as extra:
+                    if rid is None:
+                        continue
+                    err = {"jsonrpc": "2.0", "id": rid, "error": {"code": extra.status, "message": extra.error}}
+                    self.wfile.write(_ws_text(json.dumps(err)))
+                    self.wfile.flush()
+                    continue
+                for event in events:
+                    self.wfile.write(_ws_text(json.dumps(event)))
+                    self.wfile.flush()
+                if rid is None:
+                    continue
+                self.wfile.write(_ws_text(json.dumps({"jsonrpc": "2.0", "id": rid, "result": result})))
+                self.wfile.flush()
+        self.close_connection = True
+        return None
 
     def _companion(self, path: str):
         try:
@@ -340,9 +554,17 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 query = parse_qs(urlparse(self.path).query)
                 filepath = query.get("path", [""])[0]
                 return self._json(read_file_content(repo_dir, filepath))
+            if path == "/companion/health" and self.command == "GET":
+                return self._health()
+            if path == "/companion/media" and self.command == "POST":
+                return self._media_put()
+            if path.startswith("/companion/media/") and self.command == "GET":
+                return self._media_get(path.rsplit("/", 1)[-1])
             if path == "/companion/device/ws":
                 return self._device_ws()
             return self._json({"error": "not_found"}, 404)
+        except MediaError as extra:
+            return self._json({"error": extra.code}, extra.status)
         except PairingError as extra:
             return self._json({"error": str(extra)}, 400)
         except TicketError as extra:
@@ -468,7 +690,25 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 continue
             req += f"{key}: {value}\r\n".encode()
         req += b"\r\n" + rest
-        proxy_tcp(self.connection, req, self.upstream[0], self.upstream[1])
+        try:
+            proxy_tcp(self.connection, req, self.upstream[0], self.upstream[1])
+        except UpstreamError as extra:
+            host, port = self.upstream
+            print(f"companion relay upstream refused {host}:{port}: {extra}", flush=True)
+            payload = {
+                "error": "dashboard_unreachable",
+                "upstream": f"http://{host}:{port}",
+                "hint": "start `hermes dashboard --no-open` on this host or set HERMES_DASHBOARD",
+            }
+            body = json.dumps(payload).encode()
+            try:
+                self.send_response(502)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except OSError:
+                pass
         self.close_connection = True
 
 
@@ -488,7 +728,28 @@ def persistent_state() -> RelayState:
     return RelayState(pairing=PairingStore(path=default_store_path()))
 
 
+def check_upstream(upstream: str = DEFAULT_UPSTREAM) -> dict:
+    host, port = parse_upstream(upstream)
+    status = probe_upstream(host, port)
+    report = {
+        "upstream": f"http://{host}:{port}",
+        "status": status,
+        "mode": "standalone" if standalone_enabled() else "proxy",
+        "health": "/companion/health",
+    }
+    if status != "reachable" and not standalone_enabled():
+        report["warning"] = "dashboard closed; phone will see host_dashboard_down. start hermes dashboard or set HERMES_COMPANION_STANDALONE=1"
+    return report
+
+
 def serve_forever(bind: str = DEFAULT_BIND, upstream: str = DEFAULT_UPSTREAM) -> None:
+    report = check_upstream(upstream)
+    print(
+        f"companion relay check upstream={report['upstream']} {report['status']} mode={report['mode']}",
+        flush=True,
+    )
+    if report.get("warning"):
+        print(f"companion relay warning: {report['warning']}", flush=True)
     httpd = make_server(bind, upstream, persistent_state())
     httpd.serve_forever()
 
@@ -505,6 +766,15 @@ def start_background(
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Hermes companion relay")
+    parser.add_argument("--check", action="store_true", help="print upstream reachability and exit")
+    args, _ = parser.parse_known_args()
+    if args.check:
+        report = check_upstream()
+        print(json.dumps(report, indent=2))
+        raise SystemExit(0 if report["status"] == "reachable" or standalone_enabled() else 2)
     host, port = parse_bind(DEFAULT_BIND)
     print(f"companion relay {host}:{port} -> {DEFAULT_UPSTREAM}", flush=True)
     serve_forever()

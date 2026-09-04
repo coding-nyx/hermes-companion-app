@@ -129,6 +129,11 @@ class CompanionExtensionsTest(unittest.TestCase):
                 data = json.loads(resp.read().decode())
                 self.assertTrue(data["ok"])
                 self.assertIsInstance(data["items"], list)
+
+            with urllib.request.urlopen(f"{base_url}/companion/health", timeout=5) as resp:
+                health = json.loads(resp.read().decode())
+                self.assertEqual(health["relay"], "ok")
+                self.assertIn("upstream", health)
         finally:
             relay.shutdown()
             relay.server_close()

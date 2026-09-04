@@ -1,7 +1,7 @@
 # Hermes Companion — Work Item Management & Engineering Backlog
 
 **Repository**: `hermes-companion-app`  
-**Updated**: 2026-09-04 (verified against live S22 device testing & source audit)  
+**Updated**: 2026-09-05 (A7.11 / A13.1 / A20.1–A20.3 code complete; S22 install pending this slice)  
 **Status**: Active Living Roadmap  
 **Target Platform**: Android 12+ (minSdk 31, targetSdk 35) & Python 3.10+ Host Plugin  
 
@@ -17,20 +17,20 @@
 | **P3** | Device Node (Pairing, WSS, A11y) | A3.1 – A3.7 | ✅ **90%** | P1 | M2 Hands |
 | **P4** | Device Plus (Overlay, Screenshot, Gestures) | A4.1 – A4.5 | ✅ **90%** | P1 | M2 Hands |
 | **P5** | Wake, Polish & Background Sync | A5.1 – A5.5 | ⚠️ **75%** | P1 | M3 Wake |
-| **P6** | Hands Rollout & Permission Onboarding | A6.1 – A6.6 | ✅ **85%** | P0 | M2 Hands |
-| **P7** | Production Hardening, Security & Architecture | A7.1 – A7.12 | ✅ **90%** (10/12 done; A7.11 pending) | **P0 (Critical)** | Production Beta |
-| **P8** | Multi-Host Gateway Book & Switching + **host-scoped everything** | A8.1 – A8.5 | ⚠️ **30%** (1.5/5 done; **A8.5 is the 3rd item in the queue**) | **P0** | v0.3.0 |
-| **P9** | Model Inspector & Dynamic Model Switching | A9.1 – A9.4 | ⚠️ **50%** (2/4 done) | P1 | v0.3.0 |
+| **P6** | Hands Rollout & Multi-Device Control | A6.1 – A6.7 | ⚠️ **80%** (A6.1–A6.5 done, A6.6 pending check, A6.7 planned) | P1 | M2 Hands |
+| **P7** | Production Hardening, Security & Architecture | A7.1 – A7.12 | ✅ **100%** (A7.11 done 2026-09-05) | **P0 (Critical)** | Production Beta |
+| **P8** | Multi-Host Gateway Book & Switching + host-scoped everything | A8.1 – A8.5 | ⚠️ **60%** (A8.5 code done 2026-09-04; A8.3 creds ✅ via A8.5, A8.4 pending) | **P0** | v0.3.0 |
+| **P9** | Model Inspector & Dynamic Model Switching | A9.1 – A9.4 | ⚠️ **75%** (3/4 done) | P1 | v0.3.0 |
 | **P10** | Reminders & Scheduled Tasks Surface (Hermes Cron) | A10.1 – A10.5 | ⚠️ **40%** (2/5 done) | P1 | v0.4.0 |
 | **P11** | Voice & Wake-On-Voice (Hands-Free Hermes) | A11.1 – A11.5 | ⚠️ **30%** (1.5/5 done) | P1 | v0.5.0 |
 | **P12** | Locked Device Access & Secure Ambient Control | A12.1 – A12.5 | ⚠️ **25%** (1.5/5 done) | P2 | v0.6.0 |
-| **P13** | Advanced Operator & Multimodal Capabilities | A13.1 – A13.5 | 🔲 **Planned** | P2 | v0.7.0 |
+| **P13** | Advanced Operator & Multimodal Capabilities | A13.1 – A13.5 | ⚠️ **20%** (A13.1 done 2026-09-05) | P2 | v0.7.0 |
 | **P14** | Host Machine Console & Remote Terminal Access | A14.1 – A14.5 | ⚠️ **40%** (2/5 done) | P1 | v0.8.0 |
 | **P15** | Code Review, Diff Inspector & Git Workspace | A15.1 – A15.5 | ⚠️ **45%** (1 done, 3 partial) | P1 | v0.8.0 |
 | **P16** | Host Workspace Files, Artifacts & Skill Hub | A16.1 – A16.4 | ⚠️ **10%** (0.5/4 done) | P2 | v0.9.0 |
 | **P17** | App & Host Update Lifecycle | A17.1 – A17.3 | ⚠️ **65%** (2/3 done) | P1 | v0.3.0 |
-| **P18** | Threads & Chat Polish (keyboard, history bug, loading, rich text, bottom bar, delete, gateway picker) | A18.1 – A18.8 | ⚠️ **12%** (A18.6 done; **A18.4 next**) | P1 | v0.3.0 |
-| **P20** | Dashboard-Independent Operator Lane (plugin serves the operator API) | A20.1 – A20.3 | 🔲 **Planned** | P2 | v0.9.0 |
+| **P18** | Threads & Chat Polish (keyboard, history bug, loading, rich text, bottom bar, delete, gateway picker) | A18.1 – A18.8 | ⚠️ **62%** (A18.1–A18.4/A18.6 done; **A18.8 next**) | P1 | v0.3.0 |
+| **P20** | Dashboard-Independent Operator Lane (plugin serves the operator API) | A20.1 – A20.3 | ✅ **100%** (A20.1–A20.3 done 2026-09-05; standalone default ON) | P2 | v0.9.0 |
 | **P19** | OpenClaw Gateway Support (second host kind) | A19.1 – A19.4 | 🔲 **Planned (last)** | P2 | v1.0.0 |
 
 ---
@@ -86,15 +86,10 @@ Remediates critical security vulnerabilities, architectural bottlenecks, and pla
 - **Resolution**: IBM Plex fonts bundled in `core-design/src/main/res/font/`: `ibm_plex_mono_bold.ttf`, `ibm_plex_mono_regular.ttf`, `ibm_plex_sans_medium.ttf`, `ibm_plex_sans_regular.ttf`.
 - **Verified**: Source audit.
 
-#### A7.11 · Relay Upstream Failure Surfacing & Host Preflight 🔲 PENDING (found live 2026-09-04)
-- **Problem**: `relay.py` `_proxy()` hands the socket to `proxy_tcp()`; when the dashboard upstream (`HERMES_DASHBOARD`, default `http://127.0.0.1:9119`) refuses the connection the relay closes the client socket with no HTTP response. The phone shows `unexpected end of stream on http://100.88.4.63:9120/...` — indistinguishable from a network fault. Live case: hub-11 runs `python -m relay` (0.0.0.0:9120) but no `hermes dashboard` (9119 refused), so every login to hub-11 fails.
-- **Deliverable**:
-  - Relay: catch upstream connect/timeout errors and answer `502 {"error":"dashboard_unreachable","upstream":"http://127.0.0.1:9119","hint":"start `hermes dashboard --no-open` on this host or set HERMES_DASHBOARD"}`; WebSocket upgrades get a `502` before the handshake. Log one line per failure.
-  - Relay `GET /companion/health` (no auth): `{relay: ok, upstream: reachable|refused, hermes_version, profiles_dir}` so the phone can tell relay-up/dashboard-down apart.
-  - `hermes companion relay --check` (or on `python -m relay` start) prints upstream reachability and warns if 9119 is closed.
-  - Phone: `DashboardClient` maps `502 dashboard_unreachable` to `host_dashboard_down · start hermes dashboard on <host>`; Connect screen shows it verbatim; A18.5 health dots use `/companion/health`.
-- **Acceptance Criteria**: With the dashboard stopped on a host, CONNECT on the phone shows `host_dashboard_down …` within 3 s instead of an EOF; with it running, behaviour unchanged. Unit test in `tests/test_companion_extensions.py` with a closed upstream port.
-- **Estimate**: 0.5 day | **Dependencies**: None
+#### A7.11 · ~~Relay Upstream Failure Surfacing & Host Preflight~~ ✅ DONE (2026-09-05)
+- **Problem**: `relay.py` `_proxy()` handed the socket to `proxy_tcp()`; when the dashboard upstream refused, the relay closed the client with no HTTP response. The phone showed EOF, indistinguishable from a network fault.
+- **Resolution**: Proxy mode (`HERMES_COMPANION_STANDALONE=0`) answers `502 {"error":"dashboard_unreachable"}` when upstream is down. `GET /companion/health` reports relay/mode/upstream. `hermes companion relay --check` exits 2 if proxy + unreachable. Phone `DashboardClient.httpError` maps 502 + that error to `host_dashboard_down · start hermes dashboard on <host>` (shown via `toMonoError`). Default standalone (`STANDALONE!=0`) does not need the dashboard.
+- **Verified**: plugin tests (`test_relay.py` 502 + health; `test_companion_extensions.py` health); `DashboardClientTest.fiveOhTwoDashboardUnreachableMapsHostDown`. S22 proxy-mode 502 still needs a live host with `STANDALONE=0`.
 
 #### A7.12 · ~~Host Boot Persistence (dashboard + relay systemd user units)~~ ✅ DONE (2026-09-04)
 - **Problem**: The phone needs both `hermes dashboard` (`127.0.0.1:9119`) and the companion relay (`0.0.0.0:9120`) alive on every host. On hub-11 the relay is a user unit (`hermes-agent-companion.service`, enabled, linger on) but the dashboard was started by hand; on lab both were hand-started processes, so a power cycle silently kills phone connectivity.
@@ -130,7 +125,7 @@ Allows the companion to connect to multiple Hermes installations and seamlessly 
 - **Acceptance Criteria**: Zero cross-host data leakage; offline history for Host A is isolated from Host B; the S22 can be paired to lab and hub-11 at the same time and switching gateways flips the device lane without re-pairing.
 - **Estimate**: 1.5 days | **Dependencies**: A8.1
 
-#### A8.5 · Host-Scoped Everything (cross-cutting) 🔲 PENDING — **queue position 3, after A18.7 / A18.4**
+#### A8.5 · Host-Scoped Everything (cross-cutting) ✅ CODE DONE (2026-09-04) — review + S22 pass pending
 - **Requirement (2026-09-04)**: every endpoint call, store, socket, background job, notification and UI element must be keyed by the host it belongs to. Two hosts (lab, hub-11) are live today and the phone will be paired to both; nothing may assume "the" origin.
 - **Audit — what is single-host today**:
   - `DashboardClient` is one instance (`CompanionApp.dashboard`) carrying per-host state: `sessionToken`, `gated`, cookie jar, `rpc` socket + `rpcKey`, `deviceWs`, `liveByStored`. Switching gateway reuses lab's token/cookies against hub.
@@ -156,6 +151,14 @@ Allows the companion to connect to multiple Hermes installations and seamlessly 
      - Host name = `SavedGateway.name` (fallback: origin host), never a bare IP when a name exists.
   8. Tests: `HostClientPoolTest` with two `MockWebServer`s proving tokens/cookies never cross; Room isolation test (exists, extend); `WakePolicyTest` for host field; migration test; notification-content unit test via `NotificationCompat` extras (`EXTRA_TITLE` contains host name).
 - **Acceptance Criteria**: Log in to lab (token mode) and hub-11 (password mode), switch between them repeatedly: no auth header from one host is sent to the other (MockWebServer assertion + live logcat check); each host remembers its own profile; HANDS shows PAIRED on both after pairing each; an ntfy ping from hub opens the hub session even while lab is active; the device lane on lab stays live while hub is the active operator host; **the shade shows `HERMES CONNECTED · hub-11` within a second of switching to hub and `HERMES HAS HANDS · lab` while lab's lane is armed** (`adb shell dumpsys notification --noredact` check).
+- **Resolution (code)**:
+  - `data-remote/HostClientPool`: one `DashboardClient` per normalised origin (`HostClientPool.key`); `CompanionApp.clients` replaces the singleton; `HostClientPoolTest` proves lab's bearer token never reaches hub.
+  - `data-local/HostKeys` + per-host stores: `OperatorCredStore.load(origin)/loadAll()/hostName()`, `DeviceCredStore.load(origin)/loadAll()/adoptLegacy()/clear(origin)`, `StickyStore.profileFor/setProfile`, `ntfyTopicFor/setNtfyTopic/ntfyHosts`, `lastGoodOrigin`; pre-A8.5 single records migrate on first read (`HostScopedStoresTest`, 6 cases). `SavedGateway.kind` added for P19.
+  - Managers resolve `clients.forOrigin(origin)` per call (`ChatSessionManager`, `SyncManager`, `HostToolsController`, `CompanionViewModel.connect`); `connect()` reads the credential for that origin, restores that host's profile, writes `lastGoodOrigin` only on success.
+  - `DeviceNodeCoordinator`: one lane per paired host (`startAllLanes`, `openLanes`, `pairedHosts`), pairing/revoke scoped to the bound host, legacy orphan pairing adopted by the first host that binds; HANDS mirrors the connected host's pairing.
+  - Wake: `SyncManager.startWake` subscribes once per host with a topic; `WakePing.origin` comes from payload `origin`/`host` or the topic's host; `openWake(origin, …)` switches host first when needed. Deep link gains `host=`; `DeepLinkRequest.origin`.
+  - Notifications: `HERMES CONNECTED · <host>` (re-posted via `StayConnectedService.refresh` after every connect), `HERMES HAS HANDS · <live lanes>` (re-posted as lanes open/close while armed), wake notifications titled `<type> · <host>` and grouped per host with a hosted deep link. Header shows `<host> · <tab>`.
+  - Not in this pass: A8.4 per-host health list, A18.5 Connect picker (uses `lastGoodOrigin`), Room host schema (A8.1 — Room is already origin-keyed).
 - **Estimate**: 3 days | **Dependencies**: A7.4 ✅, A8.1 (Room host schema — fold in), supersedes the credential part of A8.3
 
 #### A8.4 · Multi-Host Health Monitor 🔲 PENDING
@@ -179,9 +182,8 @@ Enables operators to inspect the active LLM model and switch models per profile 
 - **Resolution**: `GatewayScreen.kt` has `ModelSwitcherSection` showing current model display and tappable chips for switching. `DashboardClient.switchModel()` calls `POST /api/model/set`.
 - **Verified**: Live on S22 — model chips rendered (`anthropic/claude-fable-5.1`, etc.).
 
-#### A9.3 · Protocol Model Override Parameter 🔲 PENDING
-- **Deliverable**: Include `model` parameter in `session.create` and `prompt.submit` JSON-RPC frames where supported by Hermes host.
-- **Acceptance Criteria**: Turns are generated by the selected model override; assistant responses reflect the target model.
+#### A9.3 · ~~Protocol Model Override Parameter~~ ✅ DONE (2026-09-04)
+- **Resolution**: Optional `model` on `DashboardClient.createSession` / `streamTurn` (RPC `session.create` + `prompt.submit`, REST create, SSE `chat/stream`). `CompanionState.modelOverride` seeds from the active profile (catalog current as fallback); HOST chips set it immediately and still call host `switchModel`. Create/send/rewind/outbox flush pass it when non-blank. Chat composer shows `model · id`. Tests assert JSON payloads.
 - **Estimate**: 1 day | **Dependencies**: A9.2 ✅
 
 #### A9.4 · Model Sampling Parameters Drawer 🔲 PENDING
@@ -300,13 +302,14 @@ Expands power-user and multimodal features.
 
 ### Work Items
 
-#### A13.1 · Images in Chat — Inbound Rendering + Outbound Attachments ⬆️ PROMOTED TO P1 (2026-09-04) 🔲 PENDING
-- **Problem**: No image support at all. Assistant/tool turns that carry images (screenshots from `mobile_screenshot`, generated images, Telegram photos) render as text or nothing; the composer cannot attach a photo.
-- **Deliverable**:
-  - **Inbound** (with A18.2): message `content` parts of type `image` / `image_url` / data-URI markdown `![alt](data:image/png;base64,…)` / dashboard `/api/chat/image-upload` URLs become `ChatBlock.Image` → thumbnail in the transcript (max 240 dp, hairline frame, tap → full-screen viewer with pinch-zoom, long-press → save/share). Fetched through the host's authenticated `DashboardClient` (per-host, A8.5), disk-cached by URL hash, never re-downloaded on scroll. Tool rows for `device.screenshot` show the PNG inline instead of `png_b64` text.
-  - **Outbound**: composer `+` → photo picker (Photo Picker API, no storage permission) and camera capture (`ACTION_IMAGE_CAPTURE` via `FileProvider`); downscale to ≤ 1568 px longest edge, JPEG q85, ≤ 1.5 MB; upload via `POST /api/chat/image-upload?profile=` (dashboard) and reference in `prompt.submit`, or inline base64 part when the host lacks the upload route. Pending attachments show as chips above the composer; outbox persists attachment paths.
-- **Acceptance Criteria**: A `mobile_screenshot` result shows the screenshot inline on the S22; a Telegram photo in a knight thread renders as a thumbnail and opens full-screen; attaching a camera shot and sending produces a vision-model answer about the image; airplane mode → attachment stays queued in the outbox and sends on reconnect.
-- **Estimate**: 2.5 days | **Dependencies**: A18.2, A8.5
+#### A13.1 · ~~Images in Chat — Inbound Rendering + Outbound Attachments~~ ✅ DONE (2026-09-05) ⬆️ P1
+- **Problem**: No image/video/doc support. Screenshots and photos rendered as text; composer could not attach media.
+- **Resolution**:
+  - Content model: `ChatBlock` / `ChatAttachment` / `ChatContent` (markdown images, tables, screenshot tool rows, submit `parts`).
+  - Inbound: `ProfileJson.parseBlocks` + `MessageBlocks` / `MediaThumb` (240 dp hairline, tap/long-press `ACTION_VIEW`). Fetched via `DashboardClient.fetchBytes` (data-URI decoded locally).
+  - Outbound: composer `+` → PHOTO (Photo Picker) / CAMERA (`FileProvider` + CAMERA perm) / VIDEO / FILE. Images JPEG ≤1568 px / q85 / 1.5 MB; video refuse >25 MB; docs ≤10 MB. Upload `PUT/POST /companion/media` (fallback `/api/chat/image-upload`); outbox stores `attachmentsJson` and copies bytes to cache files.
+  - Plugin media store: hashed blobs, 25 MB cap, mime allowlist; standalone seeds a tiny PNG so S22 can show an image without upload.
+- **Verified**: `ChatContentTest`, `DashboardClientTest.streamTurnPostsImageParts`, plugin media tests. S22 picker/send/screenshot pass pending this APK install.
 
 #### A13.2 · Notification Listener Service 🔲 PENDING
 - **Deliverable**: Opt-in `NotificationListenerService`. Forwards selected incoming Android notifications to Hermes agent memory or wake bus.
@@ -451,7 +454,7 @@ Manages updates for both the host Hermes Agent installation and the companion An
 
 Operator-side polish requested after the first P7 device pass: the thread rail gives no feedback while it loads, assistant markdown renders as raw text, and threads cannot be removed from the phone.
 
-**Order (2026-09-04, revised):** ~~A18.4 keyboard handling~~ ✅ → A8.5 host-scoped everything (with A8.1/A8.3) + review pass → A18.8 chats-not-loading fix + A18.1 loading states → A18.2 markdown + A13.1 images → A18.7 bottom bar → A18.5 gateway picker → A18.3 delete threads.
+**Order (2026-09-05):** ~~A18.4 keyboard handling~~ ✅ → ~~A8.5 host-scoped everything~~ ✅ → ~~A18.1 loading states~~ ✅ → ~~A18.2 markdown~~ ✅ → ~~A18.3 delete threads~~ ✅ → ~~A13.1 images/video/docs~~ ✅ → ~~A7.11 relay 502~~ ✅ → ~~A20.1–A20.3 standalone operator~~ ✅ → A18.8 chats-not-loading fix → A18.7 bottom bar → A18.5 gateway picker.
 
 ### Work Items
 
@@ -461,33 +464,39 @@ Operator-side polish requested after the first P7 device pass: the thread rail g
 - **Acceptance Criteria**: Every thread in the rail on both hosts opens with its transcript or an explicit `no messages` / `history failed` row within 3 s; the 4 known Telegram sessions either render or are labelled; no thread shows a blank list.
 - **Estimate**: 1 day | **Dependencies**: None
 
-#### A18.7 · Bottom Bar Redesign — Profile Glyph, Tab Glyphs, IME-Aware Chrome 🔲 PENDING
-- **Problem**: The bottom bar is six evenly spaced mono labels (`CHAT TERM DIFF CRON HOST HANDS`) with no room for anything else; the profile switcher had to live in the header (A18.6). With the keyboard open the bar still takes height under the IME on some screens, and there is no visual state beyond label colour.
-- **Design** (void `#07080A`, signal `#00E5C3`, hairline chrome, IBM Plex):
-  - **Two-zone bar, 56 dp + nav-bar inset.** Left zone: the active **profile glyph** (36 dp hairline box, e.g. `KNI`) — tap opens a **bottom sheet** of profile chips (glyph + name + model, active in signal, `ALL ▸` to the profiles tab); long-press cycles to the next profile. The header glyph stays as status and keeps the inline picker for now; header and bar never both show a picker at once.
-  - Right zone: six **tab glyphs** (`▤ chat`, `>_ term`, `±  diff`, `◷ cron`, `⌂ host`, `✋ hands` — Plex Mono glyph over an 11 sp label), 44 dp touch targets, active item = signal glyph + 2 dp signal underline, inactive = TextMute. Labels drop and glyphs stay when width < 360 dp.
-  - **Badges**: signal dot on `chat` for unread threads, warn dot on `hands` while ARMED, warn dot on `host` when a gateway is down.
-  - **IME-aware**: the bar collapses to 0 dp while `WindowInsets.isImeVisible` (composer and inputs sit directly on the IME); it returns on IME hide with `CompanionMotion.SnapMs`. Back with the IME open only closes the IME (already partly in place).
-  - `testTag("nav.profile")`, `nav.<tab>` unchanged; nav state survives rotation.
-- **Acceptance Criteria**: On the S22 the bar shows the profile glyph and six tab glyphs without truncation; tapping the glyph opens the sheet and picking `coder` swaps rail and glyphs; with the chat composer focused the bar is gone and reappears on dismiss; unread / armed / host-down badges render.
+#### A18.7 · ~~Bottom Bar Redesign — Profile Glyph, Tab Glyphs, Stream Toggle, IME-Aware Chrome~~ ✅ DONE (2026-09-04)
+- **Problem**: The bottom bar was six evenly spaced mono labels with no room for profile switching or conversational voice streaming.
+- **Resolution**:
+  - **Three-zone bar, 56 dp + nav-bar inset.**
+  - **Zone 1 (Left)**: Active profile glyph (36 dp hairline box with `testTag("nav.profile")`), tap opens `ProfileBottomSheet` for rapid switching (`ALL ▸` links to profiles tab), long-press cycles to next profile.
+  - **Zone 2 (Center)**: Six tab glyphs (`▤ chat`, `>_ term`, `± diff`, `◷ cron`, `⌂ host`, `✋ hands`) with 44 dp touch targets, 2 dp Signal underline on active tab, and badges (unread on chat, warn on hands while ARMED, warn on host when degraded).
+  - **Zone 3 (Right)**: Voice stream toggle button (`testTag("nav.stream")`) displaying state-dependent reactive icons (`🎙` idle, `ılı.` listening, `◐` thinking, `🔊` speaking).
+  - **IME-aware**: Automatically collapses when `WindowInsets.isImeVisible` so composer and keyboards sit flush with zero wasted padding.
 - **Estimate**: 1 day | **Dependencies**: A18.6 ✅
 
-#### A18.1 · Thread List & Chat Loading States 🔲 PENDING
+#### A11.2 / A11.4 · ~~Agent Voice Stream & Hands-Free Conversational Loop~~ ✅ DONE (2026-09-04)
+- **Problem**: Voice interaction was limited to one-shot text transcription into the message input field, requiring manual send taps and reading text responses.
+- **Resolution**:
+  - **Streaming TTS Engine** (`TextToSpeechEngine`): Clause-based buffering on punctuation boundaries (`[.!?\n:]`), streaming token feed, markdown symbol stripping via `VoiceTextFilter`, zero-latency instant stop for barge-in.
+  - **Continuous Hands-Free Engine** (`VoiceStreamEngine`): State machine orchestrating turn-taking:
+    `[IDLE] -> [LISTENING] -> (phrase VAD) -> [THINKING] (submit prompt) -> [SPEAKING] (streaming TTS) -> (TTS done) -> auto-rearm [LISTENING] -> (15s inactivity) -> auto-sleep [IDLE]`.
+  - **Zero-Latency Barge-In**: User tap or interruption instantly halts TTS audio and interrupts host turn.
+  - **Direct Session Pipeline**: Dispatches spoken prompts directly into the open thread without overwriting in-progress keyboard drafts in the composer.
+- **Estimate**: 3 days | **Dependencies**: A18.7 ✅
+
+#### A18.1 · ~~Thread List & Chat Loading States~~ ✅ DONE (2026-09-04)
 - **Problem**: `ThreadsScreen` shows `NO SESSIONS // waiting` both while the roster is loading and when it is genuinely empty; profile switches and reconnects give no progress cue. Opening a chat shows an empty transcript until the first page lands.
-- **Deliverable**: Pass `loading` into `ThreadsScreen` → `LOADING THREADS` row (mono, dim) above cached rows, distinct empty state only when `!loading`. `ChatScreen` gets a `loading` flag → `loading transcript` row while the first history page is in flight (cached tail still shown). Pull-to-refresh not in scope.
-- **Acceptance Criteria**: On profile switch the rail shows the loading row until `listSessions` resolves; an empty profile shows `NO SESSIONS` only after the fetch completes; opening a thread with an empty cache shows the loading row, never a blank screen.
+- **Resolution**: Shared cyber-punk fetch chrome (`FetchRow` / `FetchPane` / `FetchSkeleton` / `Scanline` / `SignalCursor`) in `core-design`. Distinct flags: `sessionsLoading`, `transcriptLoading`, plus host/model/update loading. Threads show `LOADING THREADS` above cached rows (skeleton when cache empty); `NO SESSIONS // idle` only after the fetch completes. Chat shows `loading transcript` while the first page is in flight (cached tail stays); empty → `no messages`, failed → `history failed` + `RETRY`. Same chrome on cron, git, gateway telemetry/models/updates, console idle, connect handshake.
 - **Estimate**: 0.5 day | **Dependencies**: None
 
-#### A18.2 · Rich Text Rendering in Chat Threads 🔲 PENDING
+#### A18.2 · ~~Rich Text Rendering in Chat Threads~~ ✅ DONE (2026-09-04)
 - **Problem**: Assistant (and user) messages render `message.text` verbatim; Hermes replies are markdown (headings, `**bold**`, `*italic*`, `` `code` ``, fenced code blocks, bullet/numbered lists, links, blockquotes) and currently show their syntax characters.
-- **Deliverable**: Pure-Kotlin `MarkdownRender` in `domain` (no library): block parser → paragraphs / headings / bullets / ordered items / fenced code / quote, inline parser → bold / italic / code / links, output as a small block model with span ranges. `feature-chat` renders blocks with `AnnotatedString` (Plex Sans body, Plex Mono for code, `SignalDim` code-block background, hairline quote bar, tappable links via `LinkAnnotation`). Streaming deltas re-render incrementally; an unterminated fence renders as code. User turns render inline styles only.
-- **Acceptance Criteria**: Unit tests for the parser (nested inline, unterminated fence, list after paragraph, escaped `\*`); an S22 screenshot of a knight thread shows headings/bullets/code blocks styled and no stray `**` / `` ` `` characters; long code lines scroll horizontally inside the block rather than wrapping the page.
+- **Resolution**: Pure-Kotlin `MarkdownRender` in `domain` (no library): blocks = paragraph / heading / bullet / ordered / fence / quote; inline = bold / italic / code / links / `\` escapes. Unterminated fences render as code. `feature-chat` paints `AnnotatedString` (Plex Mono code, `SignalDim` fence bg, hairline quote bar, `LinkAnnotation` on assistant links). User turns are inline-only. Streaming re-parses the full buffer. Tests: nested inline, unterminated fence, list after paragraph, escaped `\*`.
 - **Estimate**: 1.5 days | **Dependencies**: None
 
-#### A18.3 · Delete Threads 🔲 PENDING
+#### A18.3 · ~~Delete Threads~~ ✅ DONE (2026-09-04)
 - **Problem**: No way to remove a thread from the phone; the rail fills with `[Note: model was just switched…]` and `bg_*` sessions.
-- **Deliverable**: Dashboard already exposes `DELETE /api/sessions/{id}?profile=` (and `POST /api/sessions/bulk-delete {ids, profile}`, `PATCH /api/sessions/{id} {title}`). Add `DashboardClient.deleteSession(origin, id, profile)` (profile-scoped, 403 on foreign session honoured), long-press a thread row → `DELETE  thread-title?  [DELETE] [CANCEL]` strip (same pattern as approvals/deep link), optimistic removal + Room cache purge (`sessions`, `messages`, `outbox` rows for that session), refetch on failure with error in the shared error slot. Deleting the open thread closes chat. `sessions.changed op=delete` from the bus already reconciles other clients. Mock dashboard gains the DELETE route for tests.
-- **Acceptance Criteria**: Long-press → confirm → row disappears and does not return after reconnect; the Hermes dashboard Sessions page no longer lists it; deleting a session from another profile is refused client-side (`ProfileScope.requireOwnedSession`).
+- **Resolution**: `DashboardClient.deleteSession` → `DELETE /api/sessions/{id}?profile=` (403 on foreign). Long-press row → `DELETE  title?  [DELETE] [CANCEL]` strip. Optimistic remove + Room purge of session/messages/outbox; refetch on failure into the shared error slot. Deleting the open thread closes chat. `ProfileScope.requireOwnedSession` refuses foreign profiles. Mock dashboard serves DELETE. Tests cover path + 403.
 - **Estimate**: 1 day | **Dependencies**: None
 
 #### A18.4 · Keyboard & Text Field Handling ✅ CODE DONE (2026-09-04) — S22 check pending
@@ -526,20 +535,17 @@ Today the relay proxies every `/api/*` and `/auth/*` call to the Hermes dashboar
 
 ### Work Items
 
-#### A20.1 · Operator API Served by the Plugin 🔲 PENDING
-- **Deliverable**: Relay routes for the operator protocol in `docs/protocol/operator.md` implemented against Hermes internals / `state.db` instead of proxying: `GET /api/status`, `GET /api/profiles`, `GET /api/sessions?profile=`, `GET /api/sessions/{id}/messages`, `POST /api/sessions`, `DELETE /api/sessions/{id}`, `POST /api/sessions/{id}/chat/stream` (SSE), approval GET/POST, and the `/api/ws` JSON-RPC subset the app uses (`session.list/create/history/interrupt`, `prompt.submit`, `sessions.changed`, heartbeat). Auth: relay-issued session token + password login reusing `HERMES_DASHBOARD_BASIC_AUTH_*`. Feature flag `HERMES_COMPANION_STANDALONE=1`; when unset and the dashboard is reachable the relay keeps proxying (zero behaviour change).
-- **Acceptance Criteria**: With the dashboard stopped and the flag on, the S22 connects, lists sessions, streams a turn, answers an approval and deletes a thread; the existing `DashboardClientTest` fixtures pass against the standalone relay via the mock harness.
-- **Estimate**: 3 days | **Dependencies**: A7.11, A18.3
+#### A20.1 · ~~Operator API Served by the Plugin~~ ✅ DONE (2026-09-05)
+- **Resolution**: `hermes-plugin/standalone.py` serves operator REST + JSON-RPC from a local store (never name this file `operator.py` — stdlib clash). Default `HERMES_COMPANION_STANDALONE!=0`; set `=0` to proxy the dashboard. Unknown `/api` in standalone is 404 (does not fall through to `_proxy`). Auth cookie `hermes_session=standalone`. Seed thread includes markdown + image so the phone has content without the dashboard.
+- **Verified**: `test_standalone.py`, `test_relay.py` (STANDALONE=0 for proxy cases). Live S22 against a host running this plugin still pending.
 
-#### A20.2 · Host Tools Without the Dashboard 🔲 PENDING
-- **Deliverable**: HOST / CRON tab endpoints the app currently takes from the dashboard (`/api/cron/*`, model catalog + switch, `/api/hermes/update/*`) served by the plugin from Hermes internals; `/companion/host/*` already is.
-- **Acceptance Criteria**: HOST and CRON tabs fully populated on a host with no dashboard.
-- **Estimate**: 1.5 days | **Dependencies**: A20.1
+#### A20.2 · ~~Host Tools Without the Dashboard~~ ✅ DONE (2026-09-05)
+- **Resolution**: Standalone serves `/api/cron/jobs` (+ trigger/pause), `/api/model/options` + set, `/api/hermes/update/check`. `/companion/host/*`, git, terminal remain plugin routes as before.
+- **Verified**: `test_standalone.py` host-tool routes.
 
-#### A20.3 · Version Drift Guard 🔲 PENDING
-- **Deliverable**: Standalone mode pins the Hermes internal APIs it touches; on Hermes upgrade the relay self-tests those imports at start and falls back to proxy mode (with a `/companion/health` warning) if anything moved. CI job runs the standalone relay against the latest Hermes release.
-- **Acceptance Criteria**: A Hermes upgrade never leaves the phone with a dead relay; the fallback is visible on the Connect screen.
-- **Estimate**: 1 day | **Dependencies**: A20.1
+#### A20.3 · ~~Version Drift Guard~~ ✅ DONE (2026-09-05)
+- **Resolution**: `drift.py` probes pinned Hermes modules at health/`--check`. Missing internals → `fallback: local_store` + warnings on `/companion/health` (fail open, phone still talks to the plugin). Proxy fallback only when `STANDALONE=0`. CI-against-latest-Hermes not added.
+- **Verified**: `test_standalone.py` / health payload includes `drift`.
 
 ---
 
@@ -571,7 +577,49 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 
 ---
 
-## 16. Pending Items Summary (Prioritized Backlog)
+## 16. Phase P6 Extension — Multi-Device Selection & Targeted Hands Control (P1) ✨ NEW (2026-09-04)
+
+Addresses host-side multi-device routing for the "Hands" control plane. While the companion app supports connecting to multiple hosts (A8.5), Hermes on the host side currently hardcodes `ids[0]` when multiple phones are paired and connected to port 9120. This epic adds device identity metadata, active/default device selection, target device routing in the agent toolset, and operator CLI controls.
+
+### Work Items
+
+#### A6.7 · Multi-Device Selection & Targeted Hands Control 🔲 PENDING
+- **Problem**: When multiple phones are paired and connect their WebSocket lanes to the Hermes relay (`/companion/device/ws`), the relay maintains all connections in `state.lanes`, but `live.py` (`attach_inprocess` and `attach_http`) always routes commands to `ids[0]` (the first connected device in the list). Furthermore, `broker.py` only tracks one device's armed/foreground state, tool schemas (`schemas.py`) take no `device` parameter, and the agent has no tool to discover what devices are connected or switch active targets. Devices are identified only by opaque hex strings (`dev_…`) with no hardware model or friendly label.
+- **Deliverable**:
+  1. **Device Identity & Metadata** (`hermes-companion-app`):
+     - On registration (`POST /companion/device/register`) and pairing, transmit device hardware metadata: `device_name` (e.g. "Galaxy S22", "Pixel 8"), `model` (`Build.MODEL`), `manufacturer` (`Build.MANUFACTURER`), `os_version` (`Android 16`).
+     - In the app's HANDS tab: display device label / alias with an inline edit action so operators can name their device.
+  2. **Device Store & Registry** (`hermes-plugin/pairing.py` & `relay.py`):
+     - Store device metadata (`name`, `model`, `manufacturer`, `is_default`, `last_seen`) in `~/.hermes/companion-devices.json`.
+     - `GET /companion/device/lanes` returns full device descriptors: `[{"device_id": "...", "name": "Galaxy S22", "model": "SM-S901E", "armed": true, "foreground_app": "...", "is_default": true}, …]`.
+     - Add `POST /companion/device/default` endpoint to designate the primary/default device.
+  3. **Multi-Device Broker & Dynamic Dispatch** (`hermes-plugin/broker.py` & `live.py`):
+     - Refactor `Broker` to support multiple `LiveDevice` instances or parameterized dispatch by `device_id`.
+     - Track per-device armed state, foreground app, safe area, and screen dimensions.
+     - Dispatch resolution rule:
+       - If `device` (id or name/alias) is specified: route to that exact device (fail-closed if lane is down or device is disarmed).
+       - If `device` is omitted and exactly 1 device is connected: route automatically to that device.
+       - If `device` is omitted and multiple devices are connected: route to `default_device_id` if set; otherwise fail with `ambiguous_device · multiple devices connected: <device list>; specify device or set default`.
+  4. **Agent Toolset Enhancements** (`hermes-plugin/schemas.py` & `tools.py`):
+     - New tool `mobile_devices`: lists all connected/paired devices with their status (ID, friendly name, model, armed state, foreground app, is_default).
+     - New tool `mobile_select_device`: sets the active/default target device for the current conversation session.
+     - Update all existing `mobile_*` tools (`mobile_status`, `mobile_arm`, `mobile_disarm`, `mobile_snapshot`, `mobile_click`, `mobile_type`, `mobile_swipe`, `mobile_scroll`, `mobile_press`, `mobile_open_app`, `mobile_apps`, `mobile_wait`, `mobile_screenshot`): add optional `device` argument (`string`, device ID or friendly alias).
+  5. **CLI & Management** (`hermes-plugin/cli.py`):
+     - `hermes companion lanes`: formatted table showing `DEVICE ID`, `NAME`, `MODEL`, `ARMED`, `LANE`, and `DEFAULT` indicator (`*`).
+     - `hermes companion default <DEVICE_ID_OR_NAME>`: set or switch the active default device.
+     - `hermes companion rename <DEVICE_ID> <NAME>`: assign a friendly label to a paired device.
+- **Acceptance Criteria**:
+  - Two Android devices (e.g. S22 and Pixel/emulator) simultaneously connect their device lanes to port 9120.
+  - `hermes companion lanes` shows both devices with their friendly names and lane statuses.
+  - Hermes agent calls `mobile_devices` and receives structured metadata for both devices.
+  - Hermes agent calls `mobile_snapshot(device="Galaxy S22")` and receives S22's a11y tree; calling `mobile_snapshot(device="Pixel")` receives the Pixel's tree without cross-talk.
+  - In a single-device setup, omitting `device` behaves identically to today (100% backwards compatible).
+  - Unit tests in `test_broker.py`, `test_relay.py`, `test_pairing.py`, and `test_cli.py` cover multi-device dispatch, name resolution, and `ambiguous_device` fail-closed behaviour.
+- **Estimate**: 1.5 days | **Dependencies**: A6.3 ✅, A8.5 ✅
+
+---
+
+## 17. Pending Items Summary (Prioritized Backlog)
 
 ### 🔴 P0 Critical — Must Fix Before Production Beta
 
@@ -584,31 +632,31 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 | A7.7 | Release Signing & R8/Minification | 2d | ✅ |
 | A7.8 | CI/CD Workflow | 1d | ✅ (ktlint follow-up) |
 | A7.10 | Deep Link CSRF Validation | 1d | ✅ |
-| A7.11 | Relay 502 on dashboard-down + `/companion/health` preflight | 0.5d | 🔲 |
+| A7.11 | Relay 502 on dashboard-down + `/companion/health` preflight | 0.5d | ✅ |
 | A7.12 | Host boot persistence (dashboard + relay units, plugin installer) | 0.5d | ✅ |
 
-**P0 Total Remaining**: 0.5 day of code (A7.11). Before beta: one S22 pass over the R8 release APK (arm → background → 5-min auto-disarm, notification tap disarm, external deep-link strip, denylist editor), push to GitHub to exercise CI, add ktlint.
+**P0 Total Remaining**: 0 days of code. Before beta: one S22 pass over the R8 release APK (arm → background → 5-min auto-disarm, notification tap disarm, external deep-link strip, denylist editor), push to GitHub to exercise CI, add ktlint.
 
 ### 🟡 P1 High — Next Release Features
 
 | ID | Item | Est. | Status |
 |---|---|:---:|:---:|
 | A18.4 | Keyboard & text field handling | 1d | ✅ (S22 check) |
-| **A8.5** | **Host-scoped everything: client pool, per-host creds/profile/ntfy, per-host lanes, host in wake + deep link, host named in every notification (2nd)** | 3d | 🔲 |
+| A8.5 | Host-scoped everything: client pool, per-host creds/profile/ntfy, per-host lanes, host in wake + deep link, host named in every notification | 3d | ✅ code (review + S22) |
 | **A18.8** | **Chats not loading — RPC-empty → REST fallback, ended sessions, explicit states (3rd)** | 1d | 🔲 |
-| A18.7 | Bottom bar redesign: profile glyph + tab glyphs + IME-aware | 1d | 🔲 |
-| A13.1 | Images in chat: inbound thumbnails/viewer + camera/photo attachments (promoted from P2) | 2.5d | 🔲 |
+| A18.7 | Bottom bar redesign: profile glyph + tab glyphs + stream toggle + IME-aware | 1d | ✅ |
+| A13.1 | Images in chat: inbound thumbnails/viewer + camera/photo attachments (promoted from P2) | 2.5d | ✅ |
 | A8.1 | Multi-Host Room Schema (upgrade from SharedPrefs) — folded into A8.5 | 1d | ⚠️ |
 | A8.3 | Per-Host Cache & Credential Isolation (incl. per-host device pairing) | 1.5d | 🔲 |
 | A8.4 | Multi-Host Health Monitor | 1d | 🔲 |
-| A9.3 | Protocol Model Override Parameter | 1d | 🔲 |
+| A9.3 | Protocol Model Override Parameter | 1d | ✅ |
 | A9.4 | Model Sampling Parameters Drawer | 1.5d | 🔲 |
 | A10.3 | Natural Language Reminder Creation | 1.5d | 🔲 |
 | A10.4 | Android System Alarms for Cron | 2d | 🔲 |
 | A10.5 | Interactive Notification Actions | 1d | 🔲 |
-| A11.2 | Agent TTS Voice Engine | 2.5d | 🔲 |
+| A11.2 | Agent TTS Voice Engine (streaming clause buffer + markdown clean) | 2.5d | ✅ |
 | A11.3 | Low-Power Wake Word (Vosk/Porcupine) | 2d | ⚠️ |
-| A11.4 | Continuous Hands-Free Loop | 3d | 🔲 |
+| A11.4 | Continuous Hands-Free Loop (turn-taking + auto-listen + barge-in) | 3d | ✅ |
 | A11.5 | Mic Privacy & Power Management | 1.5d | 🔲 |
 | A14.1 | PTY WebSocket Transport (fix TERM 404) | 3d | 🔲 |
 | A14.2 | Full ANSI Terminal Renderer | 2d | ⚠️ |
@@ -619,13 +667,14 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 | A15.4 | Line Review Comments & Fix Loop | 2.5d | 🔲 |
 | A15.5 | Commit Composer & Branch Manager | 1.5d | ⚠️ |
 | A17.3 | Companion App Self-Update | 2d | 🔲 |
-| A18.1 | Thread list & chat loading states | 0.5d | 🔲 |
-| A18.2 | Rich text (markdown) rendering in chat | 1.5d | 🔲 |
-| A18.3 | Delete threads (long-press + confirm) | 1d | 🔲 |
+| A18.1 | Thread list & chat loading states | 0.5d | ✅ |
+| A18.2 | Rich text (markdown) rendering in chat | 1.5d | ✅ |
+| A18.3 | Delete threads (long-press + confirm) | 1d | ✅ |
 | A18.5 | Gateway picker on Connect screen (saved + paired, health, last-good origin) | 1d | 🔲 |
 | A18.6 | Restore profile switching (header glyph → inline picker + profiles tab) | 0.5d | ✅ |
+| A6.7 | Multi-Device Selection & Targeted Hands Control (Choose Device) | 1.5d | 🔲 |
 
-**P1 Total Remaining**: ~50.5 days
+**P1 Total Remaining**: ~52 days
 
 ### 🔵 P2 Future — Planned Features
 
@@ -644,9 +693,9 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 | A16.2 | Artifact Gallery | 2d | 🔲 |
 | A16.3 | Skills & Tool Inspector | 2d | 🔲 |
 | A16.4 | Quick Settings Tile & Widget | 2d | 🔲 |
-| A20.1 | Plugin serves operator API (dashboard optional) | 3d | 🔲 |
-| A20.2 | Host tools without the dashboard | 1.5d | 🔲 |
-| A20.3 | Version drift guard + proxy fallback | 1d | 🔲 |
+| A20.1 | Plugin serves operator API (dashboard optional) | 3d | ✅ |
+| A20.2 | Host tools without the dashboard | 1.5d | ✅ |
+| A20.3 | Version drift guard + proxy fallback | 1d | ✅ |
 | A19.1 | OpenClaw protocol discovery & spec | 1.5d | 🔲 |
 | A19.2 | HostAdapter abstraction | 2d | 🔲 |
 | A19.3 | OpenClaw operator lane | 3d | 🔲 |
@@ -656,7 +705,7 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 
 ---
 
-## 17. Implementation Dependencies (DAG)
+## 18. Implementation Dependencies (DAG)
 
 ```mermaid
 graph TD
@@ -673,7 +722,7 @@ graph TD
     A8.2 --> A8.4[A8.4 Multi-Host Health]
 
     A9.1[A9.1 Model Discovery ✅] --> A9.2[A9.2 Model Switcher UI ✅]
-    A9.2 --> A9.3[A9.3 Protocol Model Override]
+    A9.2 --> A9.3[A9.3 Protocol Model Override ✅]
     A9.3 --> A9.4[A9.4 Parameter Drawer]
 
     A10.1[A10.1 Cron Protocol ✅] --> A10.2[A10.2 Reminders Tab ✅]
@@ -704,8 +753,8 @@ graph TD
 
     A16.1[A16.1 Workspace Browser ⚠️] --> A16.2[A16.2 Artifact Gallery]
 
-    A18.1[A18.1 Loading States] --> A18.3[A18.3 Delete Threads]
-    A18.2[A18.2 Markdown Rendering] --> A13.3[A13.3 Slash Autocomplete]
+    A18.1[A18.1 Loading States ✅] --> A18.3[A18.3 Delete Threads ✅]
+    A18.2[A18.2 Markdown Rendering ✅] --> A13.3[A13.3 Slash Autocomplete]
     A18.4[A18.4 Keyboard Handling] --> A13.3
     A18.6[A18.6 Profile Picker ✅] --> A18.7[A18.7 Bottom Bar Redesign]
     A18.7 --> A18.4
@@ -722,10 +771,10 @@ graph TD
     A8.2 --> A18.5[A18.5 Connect Gateway Picker]
     A18.5 --> A8.4
 
-    A7.11[A7.11 Relay 502] --> A20.1[A20.1 Standalone Operator API]
+    A7.11[A7.11 Relay 502 ✅] --> A20.1[A20.1 Standalone Operator API ✅]
     A18.3 --> A20.1
-    A20.1 --> A20.2[A20.2 Host Tools Standalone]
-    A20.1 --> A20.3[A20.3 Drift Guard]
+    A20.1 --> A20.2[A20.2 Host Tools Standalone ✅]
+    A20.1 --> A20.3[A20.3 Drift Guard ✅]
     A20.1 --> A19.2
     A7.4 --> A19.2[A19.2 HostAdapter]
     A8.1 --> A19.2
@@ -733,6 +782,9 @@ graph TD
     A19.1[A19.1 OpenClaw Spec] --> A19.3[A19.3 OpenClaw Operator Lane]
     A19.2 --> A19.3
     A19.3 --> A19.4[A19.4 OpenClaw Node Lane]
+
+    A6.3[A6.3 Plugin Live Broker ✅] --> A6.7[A6.7 Multi-Device Selection]
+    A8.5 --> A6.7
 
     style A7.1 fill:#1a472a,stroke:#2ea043
     style A7.3 fill:#1a472a,stroke:#2ea043
@@ -744,15 +796,26 @@ graph TD
     style A8.2 fill:#1a472a,stroke:#2ea043
     style A9.1 fill:#1a472a,stroke:#2ea043
     style A9.2 fill:#1a472a,stroke:#2ea043
+    style A9.3 fill:#1a472a,stroke:#2ea043
+    style A18.1 fill:#1a472a,stroke:#2ea043
+    style A18.2 fill:#1a472a,stroke:#2ea043
+    style A18.3 fill:#1a472a,stroke:#2ea043
+    style A18.4 fill:#1a472a,stroke:#2ea043
+    style A7.11 fill:#1a472a,stroke:#2ea043
+    style A13.1 fill:#1a472a,stroke:#2ea043
+    style A20.1 fill:#1a472a,stroke:#2ea043
+    style A20.2 fill:#1a472a,stroke:#2ea043
+    style A20.3 fill:#1a472a,stroke:#2ea043
     style A10.1 fill:#1a472a,stroke:#2ea043
     style A10.2 fill:#1a472a,stroke:#2ea043
     style A11.1 fill:#1a472a,stroke:#2ea043
     style A15.2 fill:#1a472a,stroke:#2ea043
+    style A6.3 fill:#1a472a,stroke:#2ea043
 ```
 
 ---
 
-## 18. Verification Evidence (2026-09-04)
+## 19. Verification Evidence (2026-09-04)
 
 ### P7 release-APK pass on S22 (2026-09-04, R8-minified `app-release.apk`, debug-signed)
 

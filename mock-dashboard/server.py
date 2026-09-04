@@ -301,6 +301,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": "profile_required"}, 400)
             sid = f"sess-{profile}-{int(time.time() * 1000)}"
             row = {"id": sid, "profile": profile, "title": body.get("title") or "new thread", "unread": False}
+            if body.get("model"):
+                row["model"] = body.get("model")
             with LOCK:
                 SESSIONS.insert(0, row)
                 MESSAGES[sid] = []
@@ -320,6 +322,29 @@ class Handler(BaseHTTPRequestHandler):
             return self._pair_approve(code)
         if path == "/companion/device/revoke":
             return self._pair_revoke(str(body.get("device_id") or ""))
+        return self._json({"error": "not_found", "path": path}, 404)
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+        path = parsed.path
+        profile = (qs.get("profile") or [None])[0]
+        if path.startswith("/api/sessions/"):
+            parts = [p for p in path.split("/") if p]
+            if len(parts) == 3 and parts[0] == "api" and parts[1] == "sessions":
+                sid = parts[2]
+                sess = _session(sid)
+                if sess is None:
+                    return self._json({"error": "unknown_session"}, 404)
+                if not profile:
+                    return self._json({"error": "profile_required"}, 400)
+                if sess["profile"] != profile:
+                    return self._json({"error": "profile_mismatch"}, 403)
+                with LOCK:
+                    SESSIONS[:] = [s for s in SESSIONS if s["id"] != sid]
+                    MESSAGES.pop(sid, None)
+                    PENDING.pop(sid, None)
+                return self._json({"ok": True})
         return self._json({"error": "not_found", "path": path}, 404)
 
     def _get_approval(self, sid, profile):

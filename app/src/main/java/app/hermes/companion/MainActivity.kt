@@ -7,18 +7,24 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.view.WindowManager
 import app.hermes.companion.domain.WakePolicy
+import app.hermes.companion.model.ChatBlock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -77,18 +83,14 @@ class MainActivity : ComponentActivity() {
                     vm.setNotifyGranted(granted || notifyAllowed())
                 }
 
+                var pendingAudioAction by remember { mutableStateOf<(() -> Unit)?>(null) }
                 val audioLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission(),
                 ) { granted ->
                     if (granted) {
-                        vm.setVoiceListening(true)
-                        voiceManager.startListening(
-                            onPartial = { vm.onDraftChange(it) },
-                            onResult = { vm.onVoiceTranscript(it) },
-                            onError = { vm.setVoiceListening(false) },
-                            onStateChange = { vm.setVoiceListening(it) },
-                        )
+                        pendingAudioAction?.invoke()
                     }
+                    pendingAudioAction = null
                 }
 
                 val lifecycleOwner = LocalLifecycleOwner.current
@@ -128,9 +130,9 @@ class MainActivity : ComponentActivity() {
                 }
 
                 LaunchedEffect(reconnect, intent.dataString, intent.action) {
-                    WakePolicy.parseDeepLink(intent.dataString.orEmpty())?.let { (session, profile) ->
-                        if (trusted(intent, app)) vm.openWake(profile, session)
-                        else vm.requestDeepLink(profile, session)
+                    WakePolicy.parseDeepLink(intent.dataString.orEmpty())?.let { link ->
+                        if (trusted(intent, app)) vm.openWake(link.origin, link.profile, link.sessionId)
+                        else vm.requestDeepLink(link.origin, link.profile, link.sessionId)
                         // Consume so a config change does not replay the request.
                         intent.data = null
                     }
@@ -154,6 +156,63 @@ class MainActivity : ComponentActivity() {
                     if (state.arm == DeviceArm.DISARMED) overlay.hide() else overlay.show()
                 }
 
+                val photoPicker = rememberLauncherForActivityResult(
+                    ActivityResultContracts.PickVisualMedia(),
+                ) { uri ->
+                    uri?.let {
+                        vm.queueAttachment(
+                            it,
+                            contentResolver.getType(it) ?: "image/jpeg",
+                            displayName(it),
+                        )
+                    }
+                }
+                val videoPicker = rememberLauncherForActivityResult(
+                    ActivityResultContracts.PickVisualMedia(),
+                ) { uri ->
+                    uri?.let {
+                        vm.queueAttachment(
+                            it,
+                            contentResolver.getType(it) ?: "video/mp4",
+                            displayName(it),
+                        )
+                    }
+                }
+                val filePicker = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocument(),
+                ) { uri ->
+                    uri?.let {
+                        runCatching {
+                            contentResolver.takePersistableUriPermission(
+                                it,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                            )
+                        }
+                        vm.queueAttachment(
+                            it,
+                            contentResolver.getType(it) ?: "application/octet-stream",
+                            displayName(it),
+                        )
+                    }
+                }
+                var cameraUri by remember { mutableStateOf<Uri?>(null) }
+                val takePicture = rememberLauncherForActivityResult(
+                    ActivityResultContracts.TakePicture(),
+                ) { ok ->
+                    if (ok) cameraUri?.let { vm.queueAttachment(it, "image/jpeg", "camera.jpg") }
+                }
+                val launchCamera: () -> Unit = {
+                    val file = java.io.File(cacheDir, "camera_${System.currentTimeMillis()}.jpg")
+                    val uri = FileProvider.getUriForFile(this@MainActivity, "$packageName.files", file)
+                    cameraUri = uri
+                    takePicture.launch(uri)
+                }
+                val cameraPerm = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission(),
+                ) { granted ->
+                    if (granted) launchCamera()
+                }
+
                 CompanionShell(
                     state = state,
                     onOriginChange = vm::onOriginChange,
@@ -164,6 +223,9 @@ class MainActivity : ComponentActivity() {
                     onTab = vm::selectTab,
                     onOpenSession = vm::openSession,
                     onNewThread = vm::newThread,
+                    onRequestDelete = vm::requestDelete,
+                    onConfirmDelete = vm::confirmDelete,
+                    onCancelDelete = vm::cancelDelete,
                     onCloseChat = vm::closeChat,
                     onDraftChange = vm::onDraftChange,
                     onSend = vm::send,
@@ -220,11 +282,7 @@ class MainActivity : ComponentActivity() {
                     onCheckUpdate = vm::checkUpdates,
                     onApplyUpdate = vm::applyUpdate,
                     onVoiceClick = {
-                        if (ContextCompat.checkSelfPermission(
-                                this@MainActivity,
-                                Manifest.permission.RECORD_AUDIO,
-                            ) == PackageManager.PERMISSION_GRANTED
-                        ) {
+                        val action = {
                             vm.setVoiceListening(true)
                             voiceManager.startListening(
                                 onPartial = { vm.onDraftChange(it) },
@@ -232,10 +290,59 @@ class MainActivity : ComponentActivity() {
                                 onError = { vm.setVoiceListening(false) },
                                 onStateChange = { vm.setVoiceListening(it) },
                             )
+                        }
+                        if (ContextCompat.checkSelfPermission(
+                                this@MainActivity,
+                                Manifest.permission.RECORD_AUDIO,
+                            ) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            action()
                         } else {
+                            pendingAudioAction = action
                             audioLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     },
+                    onToggleVoiceStream = {
+                        val action = {
+                            vm.toggleVoiceStream()
+                        }
+                        if (ContextCompat.checkSelfPermission(
+                                this@MainActivity,
+                                Manifest.permission.RECORD_AUDIO,
+                            ) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            action()
+                        } else {
+                            pendingAudioAction = action
+                            audioLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    },
+                    onToggleAttach = vm::toggleAttach,
+                    onPickPhoto = {
+                        photoPicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                        )
+                    },
+                    onPickCamera = {
+                        if (ContextCompat.checkSelfPermission(
+                                this@MainActivity,
+                                Manifest.permission.CAMERA,
+                            ) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            launchCamera()
+                        } else {
+                            cameraPerm.launch(Manifest.permission.CAMERA)
+                        }
+                    },
+                    onPickVideo = {
+                        videoPicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
+                        )
+                    },
+                    onPickFile = { filePicker.launch(arrayOf("*/*")) },
+                    onRemoveAttachment = vm::removeAttachment,
+                    onOpenMedia = { openMedia(it) },
+                    onFetchMedia = vm::fetchMedia,
                 )
             }
         }
@@ -256,6 +363,35 @@ class MainActivity : ComponentActivity() {
             this,
             Manifest.permission.POST_NOTIFICATIONS,
         ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun displayName(uri: Uri): String {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val name = cursor.getString(0)
+                if (!name.isNullOrBlank()) return name
+            }
+        }
+        return uri.lastPathSegment ?: "file"
+    }
+
+    private fun openMedia(block: ChatBlock) {
+        val url = block.url
+        if (url.isBlank()) return
+        val intent = when {
+            url.startsWith("http") -> Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            java.io.File(url).isFile -> Intent(Intent.ACTION_VIEW).apply {
+                val uri = FileProvider.getUriForFile(
+                    this@MainActivity,
+                    "$packageName.files",
+                    java.io.File(url),
+                )
+                setDataAndType(uri, block.mime.ifBlank { "*/*" })
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            else -> return
+        }
+        runCatching { startActivity(intent) }
     }
 
     companion object {

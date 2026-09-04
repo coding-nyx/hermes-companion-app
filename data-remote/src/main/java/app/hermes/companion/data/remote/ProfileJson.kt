@@ -1,8 +1,11 @@
 package app.hermes.companion.data.remote
 
+import app.hermes.companion.domain.ChatContent
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.RewindPolicy
 import app.hermes.companion.model.ApprovalPrompt
+import app.hermes.companion.model.ChatBlock
+import app.hermes.companion.model.ChatBlockKind
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.DashboardStatus
 import app.hermes.companion.model.DeviceTicket
@@ -181,12 +184,16 @@ internal fun parseMessages(body: String): List<ChatMessage> {
         val id = obj.str("row_id").ifBlank { obj.str("_row_id") }.ifBlank { obj.str("id") }
             .ifBlank { "m$index" }
         val text = messageText(obj)
+        val toolName = obj.str("name").ifBlank { obj.str("tool") }.ifBlank { null }
+        val toolDetail = obj.str("detail").ifBlank { null }
+        val blocks = parseBlocks(obj, text, toolName, toolDetail)
         ChatMessage(
             id = id,
             role = role,
-            text = text,
-            toolName = obj.str("name").ifBlank { obj.str("tool") }.ifBlank { null },
-            toolDetail = obj.str("detail").ifBlank { null },
+            text = text.ifBlank { ChatContent.flatten(blocks) },
+            toolName = toolName,
+            toolDetail = toolDetail,
+            blocks = blocks,
         )
     }
 }
@@ -333,6 +340,66 @@ internal fun parseCreatedSession(body: String, fallbackProfile: String): Session
         updatedAtEpochMs = obj.long("updated_at"),
         unread = false,
     )
+}
+
+internal fun parseBlocks(
+    obj: JsonObject,
+    text: String,
+    toolName: String?,
+    toolDetail: String?,
+): List<ChatBlock> {
+    val fromParts = contentParts(obj["content"] ?: obj["parts"])
+    val shot = ChatContent.screenshotBlocks(toolName, toolDetail, text)
+    val fromMd = if (fromParts.none { it.kind != ChatBlockKind.TEXT }) ChatContent.fromMarkdown(text) else emptyList()
+    val merged = LinkedHashMap<String, ChatBlock>()
+    (fromParts + shot + fromMd).forEach { block ->
+        val key = "${block.kind}:${block.url}:${block.text}"
+        if (key !in merged && (block.url.isNotBlank() || block.text.isNotBlank())) merged[key] = block
+    }
+    return merged.values.toList()
+}
+
+private fun contentParts(el: JsonElement?): List<ChatBlock> = when (el) {
+    is JsonArray -> el.mapNotNull { part ->
+        when (part) {
+            is JsonPrimitive -> part.contentOrNull?.takeIf { it.isNotBlank() }?.let {
+                ChatBlock(kind = ChatBlockKind.TEXT, text = it)
+            }
+            is JsonObject -> partToBlock(part)
+            else -> null
+        }
+    }
+    is JsonObject -> listOfNotNull(partToBlock(el))
+    else -> emptyList()
+}
+
+private fun partToBlock(obj: JsonObject): ChatBlock? {
+    val type = obj.str("type").ifBlank { obj.str("kind") }.lowercase()
+    val url = obj.str("url")
+        .ifBlank { obj.str("image_url") }
+        .ifBlank {
+            val nested = obj["image_url"] as? JsonObject
+            nested.str("url")
+        }
+        .ifBlank {
+            val data = obj.str("data").ifBlank { obj.str("b64").ifBlank { obj.str("png_b64") } }
+            val mime = obj.str("mime").ifBlank { obj.str("media_type") }.ifBlank { "image/png" }
+            if (data.isNotBlank()) "data:$mime;base64,$data" else ""
+        }
+    val name = obj.str("name").ifBlank { obj.str("filename") }.ifBlank { obj.str("alt") }
+    val mime = obj.str("mime").ifBlank { obj.str("media_type") }
+    val text = obj.str("text").ifBlank { obj.str("content") }
+    return when {
+        type in setOf("image", "image_url") || ChatContent.kindOf(mime, name, url) == ChatBlockKind.IMAGE && url.isNotBlank() ->
+            ChatContent.imageBlock(url, alt = name, mime = mime, name = name)
+        type in setOf("video", "video_url") ->
+            ChatContent.mediaBlock(url, mime.ifBlank { "video/mp4" }, name)
+        type in setOf("file", "document", "attachment") ->
+            ChatContent.mediaBlock(url, mime, name, obj.long("size") )
+        text.isNotBlank() -> ChatBlock(kind = ChatBlockKind.TEXT, text = text)
+        url.isNotBlank() -> ChatContent.mediaBlock(url, mime, name)
+        else -> null
+    }
 }
 
 private fun messageText(obj: JsonObject): String {

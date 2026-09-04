@@ -11,24 +11,31 @@ import app.hermes.companion.data.local.StickyStore
 import app.hermes.companion.data.local.TranscriptCache
 import app.hermes.companion.data.remote.DashboardClient
 import app.hermes.companion.data.remote.DashboardException
+import app.hermes.companion.data.remote.HostClientPool
 import app.hermes.companion.domain.AuthPolicy
 import app.hermes.companion.domain.GatewayHudMap
 import app.hermes.companion.domain.OriginPolicy
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.WakePing
+import app.hermes.companion.domain.ChatContent
+import app.hermes.companion.model.ChatAttachment
+import app.hermes.companion.model.ChatBlockKind
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.DeviceArm
 import app.hermes.companion.model.SavedGateway
 import app.hermes.companion.model.SessionRef
+import app.hermes.companion.voice.VoiceStreamEngine
 import app.hermes.companion.voice.WakeWordService
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class CompanionViewModel(
-    private val client: DashboardClient,
+    private val clients: HostClientPool,
     private val sticky: StickyStore,
     private val cache: TranscriptCache,
     private val outbox: OutboxStore,
@@ -38,28 +45,51 @@ class CompanionViewModel(
 ) : ViewModel() {
     private val liveScope: CoroutineScope get() = runtime.appScope
     private val deviceNode: DeviceNodeCoordinator get() = runtime.deviceNode
-    private val initialCred = deviceCreds.load()
-    private val savedOperator = operatorCreds.load()
-    private val initialOrigin = sticky.origin?.takeIf { it.isNotBlank() }
-        ?: initialCred?.origin?.takeIf { it.isNotBlank() }
-        ?: savedOperator?.origin?.takeIf { it.isNotBlank() }
+    private fun client(origin: String): DashboardClient = clients.forOrigin(origin)
+    // Auto-connect target: the last host that actually connected, never merely the last attempted one.
+    private val initialOrigin = sticky.lastGoodOrigin?.takeIf { it.isNotBlank() }
+        ?: sticky.origin?.takeIf { it.isNotBlank() }
+        ?: deviceCreds.load()?.origin?.takeIf { it.isNotBlank() }
+        ?: operatorCreds.load()?.origin?.takeIf { it.isNotBlank() }
     private val _state = MutableStateFlow(
         CompanionState(
             originInput = initialOrigin.orEmpty(),
-            username = savedOperator?.username.orEmpty(),
-            ntfyTopic = sticky.ntfyTopic.orEmpty(),
+            hostName = runtime.hostName(initialOrigin),
+            username = initialOrigin?.let { operatorCreds.load(it)?.username }.orEmpty(),
+            ntfyTopic = initialOrigin?.let { sticky.ntfyTopicFor(it) }.orEmpty(),
             stayConnected = sticky.stayConnected,
+            loading = !initialOrigin.isNullOrBlank(),
         ).mirror(runtime.deviceNode.state.value),
     )
     val state: StateFlow<CompanionState> = _state
     private var pendingWake: WakePing? = null
-    private val chat = ChatSessionManager(client, cache, outbox, _state, viewModelScope)
-    private val host = HostToolsController(client, operatorCreds, _state, viewModelScope) { origin -> connect(origin) }
-    private val sync = SyncManager(client, cache, sticky, runtime, chat, _state, viewModelScope) { ping ->
-        openWake(ping.profile, ping.sessionId)
+    private var connectJob: Job? = null
+    private val chat = ChatSessionManager(clients, cache, outbox, _state, viewModelScope)
+    private val voiceStream = VoiceStreamEngine(
+        context = runtime,
+        scope = viewModelScope,
+        onSendPrompt = { prompt ->
+            chat.sendPrompt(prompt)
+        },
+        onInterrupt = {
+            chat.interrupt()
+        },
+        onStateChange = { vState ->
+            _state.update { it.copy(voiceStreamState = vState) }
+        },
+        onError = { err ->
+            _state.update { it.copy(error = err) }
+        },
+    )
+    private val host = HostToolsController(clients, operatorCreds, _state, viewModelScope) { origin -> connect(origin) }
+    private val sync = SyncManager(clients, cache, sticky, runtime, chat, _state, viewModelScope) { ping ->
+        openWake(ping.origin, ping.profile, ping.sessionId)
     }
 
     init {
+        chat.onAssistantDelta = { delta -> voiceStream.onAssistantDelta(delta) }
+        chat.onTurnCompleted = { voiceStream.onAssistantTurnCompleted() }
+        chat.onTurnInterrupted = { voiceStream.onAssistantTurnInterrupted() }
         viewModelScope.launch {
             deviceNode.state.collect { node -> _state.update { it.mirror(node) } }
         }
@@ -76,7 +106,9 @@ class CompanionViewModel(
     }
 
     fun saveNtfy() {
-        sticky.ntfyTopic = _state.value.ntfyTopic.trim().ifBlank { null }
+        val topic = _state.value.ntfyTopic.trim().ifBlank { null }
+        val origin = _state.value.origin
+        if (origin != null) sticky.setNtfyTopic(origin, topic) else sticky.ntfyTopic = topic
         sync.startWake()
     }
 
@@ -86,18 +118,25 @@ class CompanionViewModel(
         _state.update { it.copy(stayConnected = next) }
     }
 
-    fun openWake(profileId: String, sessionId: String) {
-        val ping = WakePing(type = "approval.request", sessionId = sessionId, profile = profileId)
-        val origin = _state.value.origin
-        if (origin.isNullOrBlank()) {
+    /**
+     * Open [sessionId] on [profileId] at [targetOrigin] (blank = the active host). A ping for another
+     * host switches operator host first; the wake is parked until that connect succeeds.
+     */
+    fun openWake(targetOrigin: String, profileId: String, sessionId: String) {
+        val active = _state.value.origin
+        val target = targetOrigin.trim().trimEnd('/').ifBlank { active.orEmpty() }
+        val ping = WakePing(type = "approval.request", sessionId = sessionId, profile = profileId, origin = target)
+        if (active.isNullOrBlank() || (target.isNotBlank() && !HostClientPool.key(target).equals(HostClientPool.key(active)))) {
             pendingWake = ping
+            if (target.isNotBlank()) connect(target)
             return
         }
+        val origin = active
         viewModelScope.launch {
             if (_state.value.activeProfileId != profileId) {
-                sticky.profileId = profileId
+                sticky.setProfile(origin, profileId)
                 val sessions = runCatching {
-                    cache.readSessions(origin, profileId) { client.listSessions(origin, profileId) }
+                    cache.readSessions(origin, profileId) { client(origin).listSessions(origin, profileId) }
                 }.getOrDefault(emptyList())
                 _state.update {
                     it.copy(
@@ -121,14 +160,14 @@ class CompanionViewModel(
     }
 
     /** Deep link from another app: park it until the user confirms. Own notifications call [openWake]. */
-    fun requestDeepLink(profileId: String, sessionId: String) {
-        _state.update { it.copy(pendingDeepLink = DeepLinkRequest(profileId, sessionId)) }
+    fun requestDeepLink(origin: String, profileId: String, sessionId: String) {
+        _state.update { it.copy(pendingDeepLink = DeepLinkRequest(profileId, sessionId, origin)) }
     }
 
     fun confirmDeepLink() {
         val req = _state.value.pendingDeepLink ?: return
         _state.update { it.copy(pendingDeepLink = null) }
-        openWake(req.profileId, req.sessionId)
+        openWake(req.origin, req.profileId, req.sessionId)
     }
 
     fun dismissDeepLink() {
@@ -221,16 +260,94 @@ class CompanionViewModel(
 
     fun removeProtectedPackage(pkg: String) = deviceNode.removeProtectedPackage(pkg)
 
+    // ---- voice stream: VoiceStreamEngine ----
+    fun toggleVoiceStream() {
+        _state.update { it.copy(error = null) }
+        if (_state.value.voiceStreamState == VoiceStreamState.IDLE) {
+            if (_state.value.openSessionId == null) {
+                val first = _state.value.visibleSessions.firstOrNull()
+                if (first != null) {
+                    chat.openSession(first)
+                } else {
+                    chat.newThread()
+                }
+            }
+        }
+        voiceStream.toggle()
+    }
+
+    fun stopVoiceStream() {
+        _state.update { it.copy(error = null) }
+        voiceStream.stopStream()
+    }
+
     // ---- chat: ChatSessionManager ----
     fun openSession(session: SessionRef) = chat.openSession(session)
-    fun closeChat() = chat.closeChat()
+    fun closeChat() {
+        voiceStream.stopStream()
+        chat.closeChat()
+    }
     fun loadOlder() = chat.loadOlder()
     fun respondApproval(decision: String) = chat.respondApproval(decision)
     fun newThread() = chat.newThread()
+    fun requestDelete(session: SessionRef) = chat.requestDelete(session)
+    fun confirmDelete() = chat.confirmDelete()
+    fun cancelDelete() = chat.cancelDelete()
     fun beginRewind(message: ChatMessage) = chat.beginRewind(message)
     fun cancelRewind() = chat.cancelRewind()
     fun send() = chat.send()
     fun interrupt() = chat.interrupt()
+
+    fun toggleAttach() {
+        _state.update { it.copy(attachOpen = !it.attachOpen) }
+    }
+
+    fun removeAttachment(id: String) {
+        _state.update { it.copy(pendingAttachments = it.pendingAttachments.filter { row -> row.id != id }) }
+    }
+
+    fun queueAttachment(uri: android.net.Uri, mime: String, name: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val kind = ChatContent.kindOf(mime, name, uri.toString())
+            val raw = runCatching { runtime.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+                ?: return@launch
+            val id = java.util.UUID.randomUUID().toString()
+            val dir = java.io.File(runtime.cacheDir, "attach").apply { mkdirs() }
+            val bytes = if (kind == ChatBlockKind.IMAGE) ImageCompress.jpeg(raw) else raw
+            if (kind == ChatBlockKind.VIDEO && bytes.size > 25 * 1024 * 1024) {
+                _state.update { it.copy(error = "video too large · max 25MB", attachOpen = false) }
+                return@launch
+            }
+            if (kind == ChatBlockKind.FILE && bytes.size > 10 * 1024 * 1024) {
+                _state.update { it.copy(error = "file too large · max 10MB", attachOpen = false) }
+                return@launch
+            }
+            val file = java.io.File(dir, id)
+            file.writeBytes(bytes)
+            val stored = ChatAttachment(
+                id = id,
+                localUri = file.absolutePath,
+                name = name.ifBlank { "file" },
+                mime = if (kind == ChatBlockKind.IMAGE) "image/jpeg" else mime,
+                kind = kind,
+                sizeBytes = bytes.size.toLong(),
+            )
+            _state.update {
+                it.copy(pendingAttachments = it.pendingAttachments + stored, attachOpen = false, error = null)
+            }
+        }
+    }
+
+    suspend fun fetchMedia(url: String): ByteArray? {
+        val origin = _state.value.origin ?: return null
+        val absolute = when {
+            url.startsWith("http") -> url
+            url.startsWith("/") -> origin.trimEnd('/') + url
+            java.io.File(url).isFile -> return java.io.File(url).readBytes()
+            else -> return null
+        }
+        return runCatching { client(origin).fetchBytes(absolute) }.getOrNull()
+    }
 
     // ---- host tools: HostToolsController ----
     fun refreshHostMetrics() = host.refreshHostMetrics()
@@ -263,20 +380,22 @@ class CompanionViewModel(
     fun connect(originOverride: String? = null) {
         val origin = (originOverride ?: _state.value.originInput).trim().trimEnd('/')
         if (origin.isBlank()) {
-            _state.update { it.copy(error = "origin required") }
+            _state.update { it.copy(loading = false, error = "origin required") }
             return
         }
         if (!OriginPolicy.cleartextAllowed(origin)) {
-            _state.update { it.copy(originInput = origin, error = OriginPolicy.CLEARTEXT_DENIED) }
+            _state.update { it.copy(loading = false, originInput = origin, error = OriginPolicy.CLEARTEXT_DENIED) }
             return
         }
-        if (_state.value.loading && _state.value.originInput == origin) return
+        if (connectJob?.isActive == true && _state.value.originInput == origin) return
         if (_state.value.origin == origin && originOverride == null && _state.value.error == null) return
-        viewModelScope.launch {
-            _state.update { it.copy(loading = true, error = null, originInput = origin) }
+        connectJob = viewModelScope.launch {
+            _state.update { it.copy(loading = true, error = null, originInput = origin, hostName = runtime.hostName(origin)) }
             var gatedHost = _state.value.authRequired
+            val api = client(origin)
+            val savedOperator = operatorCreds.load(origin)
             try {
-                val status = client.probe(origin)
+                val status = api.probe(origin)
                 val hud = GatewayHudMap.from(status)
                 gatedHost = status.authRequired
                 _state.update { it.copy(authRequired = status.authRequired, status = status) }
@@ -285,7 +404,7 @@ class CompanionViewModel(
                         ?: throw DashboardException("auth_oidc", AuthPolicy.OIDC_MESSAGE)
                     var user = _state.value.username.trim()
                     var pass = _state.value.password
-                    if ((user.isBlank() || pass.isBlank()) && savedOperator != null && savedOperator.origin == origin) {
+                    if ((user.isBlank() || pass.isBlank()) && savedOperator != null) {
                         user = savedOperator.username
                         pass = savedOperator.password
                     }
@@ -295,42 +414,49 @@ class CompanionViewModel(
                         }
                         return@launch
                     }
-                    client.passwordLogin(origin, user, pass, provider)
+                    api.passwordLogin(origin, user, pass, provider)
                     operatorCreds.save(
                         OperatorCred(
                             origin = origin,
                             username = user,
                             password = pass,
-                            sessionToken = client.sessionToken.orEmpty(),
+                            sessionToken = api.sessionToken.orEmpty(),
                             authMode = "password",
                         )
                     )
                     _state.update { it.copy(password = "") }
                 } else {
-                    client.useLoopback()
-                    client.adoptLoopbackToken(origin)
+                    api.useLoopback()
+                    api.adoptLoopbackToken(origin)
                     operatorCreds.save(
                         OperatorCred(
                             origin = origin,
-                            sessionToken = client.sessionToken.orEmpty(),
+                            sessionToken = api.sessionToken.orEmpty(),
                             authMode = "token",
                         )
                     )
                 }
-                val profiles = client.listProfiles(origin)
-                val active = ProfileScope.resolveActive(profiles, sticky.profileId)
+                val profiles = api.listProfiles(origin)
+                val active = ProfileScope.resolveActive(profiles, sticky.profileFor(origin))
                     ?: throw DashboardException("no_profiles", "no profiles on host")
-                val hello = runCatching { client.wsHello(origin, active.id) }.getOrNull()
+                val hello = runCatching { api.wsHello(origin, active.id) }.getOrNull()
                 sticky.origin = origin
-                sticky.profileId = active.id
+                sticky.lastGoodOrigin = origin
+                sticky.setProfile(origin, active.id)
+                val hostName = runtime.hostName(origin)
+                val ntfyTopic = sticky.ntfyTopicFor(origin).orEmpty()
                 val cached = runCatching { cache.sessions(origin, active.id) }.getOrDefault(emptyList())
                 if (cached.isNotEmpty()) {
                     _state.update {
                         it.copy(
-                            loading = true,
+                            loading = false,
+                            sessionsLoading = true,
                             origin = origin,
+                            hostName = hostName,
+                            ntfyTopic = ntfyTopic,
                             profiles = profiles,
                             activeProfileId = active.id,
+                            modelOverride = active.model,
                             sessions = cached,
                             tab = MainTab.THREADS,
                             gatewayHello = hello,
@@ -340,14 +466,18 @@ class CompanionViewModel(
                     }
                 }
                 val sessions = cache.readSessions(origin, active.id) {
-                    client.listSessions(origin, active.id)
+                    api.listSessions(origin, active.id)
                 }
                 _state.update {
                     it.copy(
                         loading = false,
+                        sessionsLoading = false,
                         origin = origin,
+                        hostName = hostName,
+                        ntfyTopic = ntfyTopic,
                         profiles = profiles,
                         activeProfileId = active.id,
+                        modelOverride = active.model,
                         sessions = sessions,
                         tab = MainTab.THREADS,
                         gatewayHello = hello,
@@ -363,12 +493,16 @@ class CompanionViewModel(
                 host.loadModelCatalog()
                 host.loadCronJobs()
                 host.loadSavedGateways()
-                pendingWake?.let { openWake(it.profile, it.sessionId) }
-                pendingWake = null
+                StayConnectedService.refresh(runtime)
+                pendingWake?.let { wake ->
+                    pendingWake = null
+                    openWake(wake.origin, wake.profile, wake.sessionId)
+                }
             } catch (t: Throwable) {
                 _state.update {
                     it.copy(
                         loading = false,
+                        sessionsLoading = false,
                         origin = null,
                         authRequired = gatedHost,
                         error = t.toMonoError(),
@@ -381,15 +515,18 @@ class CompanionViewModel(
     fun selectProfile(profileId: String) {
         val origin = _state.value.origin ?: return
         if (profileId == _state.value.activeProfileId) return
-        sticky.profileId = profileId
+        sticky.setProfile(origin, profileId)
         val keepChat = _state.value.openSession?.takeIf { it.profileId == profileId }
         chat.cancelTurn()
+        voiceStream.stopStream()
         viewModelScope.launch {
             val cached = runCatching { cache.sessions(origin, profileId) }.getOrDefault(emptyList())
             _state.update {
                 it.copy(
                     activeProfileId = profileId,
+                    modelOverride = it.profiles.find { p -> p.id == profileId }?.model.orEmpty(),
                     sessions = cached,
+                    sessionsLoading = true,
                     openSessionId = keepChat?.id,
                     messages = if (keepChat == null) emptyList() else it.messages,
                     streaming = false,
@@ -401,19 +538,20 @@ class CompanionViewModel(
             sync.startWatch(origin, profileId)
             try {
                 val sessions = cache.readSessions(origin, profileId) {
-                    client.listSessions(origin, profileId)
+                    client(origin).listSessions(origin, profileId)
                 }
                 _state.update { state ->
                     if (state.activeProfileId != profileId) state
-                    else state.copy(sessions = sessions, error = null)
+                    else state.copy(sessions = sessions, sessionsLoading = false, error = null)
                 }
             } catch (t: Throwable) {
-                _state.update { it.copy(error = t.toMonoError()) }
+                _state.update { it.copy(sessionsLoading = false, error = t.toMonoError()) }
             }
         }
     }
 
     override fun onCleared() {
+        voiceStream.shutdown()
         chat.cancelAll()
         if (sticky.stayConnected || deviceNode.state.value.arm != DeviceArm.DISARMED) {
             super.onCleared()
@@ -421,7 +559,7 @@ class CompanionViewModel(
         }
         deviceNode.unbind()
         sync.stopAll()
-        client.closeRpc()
+        _state.value.origin?.let { clients.existing(it)?.closeRpc() }
         super.onCleared()
     }
 
@@ -431,7 +569,7 @@ class CompanionViewModel(
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
                     return CompanionViewModel(
-                        app.dashboard,
+                        app.clients,
                         app.sticky,
                         app.cache,
                         app.outbox,

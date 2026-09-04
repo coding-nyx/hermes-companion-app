@@ -568,8 +568,9 @@ Do **not** restore laptop SSH hops. Origin stays `http://<tailscale>:9120`.
 | A6.4 | Volume-down chord disarm | **done (code)** Double volume-down within 400ms, same path as notification DISARM. |
 | A6.5 | Chat SEND above nav/IME | **done (code)** Composer `navigationBarsPadding` + existing `imePadding`. |
 | A6.6 | M2 device-verify | **pending device** snapshot already ok while ARMED; still need tap fixture, overlay + `HERMES HAS HANDS`, notification DISARM, `protected_package`, disarmed noop. |
+| A6.7 | Multi-Device Selection & Targeted Routing | **planned** Dynamic device routing in `hermes-plugin/live.py` & `broker.py` (replace hardcoded `ids[0]`), `mobile_devices` discovery tool, optional `device` argument on all `mobile_*` tools (`mobile_snapshot`, `mobile_click`, etc.), `device_name`/model metadata in registration, CLI default device selector (`hermes companion default <ID>`). |
 
-Order: **A6.1 → A6.2** (app) in parallel with **A6.3** (plugin). Then **A6.4**, **A6.5**, **A6.6**.
+Order: **A6.1 → A6.2** (app) in parallel with **A6.3** (plugin). Then **A6.4**, **A6.5**, **A6.6**, **A6.7**.
 
 #### P7 — Production Hardening & Architecture
 See [docs/WORK_ITEMS.md](WORK_ITEMS.md) for full acceptance criteria and dependencies.

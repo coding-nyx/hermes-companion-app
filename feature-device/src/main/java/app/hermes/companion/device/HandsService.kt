@@ -31,9 +31,13 @@ class HandsService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        // Names of the hosts whose lanes may drive the phone (A8.5); re-posted whenever they change.
+        hosts = intent?.getStringArrayListExtra(EXTRA_HOSTS)?.toList() ?: hosts
         startForeground(ID, notice())
         return START_STICKY
     }
+
+    private var hosts: List<String> = emptyList()
 
     override fun onDestroy() {
         HandsBridge.onDisarm?.invoke()
@@ -58,10 +62,11 @@ class HandsService : Service() {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
         }
+        val who = hosts.filter { it.isNotBlank() }.joinToString(", ")
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentTitle("HERMES HAS HANDS")
-            .setContentText("Tap to disarm")
+            .setContentTitle(if (who.isBlank()) "HERMES HAS HANDS" else "HERMES HAS HANDS · $who")
+            .setContentText(if (who.isBlank()) "Tap to disarm" else "$who can move this phone · tap to disarm")
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setContentIntent(disarm)
@@ -76,6 +81,11 @@ class HandsService : Service() {
 
     companion object {
         const val ACTION_DISARM = "app.hermes.companion.device.DISARM"
+        const val EXTRA_HOSTS = "hosts"
+
+        /** Start (or re-post) the kill-switch notification naming [hosts]. */
+        fun start(context: android.content.Context, hosts: List<String>): Intent =
+            Intent(context, HandsService::class.java).putStringArrayListExtra(EXTRA_HOSTS, ArrayList(hosts))
         private const val CHANNEL = "hands"
         private const val ID = 31
     }

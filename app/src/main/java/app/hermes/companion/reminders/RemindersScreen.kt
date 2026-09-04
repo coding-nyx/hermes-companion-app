@@ -24,6 +24,8 @@ import androidx.compose.ui.unit.dp
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
+import app.hermes.companion.design.FetchPane
+import app.hermes.companion.design.FetchRow
 import app.hermes.companion.design.Hairline
 import app.hermes.companion.model.CronJob
 
@@ -61,7 +63,7 @@ fun RemindersScreen(
                 )
             }
             Text(
-                text = if (isLoading) "SYNCING..." else "REFRESH",
+                text = if (isLoading) "SYNCING" else "REFRESH",
                 style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
                 modifier = Modifier
                     .testTag("reminders.refresh")
@@ -72,18 +74,18 @@ fun RemindersScreen(
         Hairline()
 
         if (jobs.isEmpty()) {
-            Box(
+            FetchPane(
+                label = if (isLoading) "LOADING SCHEDULED TASKS" else "NO CRON JOBS",
+                hint = if (isLoading) "// handshake" else "// idle",
+                scanning = isLoading,
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = if (isLoading) "LOADING SCHEDULED TASKS..." else "NO CRON JOBS CONFIGURED",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                )
-            }
+                    .testTag(if (isLoading) "reminders.loading" else "reminders.empty"),
+            )
         } else {
+            if (isLoading) {
+                FetchRow(label = "SYNCING CRON", modifier = Modifier.testTag("reminders.loading"))
+            }
             LazyColumn(
                 modifier = Modifier
                     .weight(1f)

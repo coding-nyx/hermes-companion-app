@@ -44,6 +44,8 @@ def setup(parser) -> None:
     revoke = sub.add_parser("revoke", help="Revoke a paired device")
     revoke.add_argument("device_id")
     sub.add_parser("lanes", help="Show live device-control lanes")
+    check = sub.add_parser("relay", help="Relay preflight (`--check` upstream reachability)")
+    check.add_argument("--check", action="store_true", help="Print /companion/health equivalent and exit")
 
 
 def handle(args) -> None:
@@ -71,5 +73,17 @@ def handle(args) -> None:
             return
         for device_id in rows:
             print(device_id)
+        return
+    if cmd == "relay":
+        if getattr(args, "check", False):
+            from relay import check_upstream
+
+            report = check_upstream()
+            print(json.dumps(report, indent=2))
+            if report["status"] != "reachable" and report["mode"] != "standalone":
+                raise SystemExit(2)
+            return
+        health = _json("GET", "/companion/health")
+        print(json.dumps(health, indent=2))
         return
     raise SystemExit(f"unknown companion command: {cmd}")

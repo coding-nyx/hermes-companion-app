@@ -3,6 +3,7 @@ package app.hermes.companion
 import app.hermes.companion.data.local.StickyStore
 import app.hermes.companion.data.local.TranscriptCache
 import app.hermes.companion.data.remote.DashboardClient
+import app.hermes.companion.data.remote.HostClientPool
 import app.hermes.companion.domain.GatewayHudMap
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.WakePing
@@ -25,7 +26,7 @@ import kotlinx.coroutines.launch
  * (via [CompanionApp]) so stay-connected survives the Activity; per-frame work uses [scope].
  */
 class SyncManager(
-    private val client: DashboardClient,
+    private val clients: HostClientPool,
     private val cache: TranscriptCache,
     private val sticky: StickyStore,
     private val runtime: CompanionApp,
@@ -35,24 +36,39 @@ class SyncManager(
     private val onWake: (WakePing) -> Unit,
 ) {
     private val liveScope: CoroutineScope get() = runtime.appScope
+    private fun client(origin: String): DashboardClient = clients.forOrigin(origin)
 
     fun stopAll() {
         runtime.watchJob?.cancel()
         runtime.watchJob = null
         runtime.hudJob?.cancel()
         runtime.hudJob = null
-        runtime.wakeJob?.cancel()
-        runtime.wakeJob = null
+        runtime.wakeJobs.values.forEach { it.cancel() }
+        runtime.wakeJobs.clear()
     }
 
+    /**
+     * One ntfy subscription per host that has a topic (A8.5). A ping is attributed to the host whose
+     * topic it arrived on unless the payload names an `origin`, so hub pings open hub sessions even
+     * while lab is the active operator host.
+     */
     fun startWake() {
-        val sse = WakePolicy.sseUrl(_state.value.ntfyTopic.ifBlank { sticky.ntfyTopic.orEmpty() }) ?: return
-        runtime.wakeJob?.cancel()
-        runtime.wakeJob = liveScope.launch {
-            client.wakeEvents(sse).collect { raw ->
-                val ping = WakePolicy.parse(raw) ?: return@collect
-                _state.update { it.copy(lastWake = ping) }
-                onWake(ping)
+        val topics = sticky.ntfyHosts().toMutableMap()
+        _state.value.origin?.let { active ->
+            val own = _state.value.ntfyTopic.ifBlank { sticky.ntfyTopicFor(active).orEmpty() }
+            if (own.isNotBlank()) topics[HostClientPool.key(active)] = own
+        }
+        val wanted = topics.mapNotNull { (origin, topic) -> WakePolicy.sseUrl(topic)?.let { origin to it } }.toMap()
+        // Drop subscriptions for hosts that lost their topic.
+        runtime.wakeJobs.keys.filter { it !in wanted }.forEach { runtime.wakeJobs.remove(it)?.cancel() }
+        for ((origin, sse) in wanted) {
+            if (runtime.wakeJobs[origin]?.isActive == true) continue
+            runtime.wakeJobs[origin] = liveScope.launch {
+                client(origin).wakeEvents(sse).collect { raw ->
+                    val ping = WakePolicy.parse(raw, origin) ?: return@collect
+                    _state.update { it.copy(lastWake = ping) }
+                    onWake(ping)
+                }
             }
         }
     }
@@ -62,7 +78,7 @@ class SyncManager(
         runtime.hudJob = liveScope.launch {
             while (isActive) {
                 delay(HUD_MS)
-                val snap = runCatching { client.probe(origin) }.getOrNull()
+                val snap = runCatching { client(origin).probe(origin) }.getOrNull()
                 _state.update { st ->
                     if (st.origin != origin) st
                     else if (snap != null) st.copy(status = snap, hud = GatewayHudMap.from(snap))
@@ -79,13 +95,13 @@ class SyncManager(
             var lastInstance = _state.value.gatewayHello?.instanceId.orEmpty()
             while (isActive) {
                 try {
-                    val hello = client.wsHello(origin, profileId)
+                    val hello = client(origin).wsHello(origin, profileId)
                     if (lastInstance.isNotEmpty() && hello.instanceId.isNotEmpty() &&
                         hello.instanceId != lastInstance
                     ) {
-                        client.forgetLiveIds()
+                        client(origin).forgetLiveIds()
                         runCatching {
-                            cache.readSessions(origin, profileId) { client.listSessions(origin, profileId) }
+                            cache.readSessions(origin, profileId) { client(origin).listSessions(origin, profileId) }
                         }.onSuccess { rows ->
                             _state.update { st ->
                                 if (st.activeProfileId == profileId) st.copy(sessions = rows) else st
@@ -98,7 +114,7 @@ class SyncManager(
                     runCatching { chat.flushOutbox() }
                     val openId = _state.value.openSessionId
                     if (openId != null && !_state.value.streaming) {
-                        runCatching { client.pageMessages(origin, openId, profileId) }.onSuccess { page ->
+                        runCatching { client(origin).pageMessages(origin, openId, profileId) }.onSuccess { page ->
                             runCatching { cache.replaceMessages(origin, profileId, openId, page.messages) }
                             val merged = chat.withQueued(origin, profileId, openId, page.messages)
                             _state.update { st ->
@@ -112,13 +128,13 @@ class SyncManager(
                             if (!hello.heartbeat) return@launch
                             while (isActive) {
                                 delay(PING_MS)
-                                runCatching { client.ping() }.onFailure {
-                                    client.closeRpc()
+                                runCatching { client(origin).ping() }.onFailure {
+                                    client(origin).closeRpc()
                                 }
                             }
                         }
                         try {
-                            client.bus(profileId).collect { frame -> onBus(frame, origin, profileId) }
+                            client(origin).bus(profileId).collect { frame -> onBus(frame, origin, profileId) }
                         } finally {
                             ping.cancel()
                         }
@@ -138,7 +154,7 @@ class SyncManager(
         when (frame) {
             BusFrame.SessionRefetch -> scope.launch {
                 runCatching {
-                    cache.readSessions(origin, profileId) { client.listSessions(origin, profileId) }
+                    cache.readSessions(origin, profileId) { client(origin).listSessions(origin, profileId) }
                 }.onSuccess { rows ->
                     _state.update { st ->
                         if (st.activeProfileId == profileId) st.copy(sessions = rows) else st
@@ -163,7 +179,7 @@ class SyncManager(
             is BusFrame.Chat -> {
                 val ev = frame.event
                 val open = _state.value.openSessionId
-                val forOpen = frame.sessionId == null || client.matchesSession(open, frame.sessionId)
+                val forOpen = frame.sessionId == null || client(origin).matchesSession(open, frame.sessionId)
                 when (ev) {
                     is ChatEvent.PromptExpired -> _state.update { st ->
                         if (st.approval?.requestId == ev.requestId) st.copy(approval = null) else st
@@ -175,7 +191,7 @@ class SyncManager(
                             _state.update { st ->
                                 st.copy(
                                     sessions = st.sessions.map { row ->
-                                        if (client.matchesSession(row.id, frame.sessionId)) {
+                                        if (client(origin).matchesSession(row.id, frame.sessionId)) {
                                             row.copy(unread = true)
                                         } else row
                                     },

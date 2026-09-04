@@ -3,6 +3,7 @@ package app.hermes.companion
 import app.hermes.companion.console.TerminalLogEntry
 import app.hermes.companion.data.local.OperatorCredStore
 import app.hermes.companion.data.remote.DashboardClient
+import app.hermes.companion.data.remote.HostClientPool
 import app.hermes.companion.model.SavedGateway
 import app.hermes.companion.model.TerminalExecResult
 import kotlinx.coroutines.CoroutineScope
@@ -17,19 +18,20 @@ import kotlinx.coroutines.launch
  * nothing here holds a socket.
  */
 class HostToolsController(
-    private val client: DashboardClient,
+    private val clients: HostClientPool,
     private val operatorCreds: OperatorCredStore,
     private val _state: MutableStateFlow<CompanionState>,
     private val scope: CoroutineScope,
     private val onConnect: (String) -> Unit,
 ) {
+    private fun client(origin: String): DashboardClient = clients.forOrigin(origin)
+
     fun refreshHostMetrics() {
         val origin = _state.value.origin ?: return
         scope.launch {
-            val metrics = runCatching { client.getHostMetrics(origin) }.getOrNull()
-            if (metrics != null) {
-                _state.update { it.copy(hostMetrics = metrics) }
-            }
+            _state.update { it.copy(hostLoading = true) }
+            val metrics = runCatching { client(origin).getHostMetrics(origin) }.getOrNull()
+            _state.update { it.copy(hostMetrics = metrics ?: it.hostMetrics, hostLoading = false) }
         }
     }
 
@@ -37,7 +39,7 @@ class HostToolsController(
         val origin = _state.value.origin ?: return
         scope.launch {
             _state.update { it.copy(cronLoading = true) }
-            val jobs = runCatching { client.getCronJobs(origin) }.getOrDefault(emptyList())
+            val jobs = runCatching { client(origin).getCronJobs(origin) }.getOrDefault(emptyList())
             _state.update { it.copy(cronJobs = jobs, cronLoading = false) }
         }
     }
@@ -45,7 +47,7 @@ class HostToolsController(
     fun triggerCronJob(jobId: String) {
         val origin = _state.value.origin ?: return
         scope.launch {
-            runCatching { client.triggerCronJob(origin, jobId) }
+            runCatching { client(origin).triggerCronJob(origin, jobId) }
             loadCronJobs()
         }
     }
@@ -53,7 +55,7 @@ class HostToolsController(
     fun toggleCronJob(jobId: String, currentEnabled: Boolean) {
         val origin = _state.value.origin ?: return
         scope.launch {
-            runCatching { client.toggleCronJob(origin, jobId, pause = currentEnabled) }
+            runCatching { client(origin).toggleCronJob(origin, jobId, pause = currentEnabled) }
             loadCronJobs()
         }
     }
@@ -61,9 +63,17 @@ class HostToolsController(
     fun loadModelCatalog() {
         val origin = _state.value.origin ?: return
         scope.launch {
-            val cat = runCatching { client.getModelCatalog(origin) }.getOrNull()
-            if (cat != null) {
-                _state.update { it.copy(modelCatalog = cat) }
+            _state.update { it.copy(modelLoading = true) }
+            val cat = runCatching { client(origin).getModelCatalog(origin) }.getOrNull()
+            _state.update {
+                val override = it.modelOverride.ifBlank {
+                    cat?.currentModel.orEmpty().ifBlank { it.activeProfile?.model.orEmpty() }
+                }
+                it.copy(
+                    modelCatalog = cat ?: it.modelCatalog,
+                    modelLoading = false,
+                    modelOverride = override,
+                )
             }
         }
     }
@@ -71,11 +81,12 @@ class HostToolsController(
     fun switchModel(model: String, provider: String) {
         val origin = _state.value.origin ?: return
         val profile = _state.value.activeProfileId
+        _state.update { it.copy(modelOverride = model) }
         scope.launch {
-            val ok = runCatching { client.switchModel(origin, model, provider, profile) }.getOrDefault(false)
+            val ok = runCatching { client(origin).switchModel(origin, model, provider, profile) }.getOrDefault(false)
             if (ok) {
                 loadModelCatalog()
-                val status = runCatching { client.probe(origin) }.getOrNull()
+                val status = runCatching { client(origin).probe(origin) }.getOrNull()
                 if (status != null) _state.update { it.copy(status = status) }
             }
         }
@@ -85,7 +96,7 @@ class HostToolsController(
         val origin = _state.value.origin ?: return
         scope.launch {
             _state.update { it.copy(gitLoading = true) }
-            val st = runCatching { client.getGitStatus(origin) }.getOrNull()
+            val st = runCatching { client(origin).getGitStatus(origin) }.getOrNull()
             _state.update { it.copy(gitStatus = st, gitLoading = false) }
         }
     }
@@ -94,7 +105,7 @@ class HostToolsController(
         val origin = _state.value.origin ?: return
         scope.launch {
             _state.update { it.copy(gitLoading = true, gitSelectedFile = file) }
-            val diff = runCatching { client.getGitDiff(origin, file) }.getOrNull()
+            val diff = runCatching { client(origin).getGitDiff(origin, file) }.getOrNull()
             _state.update { it.copy(gitDiff = diff, gitLoading = false) }
         }
     }
@@ -106,7 +117,7 @@ class HostToolsController(
     fun stageGitFile(file: String, stage: Boolean) {
         val origin = _state.value.origin ?: return
         scope.launch {
-            runCatching { client.stageGitFile(origin, file, stage) }
+            runCatching { client(origin).stageGitFile(origin, file, stage) }
             loadGitStatus()
         }
     }
@@ -115,7 +126,7 @@ class HostToolsController(
         val origin = _state.value.origin ?: return
         scope.launch {
             _state.update { it.copy(gitLoading = true) }
-            runCatching { client.commitGit(origin, message) }
+            runCatching { client(origin).commitGit(origin, message) }
             loadGitStatus()
         }
     }
@@ -127,7 +138,7 @@ class HostToolsController(
             val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
             val runningEntry = TerminalLogEntry(command = command, result = null, isRunning = true, timestamp = time)
             _state.update { it.copy(terminalLogs = it.terminalLogs + runningEntry, terminalExecuting = true) }
-            val res = runCatching { client.executeTerminalCommand(origin, command) }.getOrElse {
+            val res = runCatching { client(origin).executeTerminalCommand(origin, command) }.getOrElse {
                 TerminalExecResult(ok = false, exitCode = 1, stderr = it.message.orEmpty())
             }
             _state.update { st ->
@@ -144,15 +155,16 @@ class HostToolsController(
     fun checkUpdates() {
         val origin = _state.value.origin ?: return
         scope.launch {
-            val status = runCatching { client.checkHermesUpdate(origin) }.getOrNull()
-            _state.update { it.copy(updateStatus = status) }
+            _state.update { it.copy(updateLoading = true) }
+            val status = runCatching { client(origin).checkHermesUpdate(origin) }.getOrNull()
+            _state.update { it.copy(updateStatus = status ?: it.updateStatus, updateLoading = false) }
         }
     }
 
     fun applyUpdate() {
         val origin = _state.value.origin ?: return
         scope.launch {
-            runCatching { client.applyHermesUpdate(origin) }
+            runCatching { client(origin).applyHermesUpdate(origin) }
             checkUpdates()
         }
     }
@@ -165,21 +177,21 @@ class HostToolsController(
             operatorCreds.saveGateways(initial)
             initial
         } else {
-            gateways.map { it.copy(isActive = it.origin == currentOrigin) }
+            gateways.map { it.copy(isActive = currentOrigin != null && HostClientPool.key(it.origin) == HostClientPool.key(currentOrigin)) }
         }
         _state.update { it.copy(savedGateways = withActive) }
     }
 
     fun addSavedGateway(name: String, origin: String) {
         val current = operatorCreds.loadGateways().toMutableList()
-        val existingIdx = current.indexOfFirst { it.origin == origin }
+        val existingIdx = current.indexOfFirst { HostClientPool.key(it.origin) == HostClientPool.key(origin) }
         val newGw = SavedGateway(id = origin, name = name, origin = origin, isActive = true)
         if (existingIdx >= 0) {
             current[existingIdx] = newGw
         } else {
             current.add(newGw)
         }
-        val updated = current.map { it.copy(isActive = it.origin == origin) }
+        val updated = current.map { it.copy(isActive = HostClientPool.key(it.origin) == HostClientPool.key(origin)) }
         operatorCreds.saveGateways(updated)
         _state.update { it.copy(savedGateways = updated) }
         onConnect(origin)

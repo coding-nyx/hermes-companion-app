@@ -37,6 +37,8 @@ import androidx.compose.ui.unit.dp
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
+import app.hermes.companion.design.FetchPane
+import app.hermes.companion.design.FetchRow
 import app.hermes.companion.design.Hairline
 import app.hermes.companion.model.GitDiffSummary
 import app.hermes.companion.model.GitStatus
@@ -85,7 +87,7 @@ fun CodeReviewScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = if (isLoading) "SYNCING..." else "REFRESH",
+                    text = if (isLoading) "SYNCING" else "REFRESH",
                     style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
                     modifier = Modifier
                         .testTag("review.refresh")
@@ -161,10 +163,18 @@ fun CodeReviewScreen(
                         .background(CompanionColor.VoidElevated)
                         .padding(CompanionSpace.Md),
                 ) {
-                    if (diff.rawDiff.isBlank()) {
-                        Text(
-                            text = "NO DIFF CHANGES",
-                            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                    if (isLoading && diff.rawDiff.isBlank()) {
+                        FetchPane(
+                            label = "LOADING DIFF",
+                            hint = "// handshake",
+                            scanning = true,
+                            modifier = Modifier.testTag("review.diff.loading"),
+                        )
+                    } else if (diff.rawDiff.isBlank()) {
+                        FetchPane(
+                            label = "NO DIFF CHANGES",
+                            hint = "// idle",
+                            modifier = Modifier.testTag("review.diff.empty"),
                         )
                     } else {
                         val lines = remember(diff.rawDiff) { diff.rawDiff.lines() }
@@ -185,29 +195,37 @@ fun CodeReviewScreen(
                     }
                 }
             }
+        } else if (isLoading && status == null) {
+            FetchPane(
+                label = "SYNCING WORKING TREE",
+                hint = "// handshake",
+                scanning = true,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("review.loading"),
+            )
         } else {
-            // File List
+            val treeEmpty = status?.stagedFiles.isNullOrEmpty() &&
+                status?.modifiedFiles.isNullOrEmpty() &&
+                status?.untrackedFiles.isNullOrEmpty()
+            if (isLoading) {
+                FetchRow(label = "SYNCING", modifier = Modifier.testTag("review.loading"))
+            }
+            if (treeEmpty && !isLoading) {
+                FetchPane(
+                    label = "WORKING TREE CLEAN",
+                    hint = "// no changes",
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("review.empty"),
+                )
+            } else {
             LazyColumn(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
                     .padding(horizontal = CompanionSpace.Lg),
             ) {
-                if ((status?.stagedFiles.isNullOrEmpty() && status?.modifiedFiles.isNullOrEmpty() && status?.untrackedFiles.isNullOrEmpty())) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(200.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "WORKING TREE CLEAN // NO CHANGES",
-                                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                            )
-                        }
-                    }
-                }
 
                 if (!status?.stagedFiles.isNullOrEmpty()) {
                     item {
@@ -268,6 +286,7 @@ fun CodeReviewScreen(
                         )
                     }
                 }
+            }
             }
         }
         Hairline()

@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.testTag
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
+import app.hermes.companion.design.FetchPane
 import app.hermes.companion.design.ProfileGlyph
 import app.hermes.companion.model.ProfileRef
 
@@ -46,7 +47,13 @@ fun ProfilesScreen(
         }
         Spacer(Modifier.height(CompanionSpace.Xl))
         if (active == null) {
-            Text(text = "NO PROFILES", style = CompanionType.Mono)
+            FetchPane(
+                label = "NO PROFILES",
+                hint = "// idle",
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("profiles.empty"),
+            )
         } else {
             Text(text = active.displayName, style = CompanionType.Body)
             Spacer(Modifier.height(CompanionSpace.Md))
