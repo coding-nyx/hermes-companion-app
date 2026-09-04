@@ -29,7 +29,7 @@
 | **P15** | Code Review, Diff Inspector & Git Workspace | A15.1 – A15.5 | ⚠️ **45%** (1 done, 3 partial) | P1 | v0.8.0 |
 | **P16** | Host Workspace Files, Artifacts & Skill Hub | A16.1 – A16.4 | ⚠️ **10%** (0.5/4 done) | P2 | v0.9.0 |
 | **P17** | App & Host Update Lifecycle | A17.1 – A17.3 | ⚠️ **65%** (2/3 done) | P1 | v0.3.0 |
-| **P18** | Threads & Chat Polish (loading, rich text, delete, keyboard, gateway picker, profile switch) | A18.1 – A18.6 | 🔲 **Planned** | P1 | v0.3.0 |
+| **P18** | Threads & Chat Polish (bottom bar, keyboard, loading, rich text, delete, gateway picker) | A18.1 – A18.7 | ⚠️ **15%** (A18.6 done; **A18.7 + A18.4 next**) | P1 | v0.3.0 |
 | **P20** | Dashboard-Independent Operator Lane (plugin serves the operator API) | A20.1 – A20.3 | 🔲 **Planned** | P2 | v0.9.0 |
 | **P19** | OpenClaw Gateway Support (second host kind) | A19.1 – A19.4 | 🔲 **Planned (last)** | P2 | v1.0.0 |
 
@@ -125,8 +125,9 @@ Allows the companion to connect to multiple Hermes installations and seamlessly 
 - **Verified**: Live on S22 — shows `Primary Host http://100.85.151.99:9120 ACTIVE`.
 
 #### A8.3 · Per-Host Cache & Credential Isolation 🔲 PENDING
-- **Deliverable**: Partition `TranscriptCache`, `OutboxStore`, and `DeviceCredStore` by `(host_id, profile_id)`.
-- **Acceptance Criteria**: Zero cross-host data leakage; offline history for Host A is isolated from Host B.
+- **Problem (seen live 2026-09-04)**: `DeviceCredStore` holds **one** device credential with the origin that issued it. Connected to hub-11 the HANDS tab shows UNPAIRED / PAIR because the stored credential is lab's; pairing on hub would overwrite it. Each relay keeps its own pairing store, so one phone should hold one credential **per host**.
+- **Deliverable**: Partition `TranscriptCache`, `OutboxStore`, and `DeviceCredStore` by `(host_id, profile_id)`; `DeviceCredStore` becomes a map keyed by origin (migration: existing record → its own origin). `DeviceNodeCoordinator.bind(origin)` picks the credential for that origin; HANDS shows `PAIRED` per host and REVOKE only revokes that host's record.
+- **Acceptance Criteria**: Zero cross-host data leakage; offline history for Host A is isolated from Host B; the S22 can be paired to lab and hub-11 at the same time and switching gateways flips the device lane without re-pairing.
 - **Estimate**: 1.5 days | **Dependencies**: A8.1
 
 #### A8.4 · Multi-Host Health Monitor 🔲 PENDING
@@ -419,7 +420,20 @@ Manages updates for both the host Hermes Agent installation and the companion An
 
 Operator-side polish requested after the first P7 device pass: the thread rail gives no feedback while it loads, assistant markdown renders as raw text, and threads cannot be removed from the phone.
 
+**Order (2026-09-04):** A18.7 bottom-bar redesign → A18.4 keyboard handling → A18.1 loading → A18.5 gateway picker → A18.2 markdown → A18.3 delete threads.
+
 ### Work Items
+
+#### A18.7 · Bottom Bar Redesign — Profile Glyph, Tab Glyphs, IME-Aware Chrome 🔲 PENDING (**next**)
+- **Problem**: The bottom bar is six evenly spaced mono labels (`CHAT TERM DIFF CRON HOST HANDS`) with no room for anything else; the profile switcher had to live in the header (A18.6). With the keyboard open the bar still takes height under the IME on some screens, and there is no visual state beyond label colour.
+- **Design** (void `#07080A`, signal `#00E5C3`, hairline chrome, IBM Plex):
+  - **Two-zone bar, 56 dp + nav-bar inset.** Left zone: the active **profile glyph** (36 dp hairline box, e.g. `KNI`) — tap opens a **bottom sheet** of profile chips (glyph + name + model, active in signal, `ALL ▸` to the profiles tab); long-press cycles to the next profile. The header glyph stays as status and keeps the inline picker for now; header and bar never both show a picker at once.
+  - Right zone: six **tab glyphs** (`▤ chat`, `>_ term`, `±  diff`, `◷ cron`, `⌂ host`, `✋ hands` — Plex Mono glyph over an 11 sp label), 44 dp touch targets, active item = signal glyph + 2 dp signal underline, inactive = TextMute. Labels drop and glyphs stay when width < 360 dp.
+  - **Badges**: signal dot on `chat` for unread threads, warn dot on `hands` while ARMED, warn dot on `host` when a gateway is down.
+  - **IME-aware**: the bar collapses to 0 dp while `WindowInsets.isImeVisible` (composer and inputs sit directly on the IME); it returns on IME hide with `CompanionMotion.SnapMs`. Back with the IME open only closes the IME (already partly in place).
+  - `testTag("nav.profile")`, `nav.<tab>` unchanged; nav state survives rotation.
+- **Acceptance Criteria**: On the S22 the bar shows the profile glyph and six tab glyphs without truncation; tapping the glyph opens the sheet and picking `coder` swaps rail and glyphs; with the chat composer focused the bar is gone and reappears on dismiss; unread / armed / host-down badges render.
+- **Estimate**: 1 day | **Dependencies**: A18.6 ✅
 
 #### A18.1 · Thread List & Chat Loading States 🔲 PENDING
 - **Problem**: `ThreadsScreen` shows `NO SESSIONS // waiting` both while the roster is loading and when it is genuinely empty; profile switches and reconnects give no progress cue. Opening a chat shows an empty transcript until the first page lands.
@@ -542,8 +556,10 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 
 | ID | Item | Est. | Status |
 |---|---|:---:|:---:|
+| **A18.7** | **Bottom bar redesign: profile glyph + tab glyphs + IME-aware (next)** | 1d | 🔲 |
+| **A18.4** | **Keyboard & text field handling (next)** | 1d | 🔲 |
 | A8.1 | Multi-Host Room Schema (upgrade from SharedPrefs) | 1d | ⚠️ |
-| A8.3 | Per-Host Cache & Credential Isolation | 1.5d | 🔲 |
+| A8.3 | Per-Host Cache & Credential Isolation (incl. per-host device pairing) | 1.5d | 🔲 |
 | A8.4 | Multi-Host Health Monitor | 1d | 🔲 |
 | A9.3 | Protocol Model Override Parameter | 1d | 🔲 |
 | A9.4 | Model Sampling Parameters Drawer | 1.5d | 🔲 |
@@ -566,11 +582,10 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 | A18.1 | Thread list & chat loading states | 0.5d | 🔲 |
 | A18.2 | Rich text (markdown) rendering in chat | 1.5d | 🔲 |
 | A18.3 | Delete threads (long-press + confirm) | 1d | 🔲 |
-| A18.4 | Keyboard & text field handling | 1d | 🔲 |
 | A18.5 | Gateway picker on Connect screen (saved + paired, health, last-good origin) | 1d | 🔲 |
 | A18.6 | Restore profile switching (header glyph → inline picker + profiles tab) | 0.5d | ✅ |
 
-**P1 Total Remaining**: ~43 days
+**P1 Total Remaining**: ~44 days
 
 ### 🔵 P2 Future — Planned Features
 
@@ -653,6 +668,8 @@ graph TD
     A18.1[A18.1 Loading States] --> A18.3[A18.3 Delete Threads]
     A18.2[A18.2 Markdown Rendering] --> A13.3[A13.3 Slash Autocomplete]
     A18.4[A18.4 Keyboard Handling] --> A13.3
+    A18.6[A18.6 Profile Picker ✅] --> A18.7[A18.7 Bottom Bar Redesign]
+    A18.7 --> A18.4
     A8.2 --> A18.5[A18.5 Connect Gateway Picker]
     A18.5 --> A8.4
 
@@ -674,6 +691,7 @@ graph TD
     style A7.4 fill:#1a472a,stroke:#2ea043
     style A7.7 fill:#1a472a,stroke:#2ea043
     style A7.8 fill:#1a472a,stroke:#2ea043
+    style A18.6 fill:#1a472a,stroke:#2ea043
     style A8.2 fill:#1a472a,stroke:#2ea043
     style A9.1 fill:#1a472a,stroke:#2ea043
     style A9.2 fill:#1a472a,stroke:#2ea043
