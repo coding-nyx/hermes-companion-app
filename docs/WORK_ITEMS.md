@@ -148,8 +148,14 @@ Allows the companion to connect to multiple Hermes installations and seamlessly 
   4. Managers per host: `SyncManager` and `HostToolsController` instances live in a `HostSession` object created by the pool; only the **active** host runs the operator WS/HUD; every **paired** host keeps a device lane (so Hermes on lab can still move the phone while you read hub threads). `DeviceNodeCoordinator` becomes per-host lanes behind one arm state and one denylist (phone-wide safety).
   5. Wake + deep links carry the host: plugin `WakePing` gains `origin` (falls back to the ping's ntfy topic → host mapping); `hermes-companion://open?host=…&session=…&profile=…`; `WakeNotifier` groups notifications by host.
   6. UI: header shows `host · profile` (host chip left of the glyph, tap → host sheet; A18.7 bar picks this up), HANDS shows the paired state **for the connected host**, HOST tab lists per-host health (A8.4), Connect screen picker (A18.5).
-  7. Tests: `HostClientPoolTest` with two `MockWebServer`s proving tokens/cookies never cross; Room isolation test (exists, extend); `WakePolicyTest` for host field; migration test.
-- **Acceptance Criteria**: Log in to lab (token mode) and hub-11 (password mode), switch between them repeatedly: no auth header from one host is sent to the other (MockWebServer assertion + live logcat check); each host remembers its own profile; HANDS shows PAIRED on both after pairing each; an ntfy ping from hub opens the hub session even while lab is active; the device lane on lab stays live while hub is the active operator host.
+  7. **Notifications name the host.** Every notification the app posts carries the host it belongs to and is re-posted when the active host changes:
+     - `StayConnectedService` (id 17): title `HERMES CONNECTED · <host name>`, text `<origin> · <profile>`; updated via `notify()` on gateway switch, not just at service start. Tap opens the app **on that host** (host in the intent, trusted nonce).
+     - `HandsService` (id 31): `HERMES HAS HANDS · <host name>` so it is clear which Hermes can move the phone; with several paired lanes live the text lists them (`lab, hub-11`). DISARM stays one tap for all lanes.
+     - `WakeNotifier` (per session): title `<type> · <host name>`, text `<profile> · <session>`, grouped per host (`setGroup(hostId)` + summary), tap deep-links with `host=`.
+     - Wake-word / voice service notification shows the host it will send to.
+     - Host name = `SavedGateway.name` (fallback: origin host), never a bare IP when a name exists.
+  8. Tests: `HostClientPoolTest` with two `MockWebServer`s proving tokens/cookies never cross; Room isolation test (exists, extend); `WakePolicyTest` for host field; migration test; notification-content unit test via `NotificationCompat` extras (`EXTRA_TITLE` contains host name).
+- **Acceptance Criteria**: Log in to lab (token mode) and hub-11 (password mode), switch between them repeatedly: no auth header from one host is sent to the other (MockWebServer assertion + live logcat check); each host remembers its own profile; HANDS shows PAIRED on both after pairing each; an ntfy ping from hub opens the hub session even while lab is active; the device lane on lab stays live while hub is the active operator host; **the shade shows `HERMES CONNECTED · hub-11` within a second of switching to hub and `HERMES HAS HANDS · lab` while lab's lane is armed** (`adb shell dumpsys notification --noredact` check).
 - **Estimate**: 3 days | **Dependencies**: A7.4 ✅, A8.1 (Room host schema — fold in), supersedes the credential part of A8.3
 
 #### A8.4 · Multi-Host Health Monitor 🔲 PENDING
@@ -580,7 +586,7 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 |---|---|:---:|:---:|
 | **A18.7** | **Bottom bar redesign: profile glyph + tab glyphs + IME-aware (next)** | 1d | 🔲 |
 | **A18.4** | **Keyboard & text field handling (next)** | 1d | 🔲 |
-| **A8.5** | **Host-scoped everything: client pool, per-host creds/profile/ntfy, per-host lanes, host in wake + deep link (3rd)** | 3d | 🔲 |
+| **A8.5** | **Host-scoped everything: client pool, per-host creds/profile/ntfy, per-host lanes, host in wake + deep link, host named in every notification (3rd)** | 3d | 🔲 |
 | A8.1 | Multi-Host Room Schema (upgrade from SharedPrefs) — folded into A8.5 | 1d | ⚠️ |
 | A8.3 | Per-Host Cache & Credential Isolation (incl. per-host device pairing) | 1.5d | 🔲 |
 | A8.4 | Multi-Host Health Monitor | 1d | 🔲 |
