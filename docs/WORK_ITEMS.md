@@ -29,7 +29,7 @@
 | **P15** | Code Review, Diff Inspector & Git Workspace | A15.1 – A15.5 | ⚠️ **45%** (1 done, 3 partial) | P1 | v0.8.0 |
 | **P16** | Host Workspace Files, Artifacts & Skill Hub | A16.1 – A16.4 | ⚠️ **10%** (0.5/4 done) | P2 | v0.9.0 |
 | **P17** | App & Host Update Lifecycle | A17.1 – A17.3 | ⚠️ **65%** (2/3 done) | P1 | v0.3.0 |
-| **P18** | Threads & Chat Polish (bottom bar, keyboard, loading, rich text, delete, gateway picker) | A18.1 – A18.7 | ⚠️ **15%** (A18.6 done; **A18.7 + A18.4 next**) | P1 | v0.3.0 |
+| **P18** | Threads & Chat Polish (keyboard, history bug, loading, rich text, bottom bar, delete, gateway picker) | A18.1 – A18.8 | ⚠️ **12%** (A18.6 done; **A18.4 next**) | P1 | v0.3.0 |
 | **P20** | Dashboard-Independent Operator Lane (plugin serves the operator API) | A20.1 – A20.3 | 🔲 **Planned** | P2 | v0.9.0 |
 | **P19** | OpenClaw Gateway Support (second host kind) | A19.1 – A19.4 | 🔲 **Planned (last)** | P2 | v1.0.0 |
 
@@ -300,10 +300,13 @@ Expands power-user and multimodal features.
 
 ### Work Items
 
-#### A13.1 · Multimodal Camera & Image Attachments 🔲 PENDING
-- **Deliverable**: Photo picker and direct camera snapshot button in composer. Images downscaled and encoded into `prompt.submit` JSON-RPC frames.
-- **Acceptance Criteria**: Hermes vision models receive and reason over camera snapshots.
-- **Estimate**: 2.5 days | **Dependencies**: None
+#### A13.1 · Images in Chat — Inbound Rendering + Outbound Attachments ⬆️ PROMOTED TO P1 (2026-09-04) 🔲 PENDING
+- **Problem**: No image support at all. Assistant/tool turns that carry images (screenshots from `mobile_screenshot`, generated images, Telegram photos) render as text or nothing; the composer cannot attach a photo.
+- **Deliverable**:
+  - **Inbound** (with A18.2): message `content` parts of type `image` / `image_url` / data-URI markdown `![alt](data:image/png;base64,…)` / dashboard `/api/chat/image-upload` URLs become `ChatBlock.Image` → thumbnail in the transcript (max 240 dp, hairline frame, tap → full-screen viewer with pinch-zoom, long-press → save/share). Fetched through the host's authenticated `DashboardClient` (per-host, A8.5), disk-cached by URL hash, never re-downloaded on scroll. Tool rows for `device.screenshot` show the PNG inline instead of `png_b64` text.
+  - **Outbound**: composer `+` → photo picker (Photo Picker API, no storage permission) and camera capture (`ACTION_IMAGE_CAPTURE` via `FileProvider`); downscale to ≤ 1568 px longest edge, JPEG q85, ≤ 1.5 MB; upload via `POST /api/chat/image-upload?profile=` (dashboard) and reference in `prompt.submit`, or inline base64 part when the host lacks the upload route. Pending attachments show as chips above the composer; outbox persists attachment paths.
+- **Acceptance Criteria**: A `mobile_screenshot` result shows the screenshot inline on the S22; a Telegram photo in a knight thread renders as a thumbnail and opens full-screen; attaching a camera shot and sending produces a vision-model answer about the image; airplane mode → attachment stays queued in the outbox and sends on reconnect.
+- **Estimate**: 2.5 days | **Dependencies**: A18.2, A8.5
 
 #### A13.2 · Notification Listener Service 🔲 PENDING
 - **Deliverable**: Opt-in `NotificationListenerService`. Forwards selected incoming Android notifications to Hermes agent memory or wake bus.
@@ -448,11 +451,17 @@ Manages updates for both the host Hermes Agent installation and the companion An
 
 Operator-side polish requested after the first P7 device pass: the thread rail gives no feedback while it loads, assistant markdown renders as raw text, and threads cannot be removed from the phone.
 
-**Order (2026-09-04):** A18.7 bottom-bar redesign → A18.4 keyboard handling → **A8.5 host-scoped everything (with A8.1/A8.3)** → A18.5 gateway picker → A18.1 loading → A18.2 markdown → A18.3 delete threads.
+**Order (2026-09-04, revised):** A18.4 keyboard handling → A8.5 host-scoped everything (with A8.1/A8.3) + review pass → A18.8 chats-not-loading fix + A18.1 loading states → A18.2 markdown + A13.1 images → A18.7 bottom bar → A18.5 gateway picker → A18.3 delete threads.
 
 ### Work Items
 
-#### A18.7 · Bottom Bar Redesign — Profile Glyph, Tab Glyphs, IME-Aware Chrome 🔲 PENDING (**next**)
+#### A18.8 · Chats Not Loading (history path) 🔴 BUG (reported 2026-09-04) 🔲 PENDING
+- **Problem**: Opening many threads on the S22 shows an empty or stuck transcript. REST probe from the Mac with the loopback token: hub-11 `default` 16/16 sessions return history, lab `knight` 56/60 return history, the 4 empties are ended Telegram sessions (`end_reason=agent_close`, `message_count` 8–124) that return `[]` from `GET /api/sessions/{id}/messages` — so the server has the rows but the endpoint does not return them for those sessions. The app, however, prefers the **RPC** path (`session.resume` + `session.history` over `/api/ws`) and only falls back to REST when the RPC call throws — an RPC page that is empty (ended / archived / foreign-live-id session) is accepted as the answer, so REST never runs.
+- **Deliverable**: (1) `pageMessages`: treat an empty first RPC page as a miss and fall back to REST; carry `order=latest` like the dashboard SPA; log which path served the page (`historySource` in state for the loading row). (2) Investigate the 4 REST-empty Telegram sessions against the dashboard SPA (does the Sessions page show their transcript? if yes, find the query it uses; if no, mark `ended` in the rail). (3) `session.resume` must not be called for ended sessions (it can spawn a fresh live session and shift the live-id map). (4) Loading/empty/error states in `ChatScreen` (`loading transcript`, `no messages`, `history failed · retry`) instead of a blank list. (5) Unit tests: RPC-empty → REST fallback; ended session → no resume.
+- **Acceptance Criteria**: Every thread in the rail on both hosts opens with its transcript or an explicit `no messages` / `history failed` row within 3 s; the 4 known Telegram sessions either render or are labelled; no thread shows a blank list.
+- **Estimate**: 1 day | **Dependencies**: None
+
+#### A18.7 · Bottom Bar Redesign — Profile Glyph, Tab Glyphs, IME-Aware Chrome 🔲 PENDING
 - **Problem**: The bottom bar is six evenly spaced mono labels (`CHAT TERM DIFF CRON HOST HANDS`) with no room for anything else; the profile switcher had to live in the header (A18.6). With the keyboard open the bar still takes height under the IME on some screens, and there is no visual state beyond label colour.
 - **Design** (void `#07080A`, signal `#00E5C3`, hairline chrome, IBM Plex):
   - **Two-zone bar, 56 dp + nav-bar inset.** Left zone: the active **profile glyph** (36 dp hairline box, e.g. `KNI`) — tap opens a **bottom sheet** of profile chips (glyph + name + model, active in signal, `ALL ▸` to the profiles tab); long-press cycles to the next profile. The header glyph stays as status and keeps the inline picker for now; header and bar never both show a picker at once.
@@ -584,9 +593,11 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 
 | ID | Item | Est. | Status |
 |---|---|:---:|:---:|
-| **A18.7** | **Bottom bar redesign: profile glyph + tab glyphs + IME-aware (next)** | 1d | 🔲 |
 | **A18.4** | **Keyboard & text field handling (next)** | 1d | 🔲 |
-| **A8.5** | **Host-scoped everything: client pool, per-host creds/profile/ntfy, per-host lanes, host in wake + deep link, host named in every notification (3rd)** | 3d | 🔲 |
+| **A8.5** | **Host-scoped everything: client pool, per-host creds/profile/ntfy, per-host lanes, host in wake + deep link, host named in every notification (2nd)** | 3d | 🔲 |
+| **A18.8** | **Chats not loading — RPC-empty → REST fallback, ended sessions, explicit states (3rd)** | 1d | 🔲 |
+| A18.7 | Bottom bar redesign: profile glyph + tab glyphs + IME-aware | 1d | 🔲 |
+| A13.1 | Images in chat: inbound thumbnails/viewer + camera/photo attachments (promoted from P2) | 2.5d | 🔲 |
 | A8.1 | Multi-Host Room Schema (upgrade from SharedPrefs) — folded into A8.5 | 1d | ⚠️ |
 | A8.3 | Per-Host Cache & Credential Isolation (incl. per-host device pairing) | 1.5d | 🔲 |
 | A8.4 | Multi-Host Health Monitor | 1d | 🔲 |
@@ -614,7 +625,7 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 | A18.5 | Gateway picker on Connect screen (saved + paired, health, last-good origin) | 1d | 🔲 |
 | A18.6 | Restore profile switching (header glyph → inline picker + profiles tab) | 0.5d | ✅ |
 
-**P1 Total Remaining**: ~47 days
+**P1 Total Remaining**: ~50.5 days
 
 ### 🔵 P2 Future — Planned Features
 
@@ -625,7 +636,6 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 | A12.3 | Biometric Dismissal | 2d | 🔲 |
 | A12.4 | Safe Lock Automation | 2d | 🔲 |
 | A12.5 | Ambient HUD & Hardware Chord | 1d | 🔲 |
-| A13.1 | Camera & Image Attachments | 2.5d | 🔲 |
 | A13.2 | Notification Listener Service | 3d | 🔲 |
 | A13.3 | Slash Command Autocomplete | 1.5d | 🔲 |
 | A13.4 | Tool Inspection Drawer | 2d | 🔲 |
@@ -642,7 +652,7 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 | A19.3 | OpenClaw operator lane | 3d | 🔲 |
 | A19.4 | OpenClaw node lane (Hands) | 3d | 🔲 |
 
-**P2 Total Remaining**: ~42 days (OpenClaw last)
+**P2 Total Remaining**: ~39.5 days (OpenClaw last)
 
 ---
 
@@ -700,6 +710,10 @@ graph TD
     A18.6[A18.6 Profile Picker ✅] --> A18.7[A18.7 Bottom Bar Redesign]
     A18.7 --> A18.4
     A18.4 --> A8.5[A8.5 Host-Scoped Everything]
+    A8.5 --> A18.8[A18.8 Chats Not Loading]
+    A18.8 --> A18.1
+    A18.2 --> A13.1[A13.1 Images in Chat]
+    A8.5 --> A13.1
     A7.4 --> A8.5
     A8.5 --> A8.3
     A8.5 --> A8.4
