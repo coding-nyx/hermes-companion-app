@@ -507,6 +507,8 @@ IDs are the unit of work. Each is a PR-sized slice.
 | A1.6 | Gateway HUD from `/api/status` | REST |
 | A1.7 | New thread = `session.create` then navigate | JSON-RPC |
 | A1.8 | Room cache for sessions/messages (read-through) | local |
+| A1.9 | History paging: cap `session.history` / REST `limit`, load older | JSON-RPC + REST |
+| A1.10 | Chat rich text editor: multiline markdown composer, hairline chrome; send/interrupt unchanged | local UI |
 
 #### P2 — Sync and control plane
 
@@ -551,6 +553,23 @@ IDs are the unit of work. Each is a PR-sized slice.
 | A5.3 | Background WS with a user-visible “stay connected” toggle (foreground service) |
 | A5.4 | Design QA against D3 frames; 360 and 412 widths |
 | A5.5 | Crash-safe disarm if the service is killed |
+
+#### P6 — Hands completion (from S22 2026-09-04)
+
+A3–A5 code is in. Pairing + device lane work against the host relay. Hermes still cannot *use* the phone: the plugin is not installed on lab, tools talk to an in-process mock, and permission onboarding dumps the user into generic Settings.
+
+Do **not** restore laptop SSH hops. Origin stays `http://<tailscale>:9120`.
+
+| ID | Work item | Done when |
+|---|---|---|
+| A6.1 | Permission checklist on Device | **done (code)** A11Y / OVERLAY / NOTIFY rows with on/off. ENABLE A11Y copy names **Installed apps → Hermes Companion** (Samsung). ENABLE OVERLAY uses `ACTION_MANAGE_OVERLAY_PERMISSION`. `POST_NOTIFICATIONS` requested at runtime (API 33+) before ARM/FGS. Recap on `ON_RESUME`. Cannot auto-grant a11y. |
+| A6.2 | ARM gated on permissions | **done (code)** ARM only after a11y on. Overlay is the visible tell — prompt ENABLE OVERLAY if off, still fail-closed for commands without a11y. NOTIFY required before ARM. After grant, Device tab offers ARM immediately. |
+| A6.3 | Plugin live broker | **code in repo — install on host pending** `LiveDevice` waits for `mobile.controller.result` on the relay lane (not `MockDevice`). `HERMES_COMPANION_RELAY=0` uses HTTP `/companion/device/command`. Fail-closed if lane down / disarmed. |
+| A6.4 | Volume-down chord disarm | **done (code)** Double volume-down within 400ms, same path as notification DISARM. |
+| A6.5 | Chat SEND above nav/IME | **done (code)** Composer `navigationBarsPadding` + existing `imePadding`. |
+| A6.6 | M2 device-verify | **pending device** snapshot already ok while ARMED; still need tap fixture, overlay + `HERMES HAS HANDS`, notification DISARM, `protected_package`, disarmed noop. |
+
+Order: **A6.1 → A6.2** (app) in parallel with **A6.3** (plugin). Then **A6.4**, **A6.5**, **A6.6**.
 
 #### Hermes plugin work items (parallel)
 

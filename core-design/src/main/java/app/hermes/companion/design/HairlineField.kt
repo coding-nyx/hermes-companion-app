@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -20,6 +21,7 @@ fun HairlineField(
     modifier: Modifier = Modifier,
     imeAction: ImeAction = ImeAction.Done,
     keyboardType: KeyboardType = KeyboardType.Uri,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
     onDone: () -> Unit = {},
 ) {
     BasicTextField(
@@ -32,6 +34,7 @@ fun HairlineField(
         textStyle = CompanionType.Mono.copy(color = CompanionColor.Text),
         cursorBrush = SolidColor(CompanionColor.Signal),
         singleLine = true,
+        visualTransformation = visualTransformation,
         keyboardOptions = KeyboardOptions(
             keyboardType = keyboardType,
             imeAction = imeAction,

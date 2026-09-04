@@ -3,11 +3,12 @@ package app.hermes.companion.profiles
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -33,8 +34,8 @@ fun ProfilesScreen(
             .padding(CompanionSpace.Lg)
             .testTag("profiles.list"),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
-            profiles.forEach { profile ->
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
+            items(profiles, key = { it.id }) { profile ->
                 ProfileGlyph(
                     code = profile.glyph,
                     selected = profile.id == activeId,

@@ -2,7 +2,7 @@
 
 STATUS = {
     "name": "mobile_status",
-    "description": "Paired Android device status: armed, foreground app. Fails if unpaired.",
+    "description": "Paired Android device: armed, foreground app, a11y, overlay. Fails if unpaired.",
     "parameters": {"type": "object", "properties": {}},
 }
 
@@ -49,5 +49,83 @@ PRESS = {
             "key": {"type": "string", "enum": ["back", "home", "recents"]},
         },
         "required": ["key"],
+    },
+}
+
+SWIPE = {
+    "name": "mobile_swipe",
+    "description": "Swipe from (x1,y1) to (x2,y2), by dx/dy from center, or between snapshot refs.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "x1": {"type": "number"},
+            "y1": {"type": "number"},
+            "x2": {"type": "number"},
+            "y2": {"type": "number"},
+            "dx": {"type": "number"},
+            "dy": {"type": "number"},
+            "from_ref": {"type": "string"},
+            "to_ref": {"type": "string"},
+        },
+    },
+}
+
+SCROLL = {
+    "name": "mobile_scroll",
+    "description": "Scroll the screen or a snapshot node. direction: up, down, left, right.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
+            "ref": {"type": "string"},
+        },
+        "required": ["direction"],
+    },
+}
+
+OPEN = {
+    "name": "mobile_open_app",
+    "description": "Launch a package from a prior mobile_apps list. Blocked on protected packages.",
+    "parameters": {
+        "type": "object",
+        "properties": {"package": {"type": "string"}},
+        "required": ["package"],
+    },
+}
+
+APPS = {
+    "name": "mobile_apps",
+    "description": "Launchable packages on the paired device.",
+    "parameters": {"type": "object", "properties": {}},
+}
+
+WAIT = {
+    "name": "mobile_wait",
+    "description": "Pause up to 5 seconds while ARMED.",
+    "parameters": {
+        "type": "object",
+        "properties": {"ms": {"type": "integer", "minimum": 0, "maximum": 5000}},
+        "required": ["ms"],
+    },
+}
+
+ARM = {
+    "name": "mobile_arm",
+    "description": "Arm the paired Android companion so mobile_* gestures run. Fails if accessibility is off. Phone still fail-closes without a11y.",
+    "parameters": {"type": "object", "properties": {}},
+}
+
+DISARM = {
+    "name": "mobile_disarm",
+    "description": "Disarm the paired Android companion immediately. Same kill switch as the phone DISARM control and volume-down chord.",
+    "parameters": {"type": "object", "properties": {}},
+}
+
+SCREENSHOT = {
+    "name": "mobile_screenshot",
+    "description": "PNG screenshot, max edge 1080, no EXIF. Prefer mobile_snapshot.",
+    "parameters": {
+        "type": "object",
+        "properties": {"max_edge": {"type": "integer", "minimum": 64, "maximum": 1080}},
     },
 }

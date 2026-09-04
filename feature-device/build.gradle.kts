@@ -17,8 +17,10 @@ android {
 }
 
 dependencies {
+    implementation(project(":core-model"))
     implementation(project(":core-design"))
     implementation(project(":domain"))
+    implementation(libs.androidx.core.ktx)
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)

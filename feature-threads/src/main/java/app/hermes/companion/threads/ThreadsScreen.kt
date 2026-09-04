@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
@@ -74,9 +75,17 @@ fun ThreadsScreen(
                         style = CompanionType.Body.copy(
                             color = if (session.unread) CompanionColor.Text else CompanionColor.TextDim,
                         ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
-                    Text(text = session.profileId, style = CompanionType.MonoSmall)
+                    Text(
+                        text = session.profileId,
+                        style = CompanionType.MonoSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                        softWrap = false,
+                    )
                 }
                 Hairline()
             }

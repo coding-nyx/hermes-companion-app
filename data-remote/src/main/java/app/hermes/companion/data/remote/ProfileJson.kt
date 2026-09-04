@@ -1,9 +1,13 @@
 package app.hermes.companion.data.remote
 
 import app.hermes.companion.domain.ProfileScope
+import app.hermes.companion.domain.RewindPolicy
 import app.hermes.companion.model.ApprovalPrompt
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.DashboardStatus
+import app.hermes.companion.model.DeviceTicket
+import app.hermes.companion.model.PairingStatus
+import app.hermes.companion.model.PlatformStatus
 import app.hermes.companion.model.MessageRole
 import app.hermes.companion.model.ProfileRef
 import app.hermes.companion.model.SessionChange
@@ -30,17 +34,63 @@ internal fun parseStatus(body: String): DashboardStatus {
         ?.mapNotNull { it.jsonPrimitive.contentOrNull }
         .orEmpty()
     val gateway = root["gateway"]
-    val running = when (gateway) {
+    val running = root.bool("gateway_running") || when (gateway) {
         is JsonObject -> gateway.bool("running") || gateway.str("status") == "running"
         is JsonPrimitive -> gateway.booleanOrNull == true || gateway.contentOrNull == "running"
-        else -> root.bool("gateway_running")
+        else -> false
     }
+    val gatewayState = root.str("gateway_state").ifBlank {
+        when (gateway) {
+            is JsonObject -> gateway.str("status").ifBlank { gateway.str("state") }
+            is JsonPrimitive -> gateway.contentOrNull.orEmpty()
+            else -> ""
+        }
+    }.ifBlank { if (running) "running" else "" }
+    val platformsEl = root["gateway_platforms"]
+        ?: (gateway as? JsonObject)?.get("platforms")
+        ?: root["platforms"]
     return DashboardStatus(
         authRequired = root.bool("auth_required"),
         authProviders = providers,
         version = root.str("version").ifBlank { root.str("agent_version") },
         gatewayRunning = running,
+        gatewayState = gatewayState,
+        platforms = parsePlatforms(platformsEl),
+        memoryPressure = pressureOf(root["memory"]),
+        diskPressure = pressureOf(root["disk"]),
+        exitReason = root.str("gateway_exit_reason"),
     )
+}
+
+private fun parsePlatforms(el: JsonElement?): List<PlatformStatus> = when (el) {
+    is JsonObject -> el.map { (name, value) ->
+        val obj = value as? JsonObject
+        PlatformStatus(
+            name = name,
+            state = obj?.str("state").orEmpty().ifBlank {
+                (value as? JsonPrimitive)?.contentOrNull.orEmpty()
+            },
+            error = obj?.str("error_message").orEmpty()
+                .ifBlank { obj?.str("error").orEmpty() }
+                .ifBlank { obj?.str("error_code").orEmpty() },
+        )
+    }
+    is JsonArray -> el.mapNotNull { item ->
+        val obj = item as? JsonObject ?: return@mapNotNull null
+        val name = obj.str("name").ifBlank { obj.str("platform") }.ifBlank { obj.str("id") }
+        if (name.isBlank()) null
+        else PlatformStatus(
+            name = name,
+            state = obj.str("state"),
+            error = obj.str("error_message").ifBlank { obj.str("error") }.ifBlank { obj.str("error_code") },
+        )
+    }
+    else -> emptyList()
+}
+
+private fun pressureOf(el: JsonElement?): String {
+    val obj = el as? JsonObject ?: return (el as? JsonPrimitive)?.contentOrNull.orEmpty()
+    return obj.str("pressure")
 }
 
 internal fun parseProfiles(body: String): List<ProfileRef> {
@@ -128,7 +178,8 @@ internal fun parseMessages(body: String): List<ChatMessage> {
             "tool" -> MessageRole.TOOL
             else -> MessageRole.ASSISTANT
         }
-        val id = obj.str("id").ifBlank { obj.str("row_id") }.ifBlank { "m$index" }
+        val id = obj.str("row_id").ifBlank { obj.str("_row_id") }.ifBlank { obj.str("id") }
+            .ifBlank { "m$index" }
         val text = messageText(obj)
         ChatMessage(
             id = id,
@@ -217,6 +268,52 @@ internal fun parseRpcSession(result: JsonObject, fallbackProfile: String): Sessi
         title = result.str("title").ifBlank { "new thread" },
         updatedAtEpochMs = result.long("updated_at").takeIf { it > 0 } ?: result.long("started_at"),
         unread = false,
+    )
+}
+
+internal fun parsePairing(body: String): PairingStatus {
+    val root = runCatching { DashboardJson.parseToJsonElement(body).jsonObject }.getOrNull()
+        ?: throw IllegalArgumentException("pair response was not json")
+    val status = root.str("status").ifBlank { root.str("state") }.ifBlank { "pending" }
+    return PairingStatus(
+        status = status,
+        deviceId = root.str("device_id"),
+        profileId = root.str("profile").ifBlank { root.str("profile_id") },
+        credential = root.str("credential"),
+    )
+}
+
+internal fun parseDeviceTicket(body: String): DeviceTicket {
+    val root = runCatching { DashboardJson.parseToJsonElement(body).jsonObject }.getOrNull()
+        ?: throw IllegalArgumentException("device ticket response was not json")
+    val ticket = root.str("ticket")
+    if (ticket.isBlank()) throw IllegalArgumentException("device register returned no ticket")
+    val caps = root["capabilities"]?.jsonArrayOrNull()
+        ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+        .orEmpty()
+    val ttl = root["ttl_sec"]?.jsonPrimitive?.intOrNull ?: 30
+    return DeviceTicket(ticket = ticket, capabilities = caps, ttlSec = ttl)
+}
+
+internal fun parseWsTicket(body: String): String {
+    val root = runCatching { DashboardJson.parseToJsonElement(body) }.getOrNull()
+    val obj = root as? JsonObject
+    val ticket = obj.str("ticket").ifBlank { obj.str("ws_ticket") }
+    if (ticket.isNotBlank()) return ticket
+    throw IllegalArgumentException("ws-ticket response had no ticket")
+}
+
+internal fun parseSurvivorRowIds(result: JsonObject): List<Long?>? {
+    val el = result["survivor_user_row_ids"] ?: return null
+    val arr = el as? JsonArray ?: return null
+    return RewindPolicy.survivorRowIds(
+        arr.map { item ->
+            when (item) {
+                JsonNull -> null
+                is JsonPrimitive -> item.longOrNull ?: item.intOrNull ?: item.contentOrNull
+                else -> null
+            }
+        },
     )
 }
 

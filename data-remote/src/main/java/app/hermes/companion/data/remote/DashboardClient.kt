@@ -1,12 +1,24 @@
 package app.hermes.companion.data.remote
 
+import app.hermes.companion.domain.AuthPolicy
 import app.hermes.companion.domain.DashboardUrls
+import app.hermes.companion.domain.DeviceLanePolicy
+import app.hermes.companion.domain.HistoryPaging
+import app.hermes.companion.domain.ProfileScope
+import app.hermes.companion.domain.RewindPolicy
+import app.hermes.companion.domain.RewindSubmit
 import app.hermes.companion.model.ApprovalPrompt
 import app.hermes.companion.model.BusFrame
 import app.hermes.companion.model.ChatEvent
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.DashboardStatus
+import app.hermes.companion.model.DeviceCommand
+import app.hermes.companion.model.DeviceCred
+import app.hermes.companion.model.DeviceResult
+import app.hermes.companion.model.DeviceTicket
+import app.hermes.companion.model.HistoryPage
 import app.hermes.companion.model.GatewayHello
+import app.hermes.companion.model.PairingStatus
 import app.hermes.companion.model.ProfileRef
 import app.hermes.companion.model.SessionRef
 import java.util.concurrent.ConcurrentHashMap
@@ -43,17 +55,12 @@ class DashboardClient internal constructor(
     @Volatile
     var sessionToken: String? = null
 
-    private val http: OkHttpClient = if (!attachToken) http else http.newBuilder()
-        .addInterceptor { chain ->
-            val token = sessionToken
-            val req = chain.request().newBuilder()
-            if (!token.isNullOrBlank()) {
-                req.header("X-Hermes-Session-Token", token)
-                req.header("Authorization", "Bearer $token")
-            }
-            chain.proceed(req.build())
-        }
-        .build()
+    @Volatile
+    var gated: Boolean = false
+
+    private val cookies = MemoryCookieJar()
+
+    private val http: OkHttpClient = buildHttp(http, attachToken)
 
     constructor() : this(
         OkHttpClient.Builder()
@@ -66,8 +73,10 @@ class DashboardClient internal constructor(
     internal constructor(http: OkHttpClient) : this(http, attachToken = false)
 
     private val rpcLock = Mutex()
+    private val deviceLock = Mutex()
     @Volatile private var rpc: GatewaySocket? = null
     @Volatile private var rpcKey: String? = null
+    @Volatile private var deviceWs: DeviceSocket? = null
     private val liveByStored = ConcurrentHashMap<String, String>()
     private val wsHttp: OkHttpClient by lazy {
         http.newBuilder()
@@ -79,12 +88,100 @@ class DashboardClient internal constructor(
     suspend fun probe(origin: String): DashboardStatus =
         get(DashboardUrls.machine(origin, "/api/status")) { parseStatus(it) }
 
+    fun useLoopback() {
+        gated = false
+        cookies.clear()
+    }
+
+    fun useGated() {
+        gated = true
+        sessionToken = null
+    }
+
     /** Loopback dashboards inject an ephemeral token into the SPA. Adopt it. */
     suspend fun adoptLoopbackToken(origin: String): String? {
+        if (gated) return null
         val html = runCatching { getHtml(DashboardUrls.machine(origin, "/")) }.getOrNull() ?: return null
         val token = TOKEN_RE.find(html)?.groupValues?.getOrNull(1)
         if (!token.isNullOrBlank()) sessionToken = token
         return token
+    }
+
+    suspend fun passwordLogin(
+        origin: String,
+        username: String,
+        password: String,
+        provider: String = "basic",
+    ) {
+        useGated()
+        post(
+            DashboardUrls.machine(origin, "/auth/password-login"),
+            AuthPolicy.jsonLogin(provider, username, password),
+        ) { }
+    }
+
+    suspend fun offerPair(origin: String, code: String, profileId: String): PairingStatus {
+        val id = ProfileScope.requireProfileId(profileId)
+        val payload = """{"code":${code.json()},"profile":${id.json()},"protocol_version":1}"""
+        return post(DashboardUrls.machine(origin, "/companion/device/pair"), payload) { parsePairing(it) }
+    }
+
+    suspend fun pollPair(origin: String, code: String): PairingStatus =
+        get(DashboardUrls.machine(origin, "/companion/device/pair/${code.trim()}")) { parsePairing(it) }
+
+    suspend fun revokeDevice(origin: String, deviceId: String) {
+        val payload = """{"device_id":${deviceId.json()}}"""
+        post(DashboardUrls.machine(origin, "/companion/device/revoke"), payload) { }
+    }
+
+    suspend fun registerDevice(origin: String, cred: DeviceCred): DeviceTicket {
+        val payload = DeviceLanePolicy.registerJson(cred.deviceId, cred.profileId, cred.credential)
+        return post(DashboardUrls.machine(origin, "/companion/device/register"), payload) { parseDeviceTicket(it) }
+    }
+
+    suspend fun openDeviceLane(origin: String, cred: DeviceCred) {
+        deviceLock.withLock {
+            deviceWs?.close()
+            val ticket = registerDevice(origin, cred)
+            if (ticket.ticket.isBlank()) throw DashboardException("device_ticket", "empty device ticket")
+            val socket = DeviceSocket(wsHttp)
+            socket.connect(DashboardUrls.deviceWs(origin), DeviceLanePolicy.protocolHeader(ticket.ticket))
+            deviceWs = socket
+        }
+    }
+
+    fun deviceLaneOpen(): Boolean = deviceWs?.isOpen == true
+
+    fun deviceCommands(): Flow<DeviceCommand> = callbackFlow {
+        val socket = deviceWs
+        if (socket == null) {
+            close()
+            return@callbackFlow
+        }
+        val job = launch { socket.commands.collect { trySend(it) } }
+        val wait = launch {
+            socket.awaitDisconnect()
+            close()
+        }
+        awaitClose {
+            job.cancel()
+            wait.cancel()
+        }
+    }.flowOn(Dispatchers.IO)
+
+    fun replyDevice(result: DeviceResult): Boolean = deviceWs?.send(result) == true
+
+    fun wakeEvents(sseUrl: String): Flow<String> = NtfyClient(wsHttp).events(sseUrl)
+
+    fun closeDeviceLane() {
+        deviceWs?.close()
+        deviceWs = null
+    }
+
+    suspend fun mintWsTicket(origin: String): String {
+        val ticket = post(DashboardUrls.machine(origin, "/api/auth/ws-ticket"), "{}") { parseWsTicket(it) }
+        if (ticket.isBlank()) throw DashboardException("ticket", "empty ws ticket")
+        return ticket
     }
 
     /** Machine roster. Not profile-scoped — otherwise the switcher would only see the active agent. */
@@ -101,18 +198,27 @@ class DashboardClient internal constructor(
         return listSessionsRest(origin, profileId)
     }
 
-    suspend fun listMessages(origin: String, sessionId: String, profileId: String): List<ChatMessage> {
-        val rest = runCatching { listMessagesRest(origin, sessionId, profileId) }.getOrNull()
+    suspend fun listMessages(origin: String, sessionId: String, profileId: String): List<ChatMessage> =
+        pageMessages(origin, sessionId, profileId).messages
+
+    suspend fun pageMessages(
+        origin: String,
+        sessionId: String,
+        profileId: String,
+        beforeId: String? = null,
+        limit: Int = HistoryPaging.PAGE,
+    ): HistoryPage {
+        val cap = HistoryPaging.cap(limit)
         val socket = rpc
         if (socket != null && socket.isOpen) {
-            val resumed = runCatching { resumeSession(sessionId, profileId) }.getOrNull()
-            if (resumed != null && resumed.second.isNotEmpty()) return resumed.second
-            if (resumed != null) {
-                val history = runCatching { listMessagesRpc(socket, resumed.first) }.getOrNull()
-                if (!history.isNullOrEmpty()) return history
+            if (beforeId.isNullOrBlank()) {
+                runCatching { resumeSession(sessionId, profileId) }
             }
+            val live = liveSessionId(sessionId)
+            val rpcPage = runCatching { listMessagesRpc(socket, live, profileId, cap, beforeId) }.getOrNull()
+            if (rpcPage != null) return rpcPage
         }
-        return rest ?: listMessagesRest(origin, sessionId, profileId)
+        return listMessagesRest(origin, sessionId, profileId, cap, beforeId)
     }
 
     suspend fun pendingApproval(origin: String, sessionId: String, profileId: String): ApprovalPrompt? {
@@ -258,8 +364,20 @@ class DashboardClient internal constructor(
         socket.request("session.interrupt", """{"session_id":${live.json()},"profile":${profileId.json()}}""")
     }
 
-    fun streamTurn(origin: String, sessionId: String, profileId: String, text: String): Flow<ChatEvent> {
+    fun streamTurn(
+        origin: String,
+        sessionId: String,
+        profileId: String,
+        text: String,
+        rewind: RewindSubmit? = null,
+    ): Flow<ChatEvent> {
         val socket = rpc
+        if (rewind != null) {
+            if (socket == null || !socket.isOpen) {
+                return flow { throw DashboardException("rpc_required", "rewind needs live gateway") }
+            }
+            return streamTurnRpc(socket, sessionId, profileId, text, rewind)
+        }
         if (socket != null && socket.isOpen) return streamTurnRpc(socket, sessionId, profileId, text)
         return streamTurnSse(origin, sessionId, profileId, text)
     }
@@ -297,6 +415,7 @@ class DashboardClient internal constructor(
         sessionId: String,
         profileId: String,
         text: String,
+        rewind: RewindSubmit? = null,
     ): Flow<ChatEvent> = callbackFlow {
         if (liveByStored[sessionId] == null) {
             runCatching { resumeSession(sessionId, profileId) }
@@ -315,11 +434,15 @@ class DashboardClient internal constructor(
         }
         val submitJob = launch {
             try {
-                socket.request(
+                val extra = RewindPolicy.jsonExtras(rewind)
+                val result = socket.request(
                     "prompt.submit",
-                    """{"session_id":${bound.json()},"text":${text.json()},"profile":${profileId.json()}}""",
+                    """{"session_id":${bound.json()},"text":${text.json()},"profile":${profileId.json()}$extra}""",
                     timeoutMs = 180_000,
                 )
+                if (rewind != null) {
+                    trySend(ChatEvent.Rewound(parseSurvivorRowIds(result).orEmpty()))
+                }
                 withTimeout(180_000) { finished.await() }
                 close()
             } catch (t: Throwable) {
@@ -340,7 +463,13 @@ class DashboardClient internal constructor(
             current?.close()
             liveByStored.clear()
             val next = GatewaySocket(wsHttp)
-            next.connect(DashboardUrls.ws(origin, profileId, ticket = ticket, token = sessionToken))
+            val wsTicket = when {
+                !ticket.isNullOrBlank() -> ticket
+                gated -> mintWsTicket(origin)
+                else -> null
+            }
+            val wsToken = if (wsTicket.isNullOrBlank()) sessionToken else null
+            next.connect(DashboardUrls.ws(origin, profileId, ticket = wsTicket, token = wsToken))
             rpc = next
             rpcKey = key
             next
@@ -359,12 +488,35 @@ class DashboardClient internal constructor(
         return stampProfile(parseSessions(result.toString()), profileId)
     }
 
-    private suspend fun listMessagesRest(origin: String, sessionId: String, profileId: String): List<ChatMessage> =
-        get(DashboardUrls.rest(origin, "/api/sessions/$sessionId/messages", profileId)) { parseMessages(it) }
+    private suspend fun listMessagesRest(
+        origin: String,
+        sessionId: String,
+        profileId: String,
+        limit: Int,
+        beforeId: String?,
+    ): HistoryPage {
+        val extra = buildMap {
+            put("limit", limit.toString())
+            if (!beforeId.isNullOrBlank()) put("before", beforeId)
+        }
+        return get(
+            DashboardUrls.rest(origin, "/api/sessions/$sessionId/messages", profileId, extra),
+        ) { HistoryPaging.clip(parseMessages(it), beforeId, limit) }
+    }
 
-    private suspend fun listMessagesRpc(socket: GatewaySocket, liveId: String): List<ChatMessage> {
-        val result = socket.request("session.history", """{"session_id":${liveId.json()}}""")
-        return parseMessages(result.toString())
+    private suspend fun listMessagesRpc(
+        socket: GatewaySocket,
+        liveId: String,
+        profileId: String,
+        limit: Int,
+        beforeId: String?,
+    ): HistoryPage {
+        val before = if (beforeId.isNullOrBlank()) "" else ""","before":${beforeId.json()}"""
+        val result = socket.request(
+            "session.history",
+            """{"session_id":${liveId.json()},"profile":${profileId.json()},"limit":$limit$before}""",
+        )
+        return HistoryPaging.clip(parseMessages(result.toString()), beforeId, limit)
     }
 
     private suspend fun resumeSession(sessionId: String, profileId: String): Pair<String, List<ChatMessage>> {
@@ -399,6 +551,24 @@ class DashboardClient internal constructor(
 
     private fun JsonObject.str(key: String): String =
         this[key]?.jsonPrimitive?.contentOrNull.orEmpty()
+
+    private fun buildHttp(base: OkHttpClient, attachToken: Boolean): OkHttpClient =
+        base.newBuilder()
+            .cookieJar(cookies)
+            .apply {
+                if (attachToken) {
+                    addInterceptor { chain ->
+                        val token = sessionToken
+                        val req = chain.request().newBuilder()
+                        if (!gated && !token.isNullOrBlank()) {
+                            req.header("X-Hermes-Session-Token", token)
+                            req.header("Authorization", "******")
+                        }
+                        chain.proceed(req.build())
+                    }
+                }
+            }
+            .build()
 
     private suspend fun getHtml(url: String): String = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(url).header("Accept", "text/html").get().build()

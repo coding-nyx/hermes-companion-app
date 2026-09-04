@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from broker import ALLOWLIST, Broker, BrokerError, MockDevice
+from broker import ALLOWLIST, Broker, BrokerError, LiveDevice, MockDevice
 from tools import make_handlers
 
 
@@ -58,6 +58,78 @@ class BrokerTests(unittest.TestCase):
         with self.assertRaises(BrokerError) as ctx:
             broker.dispatch("device.noop")
         self.assertEqual(ctx.exception.code, "rate_limited")
+
+    def test_swipe_and_apps_when_armed(self):
+        broker = Broker(device=MockDevice(armed=True))
+        swipe = broker.dispatch("device.swipe", {"x1": 10, "y1": 10, "x2": 10, "y2": 400})
+        self.assertTrue(swipe["swiped"])
+        apps = broker.dispatch("device.apps")
+        self.assertEqual(apps["apps"][0]["package"], "com.example.fixture")
+        shot = broker.dispatch("device.screenshot")
+        self.assertEqual(shot["mime"], "image/png")
+        self.assertNotIn("EXIF", json.dumps(shot))
+
+    def test_open_protected_package(self):
+        broker = Broker(device=MockDevice(armed=True, foreground_app="com.example.fixture"))
+        with self.assertRaises(BrokerError) as ctx:
+            broker.dispatch("device.open_app", {"package": "com.android.settings"})
+        self.assertEqual(ctx.exception.code, "protected_package")
+
+    def test_type_not_in_audit(self):
+        broker = Broker(device=MockDevice(armed=True))
+        broker.dispatch("device.type", {"text": "hunter2"})
+        blob = " ".join(f"{r.action} {r.app} {r.code}" for r in broker.audit.rows)
+        self.assertNotIn("hunter2", blob)
+
+    def test_status_includes_permissions(self):
+        handlers = make_handlers(Broker(device=MockDevice(armed=True, overlay=True)))
+        payload = json.loads(handlers["mobile_status"]({}))
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["a11y_bound"])
+        self.assertTrue(payload["overlay"])
+        self.assertIn("ARMED", payload["hint"])
+
+    def test_live_device_uses_phone_result(self):
+        def send(action, arguments):
+            del arguments
+            self.assertEqual(action, "device.snapshot")
+            return {"app": "app.hermes.companion", "nodes": [{"ref": "e1"}]}
+
+        broker = Broker(device=LiveDevice(send=send))
+        result = broker.dispatch("device.snapshot")
+        self.assertEqual(result["app"], "app.hermes.companion")
+        self.assertEqual(broker.device.foreground_app, "app.hermes.companion")
+
+    def test_host_arm_and_disarm(self):
+        device = MockDevice(armed=False, a11y_bound=True)
+        broker = Broker(device=device)
+        armed = broker.dispatch("device.arm")
+        self.assertTrue(armed["armed"])
+        self.assertTrue(device.armed)
+        snap = broker.dispatch("device.snapshot")
+        self.assertEqual(snap["nodes"][0]["ref"], "e1")
+        disarmed = broker.dispatch("device.disarm")
+        self.assertFalse(disarmed["armed"])
+        self.assertFalse(device.armed)
+        with self.assertRaises(BrokerError) as ctx:
+            broker.dispatch("device.snapshot")
+        self.assertEqual(ctx.exception.code, "disarmed")
+
+    def test_host_arm_requires_a11y(self):
+        broker = Broker(device=MockDevice(armed=False, a11y_bound=False))
+        with self.assertRaises(BrokerError) as ctx:
+            broker.dispatch("device.arm")
+        self.assertEqual(ctx.exception.code, "a11y_unavailable")
+
+    def test_live_device_maps_disarmed(self):
+        def send(action, arguments):
+            del action, arguments
+            raise BrokerError("disarmed", "device is DISARMED")
+
+        broker = Broker(device=LiveDevice(send=send))
+        with self.assertRaises(BrokerError) as ctx:
+            broker.dispatch("device.snapshot")
+        self.assertEqual(ctx.exception.code, "disarmed")
 
 
 if __name__ == "__main__":

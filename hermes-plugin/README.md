@@ -1,39 +1,50 @@
 # hermes-companion plugin
 
-Install on the Hermes host:
+Users: follow the [root README setup](../README.md#setup). This file is for the host plugin.
+
+## Install
 
 ```bash
-hermes plugins install /path/to/hermes-companion-app/hermes-plugin
+./install.sh
+```
+
+Copies into `~/.hermes/plugins/hermes-companion` and runs `hermes plugins enable hermes-companion`. Start a **new** Hermes session so tools, skill, CLI, and the `:9120` relay load.
+
+From GitHub:
+
+```bash
+hermes plugins install coding-nyx/hermes-companion-app/hermes-plugin
 hermes plugins enable hermes-companion
-hermes tools enable mobile
 ```
 
-Then from a chat: the `mobile_*` tools appear only while a phone is paired **and ARMED**. Disarmed or unpaired calls fail closed.
+Do not pass a local filesystem path to `hermes plugins install` — it is treated as a GitHub URL.
 
-## CLI
+## After install
+
+Phone origin: `http://<hermes-tailscale-or-lan>:9120`
 
 ```bash
-hermes companion pair          # print a 6-char code (phone shows the same)
+hermes companion approve CODE
 hermes companion list
-hermes companion approve K7M2QX
-hermes companion revoke <device_id>
+hermes companion revoke DEVICE_ID
+hermes companion lanes
 ```
 
-(`register_cli_command` wiring lands when this directory is dropped into `~/.hermes/plugins/`.)
+Pairing file: `~/.hermes/companion-devices.json` (mode 600).
+
+## Relay
+
+Dashboard is usually `127.0.0.1:9119`. The phone cannot use that. The plugin binds `0.0.0.0:9120` and proxies. If something else already owns `:9120`:
+
+```bash
+HERMES_COMPANION_RELAY=0
+HERMES_COMPANION_RELAY_URL=http://127.0.0.1:9120
+```
+
+Standalone: `python3 -m relay`
 
 ## Tests
 
 ```bash
-python3 -m unittest discover -s hermes-plugin/tests -q
-```
-
-No Hermes install required. Broker tests use a mock device.
-
-## Config (profile `config.yaml`)
-
-```yaml
-companion:
-  enabled: true
-  idle_disarm_sec: 300
-  screenshot_max_px: 1080
+python3 -m unittest discover -s tests -q
 ```

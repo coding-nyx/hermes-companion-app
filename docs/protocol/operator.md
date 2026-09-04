@@ -18,9 +18,9 @@ Confirm paths against the running Hermes version during A0.5. Ticket mint in par
 
 1. `GET /api/status` → `auth_required`, `auth_providers`, version, gateway block.
 2. If `auth_required`:
-   - `basic` → `POST /api/auth/login` with username/password; store session.
+   - password / `basic` → `POST /auth/password-login` `{provider, username, password}`; session cookies, never a loopback token.
    - `nous` / OIDC → not v1; show “use Tailscale + basic, or wait”.
-3. Mint a WebSocket ticket (bodyless POST used by Desktop — probe the live OpenAPI/help if the path 404s). Fallback loopback: `?token=` from `~/.hermes/dashboard-token.txt` only when `auth_required` is false.
+3. Mint a WebSocket ticket: `POST /api/auth/ws-ticket` (cookie session). Use `?ticket=` once (~30s). Never reuse. Never send `?token=` in gated mode. Loopback only: `?token=` from the SPA when `auth_required` is false.
 4. Open `/api/ws?ticket=…&profile=…`.
 5. Wait for `gateway.ready`. Record `change_events`, `heartbeat`, and any process/instance id.
 6. `session.list`. `GET /api/status` for HUD. Load profiles.
@@ -51,7 +51,7 @@ Heartbeat: `gateway.ping` → `{ "ok": true }`. Send on an interval only if `gat
 |---|---|
 | `session.list` | Thread rail, catch-up |
 | `session.create` | New thread |
-| `session.history` | Open a thread |
+| `session.history` | Open a thread. Always send `limit` (≤ 500). Page older with `before` (message id). Resume may still dump a full transcript — client keeps only the last page. |
 | `session.interrupt` | Stop in-flight turn |
 | `session.steer` | Mid-turn guidance (later) |
 | `prompt.submit` | Send. Destructive rewind only with `truncate_before_row_id` + `confirm_truncate` |
@@ -80,7 +80,7 @@ Do **not** call from the phone in v1: `cli.exec`, `config.set`, `reload.env`, an
 | `GET /api/auth/status` | Session still valid |
 | `POST /api/auth/login` | Basic auth |
 | `GET /api/sessions` | Catch-up / search pagination |
-| `GET /api/sessions/{id}/messages` | History page (`limit` ≤ 500) |
+| `GET /api/sessions/{id}/messages` | History page (`limit` ≤ 500, optional `before`) |
 | `GET /api/profiles` | Machine roster for the switcher. **No** `?profile=` — that would hide the other agents. |
 | `GET /api/sessions?profile=` | Catch-up. Required. Client also filters by `profileId`. |
 | `GET /api/sessions/{id}/messages?profile=` | History. 403 if the session is not in that profile. |

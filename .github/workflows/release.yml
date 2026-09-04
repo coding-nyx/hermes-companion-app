@@ -1,0 +1,33 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: chmod +x gradlew
+      - run: ./gradlew :app:assembleRelease --quiet
+      - name: Stage APK
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk dist/HermesCompanion-${GITHUB_REF_NAME:-0.1.0}.apk
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/HermesCompanion-*.apk
+          generate_release_notes: true
+          body: |
+            Sideload APK (debug-signed). Enable unknown sources.
+            Plugin: `hermes plugins install <owner>/<repo>/hermes-plugin` then `hermes plugins enable hermes-companion`.
+            Phone origin: `http://<hermes-tailscale>:9120`.

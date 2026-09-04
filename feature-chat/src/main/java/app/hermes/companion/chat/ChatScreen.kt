@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,20 +21,20 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
 import app.hermes.companion.design.Hairline
-import app.hermes.companion.design.HairlineField
 import app.hermes.companion.model.ApprovalPrompt
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 @Composable
 fun ChatScreen(
@@ -46,17 +47,33 @@ fun ChatScreen(
     onSend: () -> Unit,
     onInterrupt: () -> Unit,
     onApproval: (String) -> Unit,
+    hasMoreOlder: Boolean = false,
+    loadingOlder: Boolean = false,
+    onLoadOlder: () -> Unit = {},
+    rewindTargetId: String? = null,
+    onRewind: (ChatMessage) -> Unit = {},
+    onCancelRewind: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
-    LaunchedEffect(messages.size, messages.lastOrNull()?.text) {
-        if (messages.isNotEmpty()) listState.scrollToItem(messages.lastIndex)
+    LaunchedEffect(messages.lastOrNull()?.id, messages.lastOrNull()?.text) {
+        val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+        val nearBottom = last == null || last.index >= messages.lastIndex - 2
+        if (nearBottom && messages.isNotEmpty()) listState.scrollToItem(messages.lastIndex)
+    }
+    LaunchedEffect(listState, hasMoreOlder, loadingOlder) {
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .distinctUntilChanged()
+            .collect { index ->
+                if (index <= 1 && hasMoreOlder && !loadingOlder) onLoadOlder()
+            }
     }
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(CompanionColor.Void)
             .imePadding()
+            .navigationBarsPadding()
             .testTag("chat.surface"),
     ) {
         LazyColumn(
@@ -67,13 +84,36 @@ fun ChatScreen(
                 .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md),
             verticalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
         ) {
+            if (hasMoreOlder || loadingOlder) {
+                item(key = "history.older") {
+                    Text(
+                        text = if (loadingOlder) "loading older" else "older",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+                        modifier = Modifier.testTag("chat.older"),
+                    )
+                }
+            }
             items(messages, key = { it.id }) { message ->
                 when (message.role) {
-                    MessageRole.USER -> Text(
-                        text = message.text,
-                        style = CompanionType.Body.copy(color = CompanionColor.TextDim),
-                        modifier = Modifier.testTag("chat.user"),
-                    )
+                    MessageRole.USER -> Column {
+                        val rewinding = rewindTargetId == message.id
+                        Text(
+                            text = message.text,
+                            style = CompanionType.Body.copy(
+                                color = if (rewinding) CompanionColor.Signal else CompanionColor.TextDim,
+                            ),
+                            modifier = Modifier
+                                .testTag("chat.user")
+                                .clickable { onRewind(message) },
+                        )
+                        if (message.queued) {
+                            Text(
+                                text = "queued",
+                                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                                modifier = Modifier.testTag("chat.queued"),
+                            )
+                        }
+                    }
                     MessageRole.TOOL -> ToolRow(message)
                     MessageRole.ASSISTANT -> Row {
                         Text(
@@ -106,22 +146,20 @@ fun ChatScreen(
         if (approval != null) {
             ApprovalStrip(approval, onApproval)
         }
+        if (rewindTargetId != null) {
+            RewindStrip(onCancelRewind)
+        }
         Hairline()
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Bottom,
         ) {
-            HairlineField(
+            MarkdownComposer(
                 value = draft,
                 onValueChange = onDraftChange,
-                imeAction = ImeAction.Send,
-                keyboardType = KeyboardType.Text,
-                onDone = onSend,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("chat.draft"),
+                modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(CompanionSpace.Md))
             val action = if (streaming) "INTERRUPT" to onInterrupt else "SEND" to onSend
@@ -130,6 +168,8 @@ fun ChatScreen(
                 style = CompanionType.MonoSmall.copy(
                     color = if (streaming) CompanionColor.Warn else CompanionColor.Signal,
                 ),
+                maxLines = 1,
+                softWrap = false,
                 modifier = Modifier
                     .testTag("chat.send")
                     .border(
@@ -140,6 +180,34 @@ fun ChatScreen(
                     .padding(horizontal = 12.dp, vertical = 10.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun RewindStrip(onCancel: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(CompanionColor.VoidElevated)
+            .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
+            .testTag("chat.rewind"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text = "REWIND · this turn and after",
+            style = CompanionType.Mono.copy(color = CompanionColor.Warn),
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = "CANCEL",
+            style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger),
+            modifier = Modifier
+                .testTag("chat.rewind.cancel")
+                .border(CompanionSpace.Hairline, CompanionColor.Danger)
+                .clickable(onClick = onCancel)
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+        )
     }
 }
 
@@ -156,6 +224,8 @@ private fun ApprovalStrip(prompt: ApprovalPrompt, onApproval: (String) -> Unit) 
         Text(
             text = "$kind · ${prompt.command}",
             style = CompanionType.Mono.copy(color = CompanionColor.Warn),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
         )
         Row(
             modifier = Modifier.padding(top = CompanionSpace.Sm),
@@ -194,6 +264,8 @@ private fun ToolRow(message: ChatMessage) {
     Text(
         text = "$name · $detail",
         style = CompanionType.Mono,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
         modifier = Modifier
             .fillMaxWidth()
             .border(CompanionSpace.Hairline, CompanionColor.Line)

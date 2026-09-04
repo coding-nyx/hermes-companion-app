@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.displayCutoutPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -20,14 +21,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextOverflow
 import app.hermes.companion.chat.ChatScreen
 import app.hermes.companion.connect.ConnectScreen
+import app.hermes.companion.device.DeviceScreen
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
 import app.hermes.companion.design.Hairline
 import app.hermes.companion.design.HudDot
 import app.hermes.companion.design.ProfileGlyph
+import app.hermes.companion.gateway.GatewayScreen
+import app.hermes.companion.model.ChatMessage
+import app.hermes.companion.model.HudState
 import app.hermes.companion.model.SessionRef
 import app.hermes.companion.profiles.ProfilesScreen
 import app.hermes.companion.threads.ThreadsScreen
@@ -37,6 +43,8 @@ import app.hermes.companion.threads.ThreadsScreen
 fun CompanionShell(
     state: CompanionState,
     onOriginChange: (String) -> Unit,
+    onUsernameChange: (String) -> Unit = {},
+    onPasswordChange: (String) -> Unit = {},
     onConnect: () -> Unit,
     onSelectProfile: (String) -> Unit,
     onTab: (MainTab) -> Unit,
@@ -47,6 +55,20 @@ fun CompanionShell(
     onSend: () -> Unit,
     onInterrupt: () -> Unit,
     onApproval: (String) -> Unit,
+    onLoadOlder: () -> Unit = {},
+    onRewind: (ChatMessage) -> Unit = {},
+    onCancelRewind: () -> Unit = {},
+    onPair: () -> Unit = {},
+    onCancelPair: () -> Unit = {},
+    onRevokePair: () -> Unit = {},
+    onArm: () -> Unit = {},
+    onDisarm: () -> Unit = {},
+    onEnableA11y: () -> Unit = {},
+    onEnableOverlay: () -> Unit = {},
+    onEnableNotify: () -> Unit = {},
+    onNtfyTopicChange: (String) -> Unit = {},
+    onSaveNtfy: () -> Unit = {},
+    onToggleStay: () -> Unit = {},
 ) {
     if (state.origin == null) {
         ConnectScreen(
@@ -55,6 +77,11 @@ fun CompanionShell(
             error = state.error,
             onOriginChange = onOriginChange,
             onConnect = onConnect,
+            authRequired = state.authRequired,
+            username = state.username,
+            password = state.password,
+            onUsernameChange = onUsernameChange,
+            onPasswordChange = onPasswordChange,
         )
         return
     }
@@ -67,7 +94,8 @@ fun CompanionShell(
         modifier = Modifier
             .fillMaxSize()
             .background(CompanionColor.Void)
-            .statusBarsPadding(),
+            .statusBarsPadding()
+            .displayCutoutPadding(),
     ) {
         Header(state, inChat, onCloseChat)
         Hairline()
@@ -83,6 +111,12 @@ fun CompanionShell(
                 onSend = onSend,
                 onInterrupt = onInterrupt,
                 onApproval = onApproval,
+                hasMoreOlder = state.historyHasMore,
+                loadingOlder = state.historyLoading,
+                onLoadOlder = onLoadOlder,
+                rewindTargetId = state.rewindTargetId,
+                onRewind = onRewind,
+                onCancelRewind = onCancelRewind,
                 modifier = body,
             )
         } else {
@@ -99,7 +133,39 @@ fun CompanionShell(
                     onSelect = onSelectProfile,
                     modifier = body,
                 )
-                MainTab.GATEWAY, MainTab.DEVICE -> Placeholder(state.tab.name.lowercase(), body)
+                MainTab.GATEWAY -> GatewayScreen(
+                    status = state.status,
+                    hud = state.hud,
+                    ntfyTopic = state.ntfyTopic,
+                    stayConnected = state.stayConnected,
+                    onNtfyTopicChange = onNtfyTopicChange,
+                    onSaveNtfy = onSaveNtfy,
+                    onToggleStay = onToggleStay,
+                    modifier = body,
+                )
+                MainTab.DEVICE -> DeviceScreen(
+                    phase = state.pairingPhase,
+                    code = state.pairingCode,
+                    deviceId = state.deviceId,
+                    deviceProfileId = state.deviceProfileId,
+                    error = state.error,
+                    laneOpen = state.deviceLane,
+                    a11yBound = state.a11yBound,
+                    overlayGranted = state.overlayGranted,
+                    notifyGranted = state.notifyGranted,
+                    foregroundApp = state.foregroundApp,
+                    lastAudit = state.lastAudit,
+                    arm = state.arm,
+                    onPair = onPair,
+                    onCancel = onCancelPair,
+                    onRevoke = onRevokePair,
+                    onArm = onArm,
+                    onDisarm = onDisarm,
+                    onEnableA11y = onEnableA11y,
+                    onEnableOverlay = onEnableOverlay,
+                    onEnableNotify = onEnableNotify,
+                    modifier = body,
+                )
             }
             Hairline()
             NavBar(state.tab, onTab)
@@ -139,13 +205,25 @@ private fun Header(state: CompanionState, inChat: Boolean, onCloseChat: () -> Un
                 else -> "device"
             },
             style = CompanionType.Body,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        HudDot(label = "GW", on = state.gatewayHello != null)
-        HudDot(label = "TG", on = false)
-        HudDot(label = "DC", on = false)
-        HudDot(label = "API", on = false)
+        HudGlyph("GW", state.hud.gateway)
+        HudGlyph("TG", state.hud.telegram)
+        HudGlyph("DC", state.hud.discord)
+        HudGlyph("API", state.hud.api)
     }
+}
+
+@Composable
+private fun HudGlyph(label: String, state: HudState) {
+    HudDot(
+        label = label,
+        on = state == HudState.ON,
+        degraded = state == HudState.DEGRADED,
+        modifier = Modifier.testTag("hud.${label.lowercase()}"),
+    )
 }
 
 @Composable
@@ -169,13 +247,16 @@ private fun NavItem(label: String, value: MainTab, current: MainTab, onTab: (Mai
     val selected = current == value
     Text(
         text = label,
-        style = CompanionType.MonoSmall.copy(
+        style = CompanionType.Mono.copy(
             color = if (selected) CompanionColor.Signal else CompanionColor.TextMute,
         ),
+        maxLines = 1,
+        overflow = TextOverflow.Clip,
+        softWrap = false,
         modifier = Modifier
             .testTag("nav.${value.name.lowercase()}")
             .clickable { onTab(value) }
-            .padding(CompanionSpace.Sm),
+            .padding(horizontal = CompanionSpace.Xs, vertical = CompanionSpace.Sm),
     )
 }
 

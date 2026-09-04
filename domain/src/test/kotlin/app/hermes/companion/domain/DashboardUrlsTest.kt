@@ -35,9 +35,38 @@ class DashboardUrlsTest {
         assertTrue(url.contains("ticket=t1"))
     }
 
+    @Test
+    fun wsTicketOmitsLoopbackToken() {
+        val url = DashboardUrls.ws("http://host:9119", "coder", ticket = "t1", token = "secret")
+        assertTrue(url.contains("ticket=t1"))
+        assertFalse(url.contains("token="))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun restWithoutProfileThrows() {
         DashboardUrls.rest("http://host:9119", "/api/sessions", "")
+    }
+
+    @Test
+    fun restCarriesHistoryPagingParams() {
+        val url = DashboardUrls.rest(
+            "http://host:9119",
+            "/api/sessions/s1/messages",
+            "coder",
+            mapOf("limit" to "80", "before" to "m12"),
+        )
+        assertTrue(url.contains("profile=coder"))
+        assertTrue(url.contains("limit=80"))
+        assertTrue(url.contains("before=m12"))
+    }
+
+    @Test
+    fun deviceWsOmitsTicketAndProfile() {
+        val url = DashboardUrls.deviceWs("https://host:9119")
+        assertEquals("wss://host:9119/companion/device/ws", url)
+        assertFalse(url.contains("ticket="))
+        assertFalse(url.contains("profile="))
+        assertFalse(url.contains("?"))
     }
 
     @Test

@@ -28,10 +28,29 @@ def make_handlers(broker: Broker):
                     "ok": True,
                     "armed": broker.device.armed,
                     "foreground_app": broker.device.foreground_app,
+                    "a11y_bound": broker.device.a11y_bound,
+                    "overlay": broker.device.overlay,
+                    "hint": armed_hint(True, broker.device.armed),
                 }
             )
         except BrokerError as exc:
             return _err(exc)
+
+    def mobile_arm(params, **kwargs):
+        del params, kwargs
+        try:
+            result = broker.dispatch("device.arm", {})
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_disarm(params, **kwargs):
+        del params, kwargs
+        try:
+            result = broker.dispatch("device.disarm", {})
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
 
     def mobile_snapshot(params, **kwargs):
         del kwargs
@@ -71,10 +90,75 @@ def make_handlers(broker: Broker):
         except BrokerError as exc:
             return _err(exc)
 
+    def mobile_swipe(params, **kwargs):
+        del kwargs
+        try:
+            result = broker.dispatch("device.swipe", params or {})
+            return _dump({"ok": True, "result": result})
+        except BrokerError as exc:
+            return _err(exc)
+
+    def mobile_scroll(params, **kwargs):
+        del kwargs
+        try:
+            result = broker.dispatch("device.scroll", params or {})
+            return _dump({"ok": True, "result": result})
+        except BrokerError as exc:
+            return _err(exc)
+
+    def mobile_open_app(params, **kwargs):
+        del kwargs
+        pkg = (params or {}).get("package", "")
+        try:
+            result = broker.dispatch("device.open_app", {"package": pkg})
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_apps(params, **kwargs):
+        del params, kwargs
+        try:
+            result = broker.dispatch("device.apps", {})
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_wait(params, **kwargs):
+        del kwargs
+        try:
+            result = broker.dispatch("device.wait", params or {})
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_screenshot(params, **kwargs):
+        del kwargs
+        try:
+            result = broker.dispatch("device.screenshot", params or {})
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
     return {
         "mobile_status": mobile_status,
+        "mobile_arm": mobile_arm,
+        "mobile_disarm": mobile_disarm,
         "mobile_snapshot": mobile_snapshot,
         "mobile_click": mobile_click,
         "mobile_type": mobile_type,
         "mobile_press": mobile_press,
+        "mobile_swipe": mobile_swipe,
+        "mobile_scroll": mobile_scroll,
+        "mobile_open_app": mobile_open_app,
+        "mobile_apps": mobile_apps,
+        "mobile_wait": mobile_wait,
+        "mobile_screenshot": mobile_screenshot,
     }
+
+
+def armed_hint(paired: bool, armed: bool) -> str | None:
+    if not paired:
+        return None
+    if armed:
+        return "Android companion is ARMED. Prefer mobile_snapshot then mobile_click. Call mobile_disarm when done."
+    return "Android companion is DISARMED. Call mobile_arm before gestures (requires Accessibility on the phone)."

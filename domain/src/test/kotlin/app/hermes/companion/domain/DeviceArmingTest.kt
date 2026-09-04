@@ -11,6 +11,11 @@ class DeviceArmingTest {
     }
 
     @Test
+    fun overlayDoesNotGateArm() {
+        assertEquals(DeviceArm.ARMED, DeviceArming.arm(DeviceArm.DISARMED, a11yBound = true))
+    }
+
+    @Test
     fun armThenExecThenDisarm() {
         val armed = DeviceArming.arm(DeviceArm.DISARMED, a11yBound = true)
         assertEquals(DeviceArm.ARMED, armed)

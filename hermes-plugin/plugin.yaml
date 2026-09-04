@@ -2,3 +2,21 @@ name: hermes-companion
 version: "0.1.0"
 description: Pair an Android companion as a device node and expose mobile_* tools.
 author: hermes-companion-app
+kind: standalone
+platforms:
+  - linux
+  - macos
+provides_tools:
+  - mobile_status
+  - mobile_arm
+  - mobile_disarm
+  - mobile_snapshot
+  - mobile_click
+  - mobile_type
+  - mobile_press
+  - mobile_swipe
+  - mobile_scroll
+  - mobile_open_app
+  - mobile_apps
+  - mobile_wait
+  - mobile_screenshot
