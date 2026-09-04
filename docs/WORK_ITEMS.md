@@ -19,7 +19,7 @@
 | **P5** | Wake, Polish & Background Sync | A5.1 – A5.5 | ⚠️ **75%** | P1 | M3 Wake |
 | **P6** | Hands Rollout & Permission Onboarding | A6.1 – A6.6 | ✅ **85%** | P0 | M2 Hands |
 | **P7** | Production Hardening, Security & Architecture | A7.1 – A7.12 | ✅ **90%** (10/12 done; A7.11 pending) | **P0 (Critical)** | Production Beta |
-| **P8** | Multi-Host Gateway Book & Switching | A8.1 – A8.4 | ⚠️ **40%** (1.5/4 done) | P1 | v0.3.0 |
+| **P8** | Multi-Host Gateway Book & Switching + **host-scoped everything** | A8.1 – A8.5 | ⚠️ **30%** (1.5/5 done; **A8.5 is the 3rd item in the queue**) | **P0** | v0.3.0 |
 | **P9** | Model Inspector & Dynamic Model Switching | A9.1 – A9.4 | ⚠️ **50%** (2/4 done) | P1 | v0.3.0 |
 | **P10** | Reminders & Scheduled Tasks Surface (Hermes Cron) | A10.1 – A10.5 | ⚠️ **40%** (2/5 done) | P1 | v0.4.0 |
 | **P11** | Voice & Wake-On-Voice (Hands-Free Hermes) | A11.1 – A11.5 | ⚠️ **30%** (1.5/5 done) | P1 | v0.5.0 |
@@ -129,6 +129,28 @@ Allows the companion to connect to multiple Hermes installations and seamlessly 
 - **Deliverable**: Partition `TranscriptCache`, `OutboxStore`, and `DeviceCredStore` by `(host_id, profile_id)`; `DeviceCredStore` becomes a map keyed by origin (migration: existing record → its own origin). `DeviceNodeCoordinator.bind(origin)` picks the credential for that origin; HANDS shows `PAIRED` per host and REVOKE only revokes that host's record.
 - **Acceptance Criteria**: Zero cross-host data leakage; offline history for Host A is isolated from Host B; the S22 can be paired to lab and hub-11 at the same time and switching gateways flips the device lane without re-pairing.
 - **Estimate**: 1.5 days | **Dependencies**: A8.1
+
+#### A8.5 · Host-Scoped Everything (cross-cutting) 🔲 PENDING — **queue position 3, after A18.7 / A18.4**
+- **Requirement (2026-09-04)**: every endpoint call, store, socket, background job, notification and UI element must be keyed by the host it belongs to. Two hosts (lab, hub-11) are live today and the phone will be paired to both; nothing may assume "the" origin.
+- **Audit — what is single-host today**:
+  - `DashboardClient` is one instance (`CompanionApp.dashboard`) carrying per-host state: `sessionToken`, `gated`, cookie jar, `rpc` socket + `rpcKey`, `deviceWs`, `liveByStored`. Switching gateway reuses lab's token/cookies against hub.
+  - `OperatorCredStore` holds one operator credential (`origin, username, password, sessionToken`); `loadGateways()` is the only per-host list.
+  - `DeviceCredStore` holds one device credential (→ HANDS shows PAIR on hub, see A8.3).
+  - `StickyStore.profileId`, `ntfyTopic` are global; `protectedPackages`, `stayConnected` are phone-wide (correct — keep).
+  - `WakePing` has `type, session_id, profile` but no host → an ntfy ping cannot say which host to open; deep links likewise.
+  - `SyncManager` jobs (`watchJob`, `hudJob`, `wakeJob`) and `DeviceNodeCoordinator` lane are singletons on `CompanionApp`.
+  - `CompanionState.origin` / `hud` / `status` / `profiles` / `sessions` are for one host; `SavedGateway.isActive` is the only host selector.
+  - Already partitioned: Room `sessions` / `messages` / `outbox` (`origin, profileId` keys). ✅
+- **Deliverable**:
+  1. `HostId` (normalised `scheme://host:port`) + `HostRef(id, name, kind, origin)` in `core-model`; `HostBook` (was gateway book) is the registry, persisted per host in `OperatorCredStore`.
+  2. `HostClientPool`: one `DashboardClient` per `HostId` (own token, cookies, gated flag, RPC + device sockets, live-id map). `DashboardClient` loses the global constructor; every call site goes through `pool[hostId]`.
+  3. Stores keyed by host: `OperatorCredStore.credFor(hostId)`, `DeviceCredStore.credFor(hostId)` (A8.3), `StickyStore.profileFor(hostId)`, `ntfyTopicFor(hostId)`, `lastGoodOrigin` (A18.5). One-shot migration maps today's single records onto their own origin.
+  4. Managers per host: `SyncManager` and `HostToolsController` instances live in a `HostSession` object created by the pool; only the **active** host runs the operator WS/HUD; every **paired** host keeps a device lane (so Hermes on lab can still move the phone while you read hub threads). `DeviceNodeCoordinator` becomes per-host lanes behind one arm state and one denylist (phone-wide safety).
+  5. Wake + deep links carry the host: plugin `WakePing` gains `origin` (falls back to the ping's ntfy topic → host mapping); `hermes-companion://open?host=…&session=…&profile=…`; `WakeNotifier` groups notifications by host.
+  6. UI: header shows `host · profile` (host chip left of the glyph, tap → host sheet; A18.7 bar picks this up), HANDS shows the paired state **for the connected host**, HOST tab lists per-host health (A8.4), Connect screen picker (A18.5).
+  7. Tests: `HostClientPoolTest` with two `MockWebServer`s proving tokens/cookies never cross; Room isolation test (exists, extend); `WakePolicyTest` for host field; migration test.
+- **Acceptance Criteria**: Log in to lab (token mode) and hub-11 (password mode), switch between them repeatedly: no auth header from one host is sent to the other (MockWebServer assertion + live logcat check); each host remembers its own profile; HANDS shows PAIRED on both after pairing each; an ntfy ping from hub opens the hub session even while lab is active; the device lane on lab stays live while hub is the active operator host.
+- **Estimate**: 3 days | **Dependencies**: A7.4 ✅, A8.1 (Room host schema — fold in), supersedes the credential part of A8.3
 
 #### A8.4 · Multi-Host Health Monitor 🔲 PENDING
 - **Deliverable**: Background probe checking `/api/status` across all saved hosts every 60 seconds (when app is foregrounded).
@@ -420,7 +442,7 @@ Manages updates for both the host Hermes Agent installation and the companion An
 
 Operator-side polish requested after the first P7 device pass: the thread rail gives no feedback while it loads, assistant markdown renders as raw text, and threads cannot be removed from the phone.
 
-**Order (2026-09-04):** A18.7 bottom-bar redesign → A18.4 keyboard handling → A18.1 loading → A18.5 gateway picker → A18.2 markdown → A18.3 delete threads.
+**Order (2026-09-04):** A18.7 bottom-bar redesign → A18.4 keyboard handling → **A8.5 host-scoped everything (with A8.1/A8.3)** → A18.5 gateway picker → A18.1 loading → A18.2 markdown → A18.3 delete threads.
 
 ### Work Items
 
@@ -558,7 +580,8 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 |---|---|:---:|:---:|
 | **A18.7** | **Bottom bar redesign: profile glyph + tab glyphs + IME-aware (next)** | 1d | 🔲 |
 | **A18.4** | **Keyboard & text field handling (next)** | 1d | 🔲 |
-| A8.1 | Multi-Host Room Schema (upgrade from SharedPrefs) | 1d | ⚠️ |
+| **A8.5** | **Host-scoped everything: client pool, per-host creds/profile/ntfy, per-host lanes, host in wake + deep link (3rd)** | 3d | 🔲 |
+| A8.1 | Multi-Host Room Schema (upgrade from SharedPrefs) — folded into A8.5 | 1d | ⚠️ |
 | A8.3 | Per-Host Cache & Credential Isolation (incl. per-host device pairing) | 1.5d | 🔲 |
 | A8.4 | Multi-Host Health Monitor | 1d | 🔲 |
 | A9.3 | Protocol Model Override Parameter | 1d | 🔲 |
@@ -585,7 +608,7 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 | A18.5 | Gateway picker on Connect screen (saved + paired, health, last-good origin) | 1d | 🔲 |
 | A18.6 | Restore profile switching (header glyph → inline picker + profiles tab) | 0.5d | ✅ |
 
-**P1 Total Remaining**: ~44 days
+**P1 Total Remaining**: ~47 days
 
 ### 🔵 P2 Future — Planned Features
 
@@ -670,6 +693,12 @@ graph TD
     A18.4[A18.4 Keyboard Handling] --> A13.3
     A18.6[A18.6 Profile Picker ✅] --> A18.7[A18.7 Bottom Bar Redesign]
     A18.7 --> A18.4
+    A18.4 --> A8.5[A8.5 Host-Scoped Everything]
+    A7.4 --> A8.5
+    A8.5 --> A8.3
+    A8.5 --> A8.4
+    A8.5 --> A18.5
+    A8.5 --> A19.2
     A8.2 --> A18.5[A18.5 Connect Gateway Picker]
     A18.5 --> A8.4
 
