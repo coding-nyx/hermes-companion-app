@@ -17,7 +17,9 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Text
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -26,6 +28,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import app.hermes.companion.chat.ChatScreen
@@ -123,12 +127,15 @@ fun CompanionShell(
     val imeVisible = WindowInsets.isImeVisible
     BackHandler(enabled = inChat && !imeVisible, onBack = onCloseChat)
 
+    val focusManager = LocalFocusManager.current
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(CompanionColor.Void)
             .statusBarsPadding()
-            .displayCutoutPadding(),
+            .displayCutoutPadding()
+            // Tap on empty chrome drops focus (and with it the IME). Clickable children win first.
+            .pointerInput(Unit) { detectTapGestures { focusManager.clearFocus() } },
     ) {
         // Header glyph is the profile switcher (A18.6): tap → inline picker under the header.
         var profilePicker by rememberSaveable { mutableStateOf(false) }
@@ -158,7 +165,8 @@ fun CompanionShell(
             DeepLinkStrip(req, onConfirmDeepLink, onDismissDeepLink)
             Hairline()
         }
-        val body = Modifier.weight(1f)
+        // Chat pads for the IME itself; every other tab gets it here so inputs ride above the keyboard.
+        val body = Modifier.weight(1f).then(if (inChat) Modifier else Modifier.imePadding())
         if (inChat) {
             ChatScreen(
                 messages = state.messages,
@@ -273,8 +281,11 @@ fun CompanionShell(
                     modifier = body,
                 )
             }
-            Hairline()
-            NavBar(state.tab, onTab)
+            // The bar gives its height to the keyboard while typing (A18.4 / A18.7).
+            if (!imeVisible) {
+                Hairline()
+                NavBar(state.tab, onTab)
+            }
         }
     }
 }

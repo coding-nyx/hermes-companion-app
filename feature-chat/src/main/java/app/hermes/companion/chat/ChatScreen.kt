@@ -161,6 +161,7 @@ fun ChatScreen(
             MarkdownComposer(
                 value = draft,
                 onValueChange = onDraftChange,
+                onSend = { if (!streaming) onSend() },
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(CompanionSpace.Sm))

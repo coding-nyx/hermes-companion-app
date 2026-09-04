@@ -17,7 +17,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
@@ -45,8 +53,10 @@ fun MarkdownComposer(
     value: String,
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onSend: () -> Unit = {},
 ) {
     var field by remember { mutableStateOf(TextFieldValue(value)) }
+    var focused by remember { mutableStateOf(false) }
     LaunchedEffect(value) {
         if (value != field.text) field = TextFieldValue(value, TextRange(value.length))
     }
@@ -77,6 +87,17 @@ fun MarkdownComposer(
                 .fillMaxWidth()
                 .heightIn(min = 56.dp, max = 140.dp)
                 .padding(horizontal = 12.dp, vertical = 10.dp)
+                .onFocusChanged { focused = it.isFocused }
+                // Hardware keyboards: Shift/Ctrl+Enter sends, plain Enter stays a newline.
+                .onPreviewKeyEvent { ev ->
+                    val enter = ev.key == Key.Enter || ev.key == Key.NumPadEnter
+                    if (enter && ev.type == KeyEventType.KeyDown && (ev.isShiftPressed || ev.isCtrlPressed)) {
+                        if (field.text.isNotBlank()) onSend()
+                        true
+                    } else {
+                        false
+                    }
+                }
                 .testTag("chat.draft"),
             textStyle = CompanionType.Body.copy(color = CompanionColor.Text),
             cursorBrush = SolidColor(CompanionColor.Signal),
@@ -92,7 +113,7 @@ fun MarkdownComposer(
             decorationBox = { inner ->
                 if (field.text.isEmpty()) {
                     Text(
-                        text = "message",
+                        text = if (focused) "message · ↵ newline · SEND to submit" else "message",
                         style = CompanionType.Body.copy(color = CompanionColor.TextMute),
                     )
                 }

@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,7 +24,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -34,6 +32,10 @@ import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
 import app.hermes.companion.design.Hairline
 import app.hermes.companion.design.HairlineField
+import app.hermes.companion.design.rememberDismissKeyboard
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import app.hermes.companion.model.DashboardStatus
 import app.hermes.companion.model.GatewayHud
 import app.hermes.companion.model.HermesUpdateStatus
@@ -65,6 +67,16 @@ fun GatewayScreen(
     var newGatewayName by remember { mutableStateOf("") }
     var newGatewayOrigin by remember { mutableStateOf("") }
     var showAddGateway by remember { mutableStateOf(false) }
+    val originFocus = remember { FocusRequester() }
+    val dismissKeyboard = rememberDismissKeyboard()
+    fun saveGateway() {
+        if (newGatewayOrigin.isBlank()) return
+        onAddGateway(newGatewayName.ifBlank { newGatewayOrigin }, newGatewayOrigin)
+        newGatewayName = ""
+        newGatewayOrigin = ""
+        showAddGateway = false
+        dismissKeyboard()
+    }
 
     Column(
         modifier = modifier
@@ -180,7 +192,10 @@ fun GatewayScreen(
                 text = if (showAddGateway) "[CANCEL]" else "[+ ADD GATEWAY]",
                 style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
                 modifier = Modifier
-                    .clickable { showAddGateway = !showAddGateway }
+                    .clickable {
+                        showAddGateway = !showAddGateway
+                        if (!showAddGateway) dismissKeyboard()
+                    }
                     .padding(CompanionSpace.Xs),
             )
         }
@@ -195,37 +210,35 @@ fun GatewayScreen(
                     .padding(CompanionSpace.Md),
             ) {
                 Text(text = "NAME / LABEL", style = CompanionType.MonoSmall)
-                BasicTextField(
+                Spacer(Modifier.height(CompanionSpace.Xs))
+                HairlineField(
                     value = newGatewayName,
                     onValueChange = { newGatewayName = it },
-                    textStyle = CompanionType.Mono.copy(color = CompanionColor.Text),
-                    cursorBrush = SolidColor(CompanionColor.Signal),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = CompanionSpace.Xs),
+                    keyboardType = KeyboardType.Text,
+                    imeAction = ImeAction.Next,
+                    placeholder = "hub-11",
+                    onNext = { originFocus.requestFocus() },
+                    modifier = Modifier.testTag("gateway.add.name"),
                 )
                 Spacer(Modifier.height(CompanionSpace.Sm))
                 Text(text = "ORIGIN URL (e.g. http://100.85.151.99:9120)", style = CompanionType.MonoSmall)
-                BasicTextField(
+                Spacer(Modifier.height(CompanionSpace.Xs))
+                HairlineField(
                     value = newGatewayOrigin,
                     onValueChange = { newGatewayOrigin = it },
-                    textStyle = CompanionType.Mono.copy(color = CompanionColor.Text),
-                    cursorBrush = SolidColor(CompanionColor.Signal),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = CompanionSpace.Xs),
+                    keyboardType = KeyboardType.Uri,
+                    imeAction = ImeAction.Done,
+                    placeholder = "http://100.x.y.z:9120",
+                    focusRequester = originFocus,
+                    onDone = { saveGateway() },
+                    modifier = Modifier.testTag("gateway.add.origin"),
                 )
                 Spacer(Modifier.height(CompanionSpace.Sm))
                 Box(
                     modifier = Modifier
                         .background(CompanionColor.SignalDim)
                         .border(1.dp, CompanionColor.Signal)
-                        .clickable {
-                            if (newGatewayOrigin.isNotBlank()) {
-                                onAddGateway(newGatewayName.ifBlank { newGatewayOrigin }, newGatewayOrigin)
-                                newGatewayName = ""
-                                newGatewayOrigin = ""
-                                showAddGateway = false
-                            }
-                        }
+                        .clickable { saveGateway() }
                         .padding(horizontal = CompanionSpace.Md, vertical = CompanionSpace.Sm),
                 ) {
                     Text(text = "SAVE & SWITCH", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))

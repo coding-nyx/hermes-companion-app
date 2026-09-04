@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -103,8 +104,8 @@ fun ConnectScreen(
             HairlineField(
                 value = username,
                 onValueChange = onUsernameChange,
-                keyboardType = KeyboardType.Text,
-                onDone = onConnect,
+                keyboardType = KeyboardType.Ascii,
+                imeAction = ImeAction.Next,
                 modifier = Modifier.testTag("connect.username"),
             )
             Spacer(Modifier.height(CompanionSpace.Lg))

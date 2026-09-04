@@ -34,6 +34,7 @@ import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
 import app.hermes.companion.design.HairlineField
+import app.hermes.companion.design.rememberDismissKeyboard
 import app.hermes.companion.model.DeviceArm
 import app.hermes.companion.model.PairingPhase
 
@@ -292,6 +293,7 @@ private fun ProtectedPackages(
     onRemove: (String) -> Unit,
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
+    val dismissKeyboard = rememberDismissKeyboard()
     Column(modifier = Modifier.fillMaxWidth().testTag("device.protected")) {
         Text(
             text = "PROTECTED  $defaults built-in · ${custom.size} custom",
@@ -332,6 +334,7 @@ private fun ProtectedPackages(
                 value = draft,
                 onValueChange = { draft = it },
                 keyboardType = androidx.compose.ui.text.input.KeyboardType.Ascii,
+                placeholder = "com.bank.app",
                 onDone = {
                     if (draft.isNotBlank()) {
                         onAdd(draft)
@@ -346,6 +349,7 @@ private fun ProtectedPackages(
                     onAdd(draft)
                     draft = ""
                 }
+                dismissKeyboard()
             }
         }
         Spacer(Modifier.height(CompanionSpace.Xs))

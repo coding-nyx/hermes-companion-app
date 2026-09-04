@@ -18,6 +18,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import app.hermes.companion.design.rememberDismissKeyboard
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -275,12 +280,25 @@ fun CodeReviewScreen(
                 .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val dismissKeyboard = rememberDismissKeyboard()
+            fun commit() {
+                if (commitMessage.isBlank() || isLoading) return
+                val msg = commitMessage.trim()
+                commitMessage = ""
+                onCommit(msg)
+                dismissKeyboard()
+            }
             BasicTextField(
                 value = commitMessage,
                 onValueChange = { commitMessage = it },
                 textStyle = CompanionType.Mono.copy(color = CompanionColor.Text),
                 cursorBrush = SolidColor(CompanionColor.Signal),
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Sentences,
+                    imeAction = ImeAction.Done,
+                ),
+                keyboardActions = KeyboardActions(onDone = { commit() }),
                 modifier = Modifier
                     .weight(1f)
                     .padding(vertical = CompanionSpace.Sm)
@@ -300,11 +318,7 @@ fun CodeReviewScreen(
                 modifier = Modifier
                     .background(if (commitMessage.isNotBlank()) CompanionColor.SignalDim else CompanionColor.VoidElevated)
                     .border(1.dp, if (commitMessage.isNotBlank()) CompanionColor.Signal else CompanionColor.Line)
-                    .clickable(enabled = commitMessage.isNotBlank() && !isLoading) {
-                        val msg = commitMessage.trim()
-                        commitMessage = ""
-                        onCommit(msg)
-                    }
+                    .clickable(enabled = commitMessage.isNotBlank() && !isLoading) { commit() }
                     .padding(horizontal = CompanionSpace.Md, vertical = CompanionSpace.Sm)
                     .testTag("review.commit.button"),
             ) {

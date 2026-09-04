@@ -451,7 +451,7 @@ Manages updates for both the host Hermes Agent installation and the companion An
 
 Operator-side polish requested after the first P7 device pass: the thread rail gives no feedback while it loads, assistant markdown renders as raw text, and threads cannot be removed from the phone.
 
-**Order (2026-09-04, revised):** A18.4 keyboard handling → A8.5 host-scoped everything (with A8.1/A8.3) + review pass → A18.8 chats-not-loading fix + A18.1 loading states → A18.2 markdown + A13.1 images → A18.7 bottom bar → A18.5 gateway picker → A18.3 delete threads.
+**Order (2026-09-04, revised):** ~~A18.4 keyboard handling~~ ✅ → A8.5 host-scoped everything (with A8.1/A8.3) + review pass → A18.8 chats-not-loading fix + A18.1 loading states → A18.2 markdown + A13.1 images → A18.7 bottom bar → A18.5 gateway picker → A18.3 delete threads.
 
 ### Work Items
 
@@ -490,7 +490,7 @@ Operator-side polish requested after the first P7 device pass: the thread rail g
 - **Acceptance Criteria**: Long-press → confirm → row disappears and does not return after reconnect; the Hermes dashboard Sessions page no longer lists it; deleting a session from another profile is refused client-side (`ProfileScope.requireOwnedSession`).
 - **Estimate**: 1 day | **Dependencies**: None
 
-#### A18.4 · Keyboard & Text Field Handling 🔲 PENDING
+#### A18.4 · Keyboard & Text Field Handling ✅ CODE DONE (2026-09-04) — S22 check pending
 - **Problem**: Only `ChatScreen` applies `imePadding()`. Fields inside the scrolling Device and Gateway tabs (protected-package input, add-gateway name/origin) and the Console command line can sit under the IME, and nothing scrolls them into view on focus. The add-gateway form uses raw `BasicTextField`s with no `KeyboardOptions`, so Samsung Keyboard autocapitalises and autocorrects URLs (seen live: `hub-11g…` junk in the name field). ADD / SAVE & SWITCH / SEND leave the keyboard open; there is no tap-outside-to-dismiss; IME action keys are unwired outside `HairlineField`; password field has no `ImeAction.Done`; the composer's Enter behaviour (newline) is not discoverable and hardware-keyboard Enter is not handled.
 - **Deliverable**:
   - `HairlineField`: `KeyboardOptions(autoCorrect = false, capitalization = None)` for `Uri`/`Ascii`/`Password` types, `BringIntoViewRequester` on focus, `onDone` clears focus and hides the IME via `LocalSoftwareKeyboardController`.
@@ -499,8 +499,8 @@ Operator-side polish requested after the first P7 device pass: the thread rail g
   - Console command field: `ImeAction.Send` executes; Console tab gets `imePadding()`.
   - Tap on empty surface clears focus (`pointerInput` on the shell body); BackHandler closes the IME before popping chat (already partly done via `isImeVisible`).
   - Composer: keep Enter = newline; add `Shift/Ctrl + Enter` = send on hardware keyboards; hint text `enter ↵ newline · SEND to submit` shown while focused and empty.
-- **Acceptance Criteria**: On the S22 with Samsung Keyboard, focusing any field keeps it fully visible above the IME; URL/package fields receive no autocapitalisation or autocorrect; every submit action dismisses the keyboard; the Device tab's PROTECTED input, REVOKE and ADD remain reachable while the IME is open.
-- **Estimate**: 1 day | **Dependencies**: None
+- **Resolution**: `HairlineField` now owns keyboard behaviour: no autocorrect / no auto-caps for Uri, Ascii and Password types (Sentences + autocorrect only for free text), `BringIntoViewRequester` on focus so the field scrolls above the IME inside `verticalScroll` parents, Done/Send/Go run `onDone` then clear focus + hide the IME (`keepKeyboardOnDone` opt-out), Next moves focus (`onNext` / `focusRequester`), optional placeholder; `rememberDismissKeyboard()` for submit buttons. Shell: every non-chat tab body gets `imePadding()`, the bottom nav bar collapses while the IME is visible, and a tap on empty chrome clears focus. Gateway add form → two `HairlineField`s (name `Text`+Next, origin `Uri`+Done → save), SAVE & SWITCH / CANCEL dismiss the keyboard. Device PROTECTED input: placeholder + ADD dismisses. Console input: Ascii, no autocorrect, Send executes (keyboard intentionally kept for the next command). Code-review commit field: Done commits and dismisses. Connect: username `Ascii` + Next → password → Done connects. Composer: Shift/Ctrl+Enter sends on hardware keyboards, focused-empty hint `message · ↵ newline · SEND to submit`; SEND keeps the keyboard (messaging convention).
+- **Verified**: unit suite + release build; installed on S22 16:39 — **user to check** focus-scroll, no autocorrect on URL, dismissal on ADD / SAVE.
 
 #### A18.5 · Gateway Picker on the Connect (Login) Screen 🔲 PENDING
 - **Problem**: The Connect screen is a single origin field. Saved gateways (`OperatorCredStore.loadGateways()`, HOST tab "fleet / installations") and the paired device credential's origin (`DeviceCredStore`) are only reachable after a successful connect, so when the last-used origin is down (seen live: `http://100.88.4.63:9120` → `unexpected end of stream`) the user has to retype the working host. A failed origin also overwrites `sticky.origin`, so the next cold start retries the dead host.
@@ -593,7 +593,7 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 
 | ID | Item | Est. | Status |
 |---|---|:---:|:---:|
-| **A18.4** | **Keyboard & text field handling (next)** | 1d | 🔲 |
+| A18.4 | Keyboard & text field handling | 1d | ✅ (S22 check) |
 | **A8.5** | **Host-scoped everything: client pool, per-host creds/profile/ntfy, per-host lanes, host in wake + deep link, host named in every notification (2nd)** | 3d | 🔲 |
 | **A18.8** | **Chats not loading — RPC-empty → REST fallback, ended sessions, explicit states (3rd)** | 1d | 🔲 |
 | A18.7 | Bottom bar redesign: profile glyph + tab glyphs + IME-aware | 1d | 🔲 |

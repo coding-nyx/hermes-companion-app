@@ -22,6 +22,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -237,7 +239,12 @@ fun ConsoleScreen(
                 textStyle = CompanionType.Mono.copy(color = CompanionColor.Text),
                 cursorBrush = SolidColor(CompanionColor.Signal),
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                    keyboardType = KeyboardType.Ascii,
+                    imeAction = ImeAction.Send,
+                ),
                 keyboardActions = KeyboardActions(onSend = {
                     if (input.isNotBlank() && !isExecuting) {
                         val cmd = input.trim()
