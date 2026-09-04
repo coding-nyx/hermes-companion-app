@@ -30,7 +30,7 @@ tailscale ip -4        # preferred
 ### 2. Phone — install the app
 
 - **Release:** sideload `HermesCompanion-*.apk` from [Releases](https://github.com/coding-nyx/hermes-companion-app/releases).
-- **From source:** `./gradlew :app:assembleRelease` → `app/build/outputs/apk/release/app-release.apk`.
+- **From source:** `./gradlew :app:assembleRelease` → `app/build/outputs/apk/release/app-release.apk` (R8-minified). It is debug-signed unless you provide a key via `HERMES_KEYSTORE_PATH` / `HERMES_KEYSTORE_PASSWORD` / `HERMES_KEY_ALIAS` / `HERMES_KEY_PASSWORD` env vars or a gitignored `keystore.properties` (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`) at the repo root.
 
 Allow unknown sources, install, open the app.
 
@@ -103,4 +103,6 @@ In chat: `mobile_status` `mobile_arm` `mobile_disarm` `mobile_snapshot` `mobile_
 | [docs/protocol/operator.md](docs/protocol/operator.md) | Dashboard JSON-RPC |
 | [docs/protocol/mobile-control.md](docs/protocol/mobile-control.md) | Device-node frames |
 
-minSdk 31. Sideload only (not Play Store). Tag `v*` publishes the APK via GitHub Actions.
+minSdk 31. Sideload only (not Play Store). Tag `v*` publishes the APK via GitHub Actions (set repo secrets `HERMES_KEYSTORE_B64`, `HERMES_KEYSTORE_PASSWORD`, `HERMES_KEY_ALIAS`, `HERMES_KEY_PASSWORD` for a release-signed build).
+
+`http://` origins are accepted only for LAN / Tailscale hosts (loopback, RFC 1918, `100.64.0.0/10`, `.local`, `.ts.net`, …). A public host must use `https://`.

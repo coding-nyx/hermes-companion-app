@@ -91,6 +91,104 @@ class DeviceLanePolicyTest {
                 targetPackage = "com.android.settings",
             ),
         )
+        assertEquals(
+            "protected_package",
+            DeviceLanePolicy.reject(
+                DeviceArm.ARMED,
+                a11yBound = true,
+                action = "device.snapshot",
+                foregroundApp = "com.authy.authy",
+            ),
+        )
+        assertEquals(
+            "protected_package",
+            DeviceLanePolicy.reject(
+                DeviceArm.ARMED,
+                a11yBound = true,
+                action = "device.click",
+                foregroundApp = "com.onepassword.android",
+                ref = "e1",
+                lastRefs = setOf("e1"),
+            ),
+        )
+    }
+
+    @Test
+    fun expandedDenylistCoversVaultsWalletsAndPlatform() {
+        for (pkg in listOf(
+            "com.x8bit.bitwarden",
+            "com.kunzisoft.keepass.free",
+            "com.beemdevelopment.aegis",
+            "com.azure.authenticator",
+            "com.authy.authy",
+            "com.android.vending",
+            "com.google.android.permissioncontroller",
+            "com.android.packageinstaller",
+            "com.samsung.android.spay",
+            "com.samsung.android.settings.deviceowner",
+            "com.phonepe.app",
+            "com.chase.sig.android",
+            "com.capitalone.mobile",
+        )) {
+            assertTrue(pkg, DeviceLanePolicy.isProtected(pkg))
+            assertEquals(
+                pkg,
+                "protected_package",
+                DeviceLanePolicy.reject(
+                    DeviceArm.ARMED,
+                    a11yBound = true,
+                    action = "device.open_app",
+                    foregroundApp = "com.example.fixture",
+                    targetPackage = pkg,
+                ),
+            )
+        }
+        assertFalse(DeviceLanePolicy.isProtected("com.example.fixture"))
+        assertFalse(DeviceLanePolicy.isProtected("org.telegram.messenger"))
+        assertFalse(DeviceLanePolicy.isProtected(""))
+    }
+
+    @Test
+    fun customDenylistFailsClosedAndNormalizes() {
+        val custom = setOf("com.mybank.app", "com.corp.*")
+        assertEquals(
+            "protected_package",
+            DeviceLanePolicy.reject(
+                DeviceArm.ARMED,
+                a11yBound = true,
+                action = "device.snapshot",
+                foregroundApp = "com.mybank.app",
+                extraProtected = custom,
+            ),
+        )
+        assertEquals(
+            "protected_package",
+            DeviceLanePolicy.reject(
+                DeviceArm.ARMED,
+                a11yBound = true,
+                action = "device.open_app",
+                foregroundApp = "com.example.fixture",
+                targetPackage = "com.corp.mail",
+                extraProtected = custom,
+            ),
+        )
+        assertNull(
+            DeviceLanePolicy.reject(
+                DeviceArm.ARMED,
+                a11yBound = true,
+                action = "device.snapshot",
+                foregroundApp = "com.mybank.app",
+            ),
+        )
+        assertEquals("com.mybank.app", DeviceLanePolicy.normalizePackage("  Com.MyBank.App "))
+        assertEquals("com.corp.*", DeviceLanePolicy.normalizePackage("com.corp.*"))
+        assertEquals("com.corp.*", DeviceLanePolicy.normalizePackage("com.corp*"))
+        assertNull(DeviceLanePolicy.normalizePackage("not a package"))
+        assertNull(DeviceLanePolicy.normalizePackage("nodots"))
+        assertNull(DeviceLanePolicy.normalizePackage("*"))
+        assertNull(DeviceLanePolicy.normalizePackage(""))
+        assertTrue(DeviceLanePolicy.matchesRule("com.corp", "com.corp.*"))
+        assertFalse(DeviceLanePolicy.matchesRule("com.corporate.x", "com.corp.*"))
     }
 
     @Test

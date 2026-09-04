@@ -23,5 +23,8 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="armed device-control kill switch" />
         </service>
+        <receiver
+            android:name=".DisarmReceiver"
+            android:exported="false" />
     </application>
 </manifest>

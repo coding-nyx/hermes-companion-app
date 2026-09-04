@@ -23,3 +23,6 @@ venv/
 kc.sqlite
 .handoff.md
 .handoff.*.md
+keystore.properties
+*.keystore
+*.jks

@@ -66,7 +66,8 @@ class StayConnectedService : Service() {
             0,
             Intent(this, MainActivity::class.java)
                 .putExtra(MainActivity.EXTRA_ORIGIN, app.sticky.origin)
-                .putExtra(MainActivity.EXTRA_AUTOCONNECT, true),
+                .putExtra(MainActivity.EXTRA_AUTOCONNECT, true)
+                .putExtra(MainActivity.EXTRA_NONCE, app.launchNonce),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return NotificationCompat.Builder(this, CHANNEL)

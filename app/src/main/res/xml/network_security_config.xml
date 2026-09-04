@@ -1,4 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext policy (A7.2).
+
+  The companion talks to a self-hosted Hermes over the LAN or a Tailscale tailnet, usually
+  http://100.x.y.z:9120. Android's network-security config can only list literal hostnames,
+  not IP ranges, so cleartext cannot be scoped to RFC 1918 / 100.64.0.0/10 here. The platform
+  gate therefore stays open and the real policy lives in
+  domain/.../OriginPolicy.cleartextAllowed: http:// is refused for any host that is not
+  loopback, RFC 1918, CGNAT (Tailscale), link-local, IPv6 ULA, or a LAN-only suffix
+  (.local, .ts.net, .internal, .lan, .home.arpa). It is enforced at connect time and by an
+  OkHttp interceptor that covers REST, WebSocket and ntfy SSE. Public hosts must use https://.
+
+  Debug builds trust user-added CAs so a self-signed https origin can be tested.
+-->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="true" />
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
 </network-security-config>

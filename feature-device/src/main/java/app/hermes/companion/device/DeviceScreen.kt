@@ -6,25 +6,34 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
+import app.hermes.companion.design.HairlineField
 import app.hermes.companion.model.DeviceArm
 import app.hermes.companion.model.PairingPhase
 
@@ -42,6 +51,11 @@ fun DeviceScreen(
     foregroundApp: String = "",
     lastAudit: String = "",
     arm: DeviceArm = DeviceArm.DISARMED,
+    awakeOnVoice: Boolean = false,
+    lockedAccess: Boolean = false,
+    protectedCustom: List<String> = emptyList(),
+    protectedDefaults: Int = 0,
+    protectedError: String? = null,
     onPair: () -> Unit,
     onCancel: () -> Unit,
     onRevoke: () -> Unit,
@@ -50,6 +64,10 @@ fun DeviceScreen(
     onEnableA11y: () -> Unit = {},
     onEnableOverlay: () -> Unit = {},
     onEnableNotify: () -> Unit = {},
+    onToggleAwakeOnVoice: () -> Unit = {},
+    onToggleLockedAccess: () -> Unit = {},
+    onAddProtected: (String) -> Unit = {},
+    onRemoveProtected: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(
@@ -87,17 +105,27 @@ fun DeviceScreen(
                 Action("PAIR", "device.pair", onPair)
             }
             PairingPhase.WAITING -> {
-                Text(
-                    text = code,
-                    style = CompanionType.Display.copy(
-                        color = CompanionColor.Signal,
-                        fontSize = 28.sp,
-                        letterSpacing = 4.sp,
-                    ),
-                    maxLines = 1,
-                    softWrap = false,
-                    modifier = Modifier.testTag("device.code"),
-                )
+                val clipboardManager = LocalClipboardManager.current
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    Text(
+                        text = code,
+                        style = CompanionType.Display.copy(
+                            color = CompanionColor.Signal,
+                            fontSize = 28.sp,
+                            letterSpacing = 4.sp,
+                        ),
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.testTag("device.code"),
+                    )
+                    Spacer(Modifier.width(CompanionSpace.Md))
+                    Action("COPY", "device.copy") {
+                        clipboardManager.setText(AnnotatedString(code))
+                    }
+                }
                 Spacer(Modifier.height(CompanionSpace.Md))
                 Text(
                     text = "WAITING FOR HOST",
@@ -208,6 +236,37 @@ fun DeviceScreen(
                     Action("ENABLE OVERLAY", "device.overlay.enable", onEnableOverlay)
                     Spacer(Modifier.height(CompanionSpace.Sm))
                 }
+                Spacer(Modifier.height(CompanionSpace.Sm))
+                Text(
+                    text = if (awakeOnVoice) "AWAKE ON VOICE  on" else "AWAKE ON VOICE  off",
+                    style = CompanionType.Mono.copy(
+                        color = if (awakeOnVoice) CompanionColor.Signal else CompanionColor.TextMute,
+                    ),
+                    modifier = Modifier
+                        .testTag("device.awake.voice")
+                        .clickable(onClick = onToggleAwakeOnVoice)
+                        .padding(vertical = CompanionSpace.Xs),
+                )
+                Spacer(Modifier.height(CompanionSpace.Sm))
+                Text(
+                    text = if (lockedAccess) "LOCKED ACCESS  on" else "LOCKED ACCESS  off",
+                    style = CompanionType.Mono.copy(
+                        color = if (lockedAccess) CompanionColor.Signal else CompanionColor.TextMute,
+                    ),
+                    modifier = Modifier
+                        .testTag("device.locked.access")
+                        .clickable(onClick = onToggleLockedAccess)
+                        .padding(vertical = CompanionSpace.Xs),
+                )
+                Spacer(Modifier.height(CompanionSpace.Lg))
+                ProtectedPackages(
+                    custom = protectedCustom,
+                    defaults = protectedDefaults,
+                    error = protectedError,
+                    onAdd = onAddProtected,
+                    onRemove = onRemoveProtected,
+                )
+                Spacer(Modifier.height(CompanionSpace.Lg))
                 Action("REVOKE", "device.revoke", onRevoke)
             }
         }
@@ -219,6 +278,88 @@ fun DeviceScreen(
                 modifier = Modifier.testTag("device.error"),
             )
         }
+        }
+    }
+}
+
+/** Denylist editor. Built-ins are fixed; user rows are exact ids or `prefix.*`. */
+@Composable
+private fun ProtectedPackages(
+    custom: List<String>,
+    defaults: Int,
+    error: String?,
+    onAdd: (String) -> Unit,
+    onRemove: (String) -> Unit,
+) {
+    var draft by rememberSaveable { mutableStateOf("") }
+    Column(modifier = Modifier.fillMaxWidth().testTag("device.protected")) {
+        Text(
+            text = "PROTECTED  $defaults built-in · ${custom.size} custom",
+            style = CompanionType.Mono,
+            modifier = Modifier.testTag("device.protected.count"),
+        )
+        Spacer(Modifier.height(CompanionSpace.Xs))
+        Text(
+            text = "hands never touch these apps",
+            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+        )
+        Spacer(Modifier.height(CompanionSpace.Sm))
+        custom.forEach { pkg ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = CompanionSpace.Xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = pkg,
+                    style = CompanionType.MonoSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = "✕",
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger),
+                    modifier = Modifier
+                        .testTag("device.protected.remove")
+                        .clickable { onRemove(pkg) }
+                        .padding(horizontal = CompanionSpace.Sm),
+                )
+            }
+        }
+        Spacer(Modifier.height(CompanionSpace.Sm))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            HairlineField(
+                value = draft,
+                onValueChange = { draft = it },
+                keyboardType = androidx.compose.ui.text.input.KeyboardType.Ascii,
+                onDone = {
+                    if (draft.isNotBlank()) {
+                        onAdd(draft)
+                        draft = ""
+                    }
+                },
+                modifier = Modifier.weight(1f).testTag("device.protected.input"),
+            )
+            Spacer(Modifier.width(CompanionSpace.Sm))
+            Action("ADD", "device.protected.add") {
+                if (draft.isNotBlank()) {
+                    onAdd(draft)
+                    draft = ""
+                }
+            }
+        }
+        Spacer(Modifier.height(CompanionSpace.Xs))
+        Text(
+            text = "com.bank.app  or  com.corp.*",
+            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+        )
+        if (!error.isNullOrBlank()) {
+            Spacer(Modifier.height(CompanionSpace.Xs))
+            Text(
+                text = error,
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger),
+                modifier = Modifier.testTag("device.protected.error"),
+            )
         }
     }
 }

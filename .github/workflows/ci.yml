@@ -5,23 +5,66 @@ on:
     branches: [main, master]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   plugin:
+    name: host plugin (python)
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
+      - run: python3 -m compileall -q hermes-plugin
       - run: python3 -m unittest discover -s hermes-plugin/tests -q
 
   android:
+    name: android (unit tests · lint · release apk)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
       - run: chmod +x gradlew
-      - run: ./gradlew :domain:test :app:assembleDebug --quiet
+      - name: Unit tests (all modules)
+        run: ./gradlew test --console=plain --quiet
+      - name: Android lint
+        run: ./gradlew :app:lintRelease --console=plain --quiet
+      - name: Release APK (R8, minified)
+        # Signing secrets are optional on CI; without them the APK is debug-signed (see app/build.gradle.kts).
+        env:
+          HERMES_KEYSTORE_PATH: ${{ secrets.HERMES_KEYSTORE_PATH }}
+          HERMES_KEYSTORE_PASSWORD: ${{ secrets.HERMES_KEYSTORE_PASSWORD }}
+          HERMES_KEY_ALIAS: ${{ secrets.HERMES_KEY_ALIAS }}
+          HERMES_KEY_PASSWORD: ${{ secrets.HERMES_KEY_PASSWORD }}
+        run: |
+          if [ -n "${{ secrets.HERMES_KEYSTORE_B64 }}" ]; then
+            echo "${{ secrets.HERMES_KEYSTORE_B64 }}" | base64 -d > "${HERMES_KEYSTORE_PATH:-release.keystore}"
+          fi
+          ./gradlew :app:assembleRelease --console=plain --quiet
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          if-no-files-found: ignore
+          path: |
+            **/build/reports/tests/**
+            app/build/reports/lint-results-release.html
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: HermesCompanion-release
+          path: app/build/outputs/apk/release/app-release.apk

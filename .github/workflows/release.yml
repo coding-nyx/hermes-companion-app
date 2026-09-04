@@ -16,18 +16,39 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
       - run: chmod +x gradlew
-      - run: ./gradlew :app:assembleRelease --quiet
+      - name: Restore release keystore
+        id: keystore
+        run: |
+          if [ -n "${{ secrets.HERMES_KEYSTORE_B64 }}" ]; then
+            echo "${{ secrets.HERMES_KEYSTORE_B64 }}" | base64 -d > release.keystore
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build release APK
+        env:
+          HERMES_KEYSTORE_PATH: release.keystore
+          HERMES_KEYSTORE_PASSWORD: ${{ secrets.HERMES_KEYSTORE_PASSWORD }}
+          HERMES_KEY_ALIAS: ${{ secrets.HERMES_KEY_ALIAS }}
+          HERMES_KEY_PASSWORD: ${{ secrets.HERMES_KEY_PASSWORD }}
+          HERMES_VERSION_NAME: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          HERMES_VERSION_CODE: ${{ github.run_number }}
+        run: ./gradlew :app:assembleRelease --console=plain --quiet
       - name: Stage APK
         run: |
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk dist/HermesCompanion-${GITHUB_REF_NAME:-0.1.0}.apk
+          (cd dist && sha256sum HermesCompanion-*.apk > SHA256SUMS.txt)
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: dist/HermesCompanion-*.apk
+          files: |
+            dist/HermesCompanion-*.apk
+            dist/SHA256SUMS.txt
           generate_release_notes: true
           body: |
-            Sideload APK (debug-signed). Enable unknown sources.
+            Sideload APK (${{ steps.keystore.outputs.signed == 'true' && 'release-signed, R8 minified' || 'debug-signed, R8 minified — no HERMES_KEYSTORE_* secrets configured' }}). Enable unknown sources.
             Plugin: `hermes plugins install <owner>/<repo>/hermes-plugin` then `hermes plugins enable hermes-companion`.
-            Phone origin: `http://<hermes-tailscale>:9120`.
+            Phone origin: `http://<hermes-tailscale>:9120` (http only for LAN / Tailscale hosts; public hosts need https).

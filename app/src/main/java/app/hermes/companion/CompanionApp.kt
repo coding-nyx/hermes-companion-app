@@ -3,6 +3,7 @@ package app.hermes.companion
 import android.app.Application
 import app.hermes.companion.data.local.CompanionDatabase
 import app.hermes.companion.data.local.DeviceCredStore
+import app.hermes.companion.data.local.OperatorCredStore
 import app.hermes.companion.data.local.OutboxStore
 import app.hermes.companion.data.local.StickyStore
 import app.hermes.companion.data.local.TranscriptCache
@@ -23,11 +24,21 @@ class CompanionApp : Application() {
         private set
     lateinit var deviceCreds: DeviceCredStore
         private set
+    lateinit var operatorCreds: OperatorCredStore
+        private set
+    lateinit var deviceNode: DeviceNodeCoordinator
+        private set
 
     val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /**
+     * Per-process secret stamped on PendingIntents this app creates (wake notification,
+     * stay-connected notification). An intent carrying it is ours; anything else that reaches
+     * MainActivity with a deep link or origin extra is external and needs user confirmation.
+     */
+    val launchNonce: String = java.util.UUID.randomUUID().toString()
     var watchJob: Job? = null
     var hudJob: Job? = null
-    var deviceLaneJob: Job? = null
     var wakeJob: Job? = null
 
     override fun onCreate() {
@@ -38,5 +49,7 @@ class CompanionApp : Application() {
         cache = TranscriptCache(db)
         outbox = OutboxStore(db)
         deviceCreds = DeviceCredStore.encrypted(this)
+        operatorCreds = OperatorCredStore.encrypted(this)
+        deviceNode = DeviceNodeCoordinator(this, dashboard, deviceCreds, sticky, appScope)
     }
 }

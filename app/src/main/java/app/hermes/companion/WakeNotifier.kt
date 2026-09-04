@@ -25,6 +25,7 @@ object WakeNotifier {
             Intent(context, MainActivity::class.java)
                 .setAction(Intent.ACTION_VIEW)
                 .setData(Uri.parse(WakePolicy.deepLink(ping.sessionId, ping.profile)))
+                .putExtra(MainActivity.EXTRA_NONCE, (context.applicationContext as CompanionApp).launchNonce)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )

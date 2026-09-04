@@ -22,7 +22,13 @@ class StickyStore(context: Context) {
         get() = prefs.getBoolean(KEY_STAY, false)
         set(value) { prefs.edit().putBoolean(KEY_STAY, value).apply() }
 
+    /** User-added protected packages (exact ids or `prefix.*`). Merged with the built-in denylist. */
+    var protectedPackages: Set<String>
+        get() = prefs.getStringSet(KEY_PROTECTED, emptySet()).orEmpty().toSet()
+        set(value) { prefs.edit().putStringSet(KEY_PROTECTED, value.toSet()).apply() }
+
     companion object {
+        private const val KEY_PROTECTED = "protected_packages"
         private const val KEY_ORIGIN = "origin"
         private const val KEY_PROFILE = "profile_id"
         private const val KEY_NTFY = "ntfy_topic"

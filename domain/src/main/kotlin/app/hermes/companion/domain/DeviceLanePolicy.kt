@@ -27,12 +27,122 @@ object DeviceLanePolicy {
         "device.disarm",
     )
 
+    /**
+     * Fail-closed denylist. Exact package ids, or a prefix ending in `*`.
+     * Grouped: platform surfaces that grant power, authenticators, password managers,
+     * payments/wallets, banking. Users extend it from the Device tab (see [isProtected]).
+     */
     val PROTECTED_PACKAGES = setOf(
-        "com.google.android.apps.authenticator2",
-        "com.android.vending",
+        // platform: settings, permission grants, installs, keystore, billing
         "com.android.settings",
         "com.android.systemui",
+        "com.android.vending",
+        "com.android.packageinstaller",
+        "com.google.android.packageinstaller",
+        "com.android.permissioncontroller",
+        "com.google.android.permissioncontroller",
+        "com.android.keychain",
+        "com.android.certinstaller",
+        "com.google.android.gms",
+        "com.samsung.android.settings.*",
+        "com.samsung.android.lool",
+        "com.samsung.knox.*",
+        // authenticators
+        "com.google.android.apps.authenticator2",
+        "com.authy.authy",
+        "com.azure.authenticator",
+        "com.duosecurity.duomobile",
+        "com.beemdevelopment.aegis",
+        "org.fedorahosted.freeotp",
+        "com.yubico.yubioath",
+        "com.okta.android.auth",
+        "com.rsa.securidapp",
+        // password managers
+        "com.onepassword.android",
+        "com.agilebits.onepassword",
+        "com.lastpass.lpandroid",
+        "com.bitwarden.mobile",
+        "com.x8bit.bitwarden",
+        "com.kunzisoft.keepass.free",
+        "com.kunzisoft.keepass.libre",
+        "keepass2android.*",
+        "com.dashlane",
+        "com.nordpass.android.app.password.manager",
+        "proton.android.pass",
+        "com.enpass.app",
+        "com.samsung.android.samsungpass",
+        "com.samsung.android.authfw",
+        // payments / wallets
+        "com.google.android.apps.walletnfcrel",
+        "com.google.android.apps.nbu.paisa.user",
+        "com.samsung.android.spay",
+        "com.samsung.android.spayfw",
+        "com.paypal.android.p2pmobile",
+        "com.venmo",
+        "com.squareup.cash",
+        "com.phonepe.app",
+        "net.one97.paytm",
+        "in.org.npci.upiapp",
+        "in.amazon.mShop.android.shopping",
+        "com.coinbase.android",
+        "com.binance.dev",
+        // banking
+        "com.chase.sig.android",
+        "com.infonow.bofa",
+        "com.wf.wellsfargo",
+        "com.citi.citimobile",
+        "com.usbank.mobilebanking",
+        "com.capitalone.*",
+        "com.discoverfinancial.mobile",
+        "com.revolut.revolut",
+        "co.uk.getmondo",
+        "com.barclays.*",
+        "com.hsbc.*",
+        "com.sbi.*",
+        "com.csam.icici.bank.imobile",
+        "com.snapwork.hdfc",
+        "com.axis.mobile",
+        "com.msf.kbank.mobile",
+        "com.idbibank.*",
+        "com.db.pwcc.dbmobile",
+        "de.comdirect.android",
+        "com.ing.*",
+        "com.commbank.netbank",
+        "au.com.nab.mobile",
+        "org.westpac.bank",
+        "com.anz.android.gomoney",
+        "com.rbc.mobile.android",
+        "com.td",
+        "com.scotiabank.banking",
+        "com.cibc.android.mobi",
+        "com.bmo.mobile",
     )
+
+    private val PACKAGE_RE = Regex("^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z0-9_]+)+$")
+
+    /** Trim/lowercase a user-typed package (optionally `prefix.*`). Null if it is not a package id. */
+    fun normalizePackage(raw: String): String? {
+        val p = raw.trim().lowercase()
+        if (p.isBlank()) return null
+        val wild = p.endsWith("*")
+        val body = if (wild) p.removeSuffix("*").removeSuffix(".") else p
+        if (!PACKAGE_RE.matches(body)) return null
+        return if (wild) "$body.*" else body
+    }
+
+    fun matchesRule(pkg: String, rule: String): Boolean {
+        if (rule.endsWith("*")) {
+            val prefix = rule.removeSuffix("*")
+            return pkg.startsWith(prefix) || pkg == prefix.removeSuffix(".")
+        }
+        return pkg == rule
+    }
+
+    fun isProtected(pkg: String, extra: Set<String> = emptySet()): Boolean {
+        val p = pkg.trim().lowercase()
+        if (p.isBlank()) return false
+        return PROTECTED_PACKAGES.any { matchesRule(p, it) } || extra.any { matchesRule(p, it) }
+    }
 
     fun ticketSubprotocol(ticket: String): String = TICKET_PREFIX + ticket.trim()
 
@@ -72,6 +182,7 @@ object DeviceLanePolicy {
         ref: String? = null,
         lastRefs: Set<String> = emptySet(),
         targetPackage: String? = null,
+        extraProtected: Set<String> = emptySet(),
     ): String? {
         if (action !in CAPABILITIES) return "capability_denied"
         if (action == "device.disarm") return null
@@ -79,7 +190,7 @@ object DeviceLanePolicy {
         if (arm == DeviceArm.DISARMED) return "disarmed"
         if (!a11yBound) return "a11y_unavailable"
         val pkg = targetPackage?.takeIf { it.isNotBlank() } ?: foregroundApp
-        if (pkg in PROTECTED_PACKAGES) return "protected_package"
+        if (isProtected(pkg, extraProtected)) return "protected_package"
         if (!ref.isNullOrBlank() && action in REF_ACTIONS && ref !in lastRefs) return "stale_ref"
         return null
     }
