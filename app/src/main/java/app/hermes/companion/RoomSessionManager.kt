@@ -255,9 +255,10 @@ class RoomSessionManager(
                 event.passed -> done.messages.filterNot { it.id.startsWith(turn) } + ChatMessage(
                     id = "rm-${event.seq}", role = MessageRole.ASSISTANT, text = "", speaker = event.speaker, passed = true,
                 )
-                !hasSegment && event.error.isNotBlank() -> done.messages + ChatMessage(
+                // No text arrived: keep the turn visible either way (host error, or an empty reply).
+                !hasSegment -> done.messages + ChatMessage(
                     id = "rm-${event.seq}", role = MessageRole.ASSISTANT, text = "", speaker = event.speaker,
-                    toolDetail = event.error,
+                    toolDetail = event.error.ifBlank { "empty_reply" },
                 )
                 else -> done.messages.map { m ->
                     if (m.id.startsWith(turn)) m.copy(

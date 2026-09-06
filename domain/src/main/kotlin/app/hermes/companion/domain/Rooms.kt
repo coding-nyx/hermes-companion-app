@@ -38,6 +38,7 @@ object Rooms {
         "interrupted" -> "interrupted"
         "approval_required" -> "needs approval · answer it in that profile's thread"
         "upstream_timeout" -> "turn timed out"
+        "empty_reply" -> "no reply"
         else -> code.replace('_', ' ')
     }
 }

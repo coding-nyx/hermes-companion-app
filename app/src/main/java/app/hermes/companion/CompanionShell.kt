@@ -239,6 +239,7 @@ fun CompanionShell(
                 profiles = state.profiles,
                 onCreate = onCreateRoom,
                 onDismiss = onDismissRoomCreate,
+                error = state.error,
             )
         }
         if (showSettingsSheet) {

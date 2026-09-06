@@ -469,14 +469,17 @@ class UpstreamWs:
 
     def request(self, method: str, params: dict, timeout: float | None = None) -> dict:
         """Send a request and return its result, discarding interleaved events."""
-        result = None
         for kind, payload in self.call(method, params, timeout=timeout):
             if kind == "result":
-                result = payload
-        return result or {}
+                return payload
+        return {}
 
     def call(self, method: str, params: dict, timeout: float | None = None) -> Iterator[tuple[str, dict]]:
-        """Yield ("event", params) for every event and finally ("result", result)."""
+        """Yield ("event", params) for events and ("result", result) for the reply, in arrival order,
+        and keep yielding events afterwards until the caller stops iterating or [timeout] passes.
+
+        The real dashboard answers `prompt.submit` with {"status": "streaming"} *before* any
+        token arrives, so a turn must keep reading past the result until message.complete."""
         self._id += 1
         rid = f"r{self._id}"
         self._send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
@@ -504,7 +507,7 @@ class UpstreamWs:
                             f"rpc_{err.get('code', 'error')}", str(err.get("message") or method), 502
                         )
                     yield "result", obj.get("result") or {}
-                    return
+                    continue
                 params_obj = obj.get("params")
                 if obj.get("method") == "event" and isinstance(params_obj, dict):
                     yield "event", params_obj
@@ -658,19 +661,34 @@ class RoomController:
                 self.plans.pop(room.id, None)
             self.events.emit({"type": "room.idle", "room_id": room.id, "seq": room.seq})
 
-    def _ensure_backing(self, room: Room, ws: UpstreamWs, profile: str) -> tuple[str, bool]:
-        sid = room.backing.get(profile)
-        if sid:
-            return sid, False
+    def _create_backing(self, room: Room, ws: UpstreamWs, profile: str) -> tuple[str, str]:
+        """Create the participant's backing session. Returns (stored_id, live_id)."""
         result = ws.request(
             "session.create",
             {"profile": profile, "title": f"{TITLE_PREFIX}{room.id} {room.title}"[:80]},
         )
-        sid = str(result.get("session_id") or result.get("id") or "")
-        if not sid:
+        live = str(result.get("session_id") or result.get("id") or "")
+        stored = str(result.get("stored_session_id") or live)
+        if not live:
             raise RoomError("backing_session_failed", "session.create returned no id", 502)
-        self.store.bind_backing(room, profile, sid)
-        return sid, True
+        self.store.bind_backing(room, profile, stored)
+        return stored, live
+
+    def _ensure_backing(self, room: Room, ws: UpstreamWs, profile: str) -> tuple[str, str, bool]:
+        """Resolve (stored_id, live_id, fresh). Dashboards hand out an ephemeral live handle per
+        connection; only `stored_session_id` survives, so every turn resumes it. A stale or unknown
+        stored id (e.g. the dashboard was reset) gets a fresh backing session."""
+        stored = room.backing.get(profile)
+        if not stored:
+            s, l = self._create_backing(room, ws, profile)
+            return s, l, True
+        try:
+            result = ws.request("session.resume", {"session_id": stored, "profile": profile})
+            live = str(result.get("session_id") or stored)
+            return stored, live, False
+        except RoomError:
+            s, l = self._create_backing(room, ws, profile)
+            return s, l, True
 
     def _run_turn(self, room: Room, plan: _Plan, profile: str, round_no: int) -> RoomMsg | None:
         turn_id = f"t-{secrets.token_hex(3)}"
@@ -683,7 +701,7 @@ class RoomController:
                           "glyph": glyph(profile), "turn_id": turn_id, "round": round_no})
         try:
             ws.connect(self.token_provider())
-            sid, fresh = self._ensure_backing(room, ws, profile)
+            stored, sid, fresh = self._ensure_backing(room, ws, profile)
             with self.lock:
                 plan.active_ws, plan.active_session = ws, sid
             prompt = build_turn_prompt(room, profile, first_turn=fresh)
@@ -699,7 +717,7 @@ class RoomController:
                     continue
                 etype = str(payload.get("type") or "")
                 evsid = str(payload.get("session_id") or "")
-                if evsid and evsid != sid:
+                if evsid and evsid not in (sid, stored):
                     continue
                 body = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
                 if etype in ("message.delta", "assistant.delta", "token"):

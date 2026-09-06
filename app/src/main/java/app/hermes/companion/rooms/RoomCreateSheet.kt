@@ -43,6 +43,8 @@ fun RoomCreateSheet(
     profiles: List<ProfileRef>,
     onCreate: (title: String, participants: List<String>, maxRounds: Int) -> Unit,
     onDismiss: () -> Unit,
+    /** Last failure from the host (e.g. plugin too old, unpaired); shown under the buttons. */
+    error: String? = null,
 ) {
     var title by rememberSaveable { mutableStateOf("") }
     var picked by rememberSaveable { mutableStateOf(listOf<String>()) }
@@ -120,6 +122,13 @@ fun RoomCreateSheet(
                 Text(
                     text = "agent replies per message",
                     style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                )
+            }
+            if (!error.isNullOrBlank()) {
+                Text(
+                    text = error,
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                    modifier = Modifier.testTag("room.create.error"),
                 )
             }
             Spacer(Modifier.height(CompanionSpace.Xs))

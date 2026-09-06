@@ -107,6 +107,18 @@ class RoomReducerTest {
     }
 
     @Test
+    fun emptyTurnStaysVisible() {
+        val st = run(
+            ChatEvent.TurnStarted("ash", "t1", 1),
+            ChatEvent.TurnEnded("ash", "t1", 3, false, ""),
+            ChatEvent.Completed,
+        )
+        val row = st.messages.single()
+        assertEquals("ash", row.speaker)
+        assertEquals("empty_reply", row.toolDetail)
+    }
+
+    @Test
     fun duplicatePostEchoIsIgnored() {
         val st = run(ChatEvent.RoomPost(7, "hi"), ChatEvent.RoomPost(7, "hi"))
         assertEquals(1, st.messages.size)

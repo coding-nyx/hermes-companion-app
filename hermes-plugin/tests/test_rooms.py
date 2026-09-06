@@ -42,6 +42,8 @@ class FakeDashboard(BaseHTTPRequestHandler):
     scripts: dict = {}  # profile -> callable(prompt_text, turn_index) -> reply or list of chunks
     calls: list = []
     delay: float = 0.0
+    result_first: bool = False  # real dashboards ack prompt.submit before streaming
+    stored: dict = {}  # durable session ids the fake knows about
     turns: dict = {}
     lock = threading.Lock()
 
@@ -87,8 +89,19 @@ class FakeDashboard(BaseHTTPRequestHandler):
             with FakeDashboard.lock:
                 FakeDashboard.calls.append((method, params))
             if method == "session.create":
-                sid = f"sess-{profile}-{secrets.token_hex(2)}"
-                self._reply(rid, {"session_id": sid, "title": params.get("title")})
+                live = f"live-{secrets.token_hex(2)}"
+                stored = f"stored-{profile}-{secrets.token_hex(2)}"
+                with FakeDashboard.lock:
+                    FakeDashboard.stored[stored] = profile
+                self._reply(rid, {"session_id": live, "stored_session_id": stored, "title": params.get("title")})
+            elif method == "session.resume":
+                sid = str(params.get("session_id") or "")
+                with FakeDashboard.lock:
+                    known = sid in FakeDashboard.stored
+                if known:
+                    self._reply(rid, {"session_id": f"live-{secrets.token_hex(2)}", "stored_session_id": sid})
+                else:
+                    self._write({"jsonrpc": "2.0", "id": rid, "error": {"code": 4006, "message": "session not found"}})
             elif method == "session.interrupt":
                 self.interrupted.set()
                 self._reply(rid, {"status": "interrupted"})
@@ -108,6 +121,9 @@ class FakeDashboard(BaseHTTPRequestHandler):
         script = FakeDashboard.scripts.get(profile)
         reply = script(params.get("text", ""), n) if script else f"{profile} says hi"
         chunks = reply if isinstance(reply, list) else [reply[i:i + 12] for i in range(0, len(reply), 12)] or [""]
+        if FakeDashboard.result_first:
+            self._reply(rid, {"status": "streaming"})
+            time.sleep(0.05)
         self._write(self._event("tool.start", sid, {"name": "terminal", "detail": "echo ok"}))
         self._write(self._event("tool.complete", sid, {"name": "terminal", "detail": "echo ok", "duration_ms": 4}))
         for chunk in chunks:
@@ -117,7 +133,8 @@ class FakeDashboard(BaseHTTPRequestHandler):
                 break
             self._write(self._event("message.delta", sid, {"text": chunk}))
         self._write(self._event("message.complete", sid, {"ok": True}))
-        self._reply(rid, {"status": "ok"})
+        if not FakeDashboard.result_first:
+            self._reply(rid, {"status": "ok"})
 
     def _write(self, obj):
         with self.wlock:
@@ -224,6 +241,8 @@ class RoomRelayTests(unittest.TestCase):
         FakeDashboard.turns = {}
         FakeDashboard.delay = 0.0
         FakeDashboard.scripts = {}
+        FakeDashboard.result_first = False
+        FakeDashboard.stored = {}
         self.up = ThreadingHTTPServer(("127.0.0.1", 0), FakeDashboard)
         threading.Thread(target=self.up.serve_forever, daemon=True).start()
         uh, upp = self.up.server_address
@@ -317,6 +336,53 @@ class RoomRelayTests(unittest.TestCase):
         self.assertTrue(interrupts and interrupts[0]["profile"] == "coder", FakeDashboard.calls)
         code, body = _http("POST", f"{self.base}/companion/rooms/{rid}/post", {"text": "again"})
         self.assertEqual(code, 202)
+
+    def test_turn_keeps_reading_when_dashboard_acks_before_streaming(self):
+        """Real dashboards reply {"status":"streaming"} first; the text must still be captured."""
+        FakeDashboard.result_first = True
+        FakeDashboard.scripts = {"coder": lambda text, n: "streamed after the ack"}
+        code, body = _http("POST", f"{self.base}/companion/rooms", {"participants": ["coder"]})
+        rid = body["room"]["id"]
+        sock, rfile = _ws_client(self.host, self.port, f"/companion/rooms/events?room_id={rid}")
+        try:
+            _http("POST", f"{self.base}/companion/rooms/{rid}/post", {"text": "hello"})
+            events = _drain_until(rfile, "room.idle")
+        finally:
+            sock.close()
+        end = next(e for e in events if e["type"] == "room.turn.end")
+        self.assertEqual(end["message"]["text"], "streamed after the ack")
+        self.assertEqual(end["message"]["tools"][0]["name"], "terminal")
+
+    def test_backing_sessions_are_resumed_by_stored_id_and_recreated_when_gone(self):
+        FakeDashboard.scripts = {"coder": lambda text, n: "hi"}
+        code, body = _http("POST", f"{self.base}/companion/rooms", {"participants": ["coder"]})
+        rid = body["room"]["id"]
+        for _ in range(2):
+            sock, rfile = _ws_client(self.host, self.port, f"/companion/rooms/events?room_id={rid}")
+            try:
+                _http("POST", f"{self.base}/companion/rooms/{rid}/post", {"text": "go"})
+                _drain_until(rfile, "room.idle")
+            finally:
+                sock.close()
+        methods = [m for m, _ in FakeDashboard.calls]
+        # First turn creates; second turn resumes the *stored* id, never the live handle.
+        self.assertEqual(methods.count("session.create"), 1)
+        resumes = [p for m, p in FakeDashboard.calls if m == "session.resume"]
+        self.assertEqual(len(resumes), 1)
+        self.assertTrue(resumes[0]["session_id"].startswith("stored-coder-"))
+        submits = [p for m, p in FakeDashboard.calls if m == "prompt.submit"]
+        self.assertTrue(all(p["session_id"].startswith("live-") for p in submits))
+        # Dashboard forgot the session (reset): the next turn recreates instead of failing.
+        FakeDashboard.stored.clear()
+        sock, rfile = _ws_client(self.host, self.port, f"/companion/rooms/events?room_id={rid}")
+        try:
+            _http("POST", f"{self.base}/companion/rooms/{rid}/post", {"text": "again"})
+            events = _drain_until(rfile, "room.idle")
+        finally:
+            sock.close()
+        end = next(e for e in events if e["type"] == "room.turn.end")
+        self.assertEqual(end["error"], "")
+        self.assertEqual([m for m, _ in FakeDashboard.calls].count("session.create"), 2)
 
     def test_standalone_mode_reports_rooms_unavailable(self):
         with patch.dict(os.environ, {"HERMES_COMPANION_STANDALONE": "1"}, clear=False):
