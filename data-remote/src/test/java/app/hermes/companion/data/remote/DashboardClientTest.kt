@@ -1081,6 +1081,70 @@ class DashboardClientTest {
         }
     }
 
+    @Test
+    fun restHistory404IsEmptyPage() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"not_found"}"""))
+            val client = DashboardClient(server.toOkHttp())
+            val origin = server.url("/").toString().trimEnd('/')
+            val page = client.pageMessages(origin, "brand-new", "coder")
+            assertTrue(page.messages.isEmpty())
+            assertFalse(page.hasMore)
+            assertEquals("rest", page.source)
+            val req = server.takeRequest()
+            assertTrue(req.path.orEmpty().contains("/api/sessions/brand-new/messages"))
+        }
+    }
+
+    @Test
+    fun emptyRpcHistoryRest404IsEmptySuccess() = runBlocking {
+        MockWebServer().use { server ->
+            val methods = java.util.concurrent.CopyOnWriteArrayList<String>()
+            server.enqueue(
+                MockResponse().withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onOpen(webSocket: WebSocket, response: Response) {
+                            webSocket.send(
+                                """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"change_events":false,"heartbeat":false,"instance_id":"h-new"}}}""",
+                            )
+                        }
+
+                        override fun onMessage(webSocket: WebSocket, text: String) {
+                            val obj = Json.parseToJsonElement(text).jsonObject
+                            val id = obj["id"]!!.jsonPrimitive.content
+                            val method = obj["method"]!!.jsonPrimitive.content
+                            methods += method
+                            when (method) {
+                                "session.resume" -> webSocket.send(
+                                    """{"jsonrpc":"2.0","id":"$id","result":{"session_id":"live-new","stored_session_id":"brand-new"}}""",
+                                )
+                                "session.history" -> webSocket.send(
+                                    """{"jsonrpc":"2.0","id":"$id","result":{"messages":[]}}""",
+                                )
+                            }
+                        }
+                    },
+                ),
+            )
+            server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":"not_found"}"""))
+            val http = server.toOkHttp()
+            val client = DashboardClient(http)
+            val origin = server.url("/").toString().trimEnd('/')
+            client.wsHello(origin, "coder")
+            server.takeRequest()
+            val page = client.pageMessages(origin, "brand-new", "coder")
+            assertTrue(page.messages.isEmpty())
+            assertFalse(page.hasMore)
+            assertEquals("rest", page.source)
+            assertTrue(methods.contains("session.history"))
+            val rest = server.takeRequest()
+            assertTrue(rest.path.orEmpty().contains("/api/sessions/brand-new/messages"))
+            client.closeRpc()
+            http.dispatcher.executorService.shutdown()
+            http.connectionPool.evictAll()
+        }
+    }
+
     private fun MockWebServer.toOkHttp() = okhttp3.OkHttpClient.Builder()
         .build()
 }

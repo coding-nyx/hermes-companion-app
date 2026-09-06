@@ -653,9 +653,16 @@ class DashboardClient internal constructor(
             put("order", "latest")
             if (!beforeId.isNullOrBlank()) put("before", beforeId)
         }
-        return get(
-            DashboardUrls.rest(origin, "/api/sessions/$sessionId/messages", profileId, extra),
-        ) { HistoryPaging.clip(parseMessages(it), beforeId, limit) }
+        return try {
+            get(
+                DashboardUrls.rest(origin, "/api/sessions/$sessionId/messages", profileId, extra),
+            ) { HistoryPaging.clip(parseMessages(it), beforeId, limit) }
+        } catch (e: DashboardException) {
+            // Brand-new sessions (and some gateways) have no transcript resource yet.
+            // Treat 404 as empty history so openSession does not show "history failed".
+            if (e.code == "http_404") HistoryPage(messages = emptyList(), hasMore = false)
+            else throw e
+        }
     }
 
     private suspend fun listMessagesRpc(
