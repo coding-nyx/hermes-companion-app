@@ -18,14 +18,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /** Blinking 7×13 signal block — same cursor the transcript uses while streaming. */
@@ -46,6 +50,47 @@ fun SignalCursor(modifier: Modifier = Modifier, active: Boolean = true) {
             .width(7.dp)
             .height(13.dp)
             .background(CompanionColor.Signal.copy(alpha = if (active) blink else 1f)),
+    )
+}
+
+/** Blinking signal dot — "something is live here" marker for rows and pills. */
+@Composable
+fun LiveDot(modifier: Modifier = Modifier, color: Color = CompanionColor.Signal, size: Dp = 6.dp) {
+    val transition = rememberInfiniteTransition(label = "live")
+    val blink by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(CompanionMotion.BlinkMs * 2, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "live.alpha",
+    )
+    Box(
+        modifier
+            .size(size)
+            .background(color.copy(alpha = blink), CircleShape),
+    )
+}
+
+/** Three-step ellipsis that walks `·  ` → `·· ` → `···` — waiting-on-agent cue. */
+@Composable
+fun WalkingEllipsis(color: Color = CompanionColor.Signal, modifier: Modifier = Modifier) {
+    val transition = rememberInfiniteTransition(label = "ellipsis")
+    val step by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 3f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(CompanionMotion.ScanMs, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "ellipsis.step",
+    )
+    val n = (step.toInt() % 3) + 1
+    Text(
+        text = "···".take(n).padEnd(3, ' '),
+        style = CompanionType.MonoSmall.copy(color = color),
+        modifier = modifier,
     )
 }
 

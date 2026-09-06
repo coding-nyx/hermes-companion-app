@@ -99,6 +99,13 @@ class DashboardClient internal constructor(
     @Volatile private var rpcKey: String? = null
     @Volatile private var deviceWs: DeviceSocket? = null
     private val liveByStored = ConcurrentHashMap<String, String>()
+    /** SSE turn stream: a tool call can sit silent for minutes, so no read timeout. */
+    private val sseHttp: OkHttpClient by lazy {
+        http.newBuilder()
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .build()
+    }
+
     private val wsHttp: OkHttpClient by lazy {
         http.newBuilder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -558,7 +565,7 @@ class DashboardClient internal constructor(
             .header("Accept", "text/event-stream")
             .post(payload.toRequestBody(JSON))
             .build()
-        http.newCall(request).execute().use { response ->
+        sseHttp.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 throw httpError(response.code, response.body?.string().orEmpty(), url)
             }
