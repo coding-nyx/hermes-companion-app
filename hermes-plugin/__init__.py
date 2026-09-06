@@ -35,8 +35,10 @@ def _prompt(_info=None) -> str:
         "Companion tools: mobile_devices, mobile_select_device, mobile_status, mobile_arm, mobile_disarm, "
         "mobile_snapshot, mobile_click, mobile_type, mobile_swipe, mobile_scroll, mobile_press, "
         "mobile_open_app, mobile_apps, mobile_wait, mobile_screenshot. "
-        f"{hint} Never use banking/authenticator/Settings. Fail closed: "
-        "no_device, disarmed, a11y_unavailable, protected_package."
+        "Arm-first: call mobile_arm before snapshot/gestures (and before long replies) so the phone "
+        "does not lock while you plan. Status/devices/select stay allowed while disarmed; control "
+        f"ops refuse with disarmed until armed. {hint} Never use banking/authenticator/Settings. "
+        "Fail closed: no_device, disarmed, a11y_unavailable, protected_package."
     )
 
 

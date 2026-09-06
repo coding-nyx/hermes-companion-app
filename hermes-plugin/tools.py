@@ -27,7 +27,11 @@ def _dump(payload: dict) -> str:
 
 
 def _err(exc: BrokerError) -> str:
-    return _dump({"ok": False, "error": {"code": exc.code, "message": exc.message}})
+    payload = {"ok": False, "error": {"code": exc.code, "message": exc.message}}
+    if exc.code == "disarmed":
+        payload["error"]["hint"] = "call mobile_arm first"
+        payload["hint"] = "call mobile_arm first"
+    return _dump(payload)
 
 
 def _with_device(params: dict | None) -> dict:
@@ -255,5 +259,11 @@ def armed_hint(paired: bool, armed: bool) -> str | None:
     if not paired:
         return None
     if armed:
-        return "Android companion is ARMED. Prefer mobile_snapshot then mobile_click. Call mobile_disarm when done."
-    return "Android companion is DISARMED. Call mobile_arm before gestures (requires Accessibility on the phone)."
+        return (
+            "Android companion is ARMED. Prefer mobile_snapshot then mobile_click. "
+            "Call mobile_disarm when done."
+        )
+    return (
+        "Android companion is DISARMED. Call mobile_arm before snapshot/gestures "
+        "(and arm early to avoid lock-screen during long replies). Requires Accessibility on the phone."
+    )

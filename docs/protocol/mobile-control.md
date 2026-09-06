@@ -135,3 +135,9 @@ Plugin: 10 commands/sec per device. Excess → `timeout`/`rate_limited`, not a q
 ## Audit
 
 Host: `{HERMES_HOME}/companion-audit.jsonl`. Fields: time, device_id, profile, action, foreground_app, ok, error code. Never the typed text of `device.type`.
+
+## Arm-first (agent procedure)
+
+See `hermes-plugin/skills/hermes-companion/SKILL.md` (ships with the plugin).
+
+Agents must **`mobile_arm` before snapshot/gestures**, and preferably before long reasoning, so the phone does not hit the lock screen while the model is still thinking. `mobile_status` / `mobile_devices` / `mobile_select_device` remain allowed while disarmed; control actions fail closed with `disarmed` (+ hint to call `mobile_arm`) until armed. Do not auto-arm.

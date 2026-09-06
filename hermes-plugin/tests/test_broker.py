@@ -24,6 +24,15 @@ class BrokerTests(unittest.TestCase):
             broker.dispatch("device.snapshot")
         self.assertEqual(ctx.exception.code, "disarmed")
 
+
+    def test_snapshot_disarmed_refuses_with_hint(self):
+        handlers = make_handlers(Broker(device=MockDevice(armed=False)))
+        payload = json.loads(handlers["mobile_snapshot"]({}))
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "disarmed")
+        self.assertIn("mobile_arm", payload.get("hint", "") + payload["error"].get("hint", ""))
+
+
     def test_snapshot_when_armed(self):
         broker = Broker(device=MockDevice(armed=True))
         result = broker.dispatch("device.snapshot")
