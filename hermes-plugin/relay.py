@@ -153,6 +153,16 @@ def probe_upstream(host: str, port: int, timeout: float = 1.5) -> str:
         return "refused"
 
 
+def _shutdown(sock: socket.socket) -> None:
+    """Send FIN now. close() alone is not enough while another thread sits in recv(): the fd
+    stays referenced, the peer never sees EOF, and (with OkHttp pooling) its next request on the
+    "healthy" connection falls into a dead pipe until its read timeout — a 60s stall per call."""
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
 def proxy_tcp(client: socket.socket, already: bytes, upstream_host: str, upstream_port: int) -> None:
     _keepalive(client)
     try:
@@ -167,6 +177,10 @@ def proxy_tcp(client: socket.socket, already: bytes, upstream_host: str, upstrea
         t = threading.Thread(target=_pipe, args=(client, up), daemon=True)
         t.start()
         _pipe(up, client)
+        # Upstream finished (we send it Connection: close). Tell the client immediately so it does
+        # not reuse this connection; that also unblocks the client→upstream pipe thread.
+        _shutdown(client)
+        _shutdown(up)
         t.join(timeout=1)
     finally:
         try:
@@ -452,9 +466,23 @@ class CompanionHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self._dispatch()
 
+    DEBUG = os.environ.get("HERMES_COMPANION_DEBUG", "") not in ("", "0")
+
     def _dispatch(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        if self.DEBUG:
+            import time as _t
+            _started = _t.monotonic()
+            print(f"relay> {self.command} {self.path} {self.request_version} from {self.client_address[0]} "
+                  f"conn={self.headers.get('Connection')} upgrade={self.headers.get('Upgrade')}", flush=True)
+            try:
+                return self._dispatch_inner(path, parsed)
+            finally:
+                print(f"relay< {self.command} {self.path} {_t.monotonic() - _started:.2f}s", flush=True)
+        return self._dispatch_inner(path, parsed)
+
+    def _dispatch_inner(self, path: str, parsed):
         if path.startswith("/companion/"):
             self._companion(path)
             return
@@ -686,6 +714,8 @@ class CompanionHandler(BaseHTTPRequestHandler):
 
     def _companion(self, path: str):
         if not self._companion_authorized(path):
+            scheme = (self.headers.get("Authorization") or "").split(" ", 1)[0] or "none"
+            print(f"companion relay 401 {self.command} {path} from {self.client_address[0]} auth={scheme}", flush=True)
             return self._json({"error": "unauthorized", "hint": "pair this phone or call from the host"}, 401)
         if path.startswith("/companion/rooms"):
             try:

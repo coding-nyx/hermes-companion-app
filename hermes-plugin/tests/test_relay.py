@@ -156,6 +156,42 @@ class RelayTests(unittest.TestCase):
             state.wait_result(command_id, timeout=0.05)
         self.assertEqual(ctx.exception.code, "timeout")
 
+    def test_proxy_sends_fin_so_pooled_connections_are_not_reused(self):
+        """Regression: a second request on the same client connection used to vanish for the
+        client's whole read timeout because the relay never sent FIN after the first response."""
+        up = ThreadingHTTPServer(("127.0.0.1", 0), SlowUpstream)
+        threading.Thread(target=up.serve_forever, daemon=True).start()
+        relay = None
+        try:
+            host, port = up.server_address
+            with patch.dict(os.environ, {"HERMES_COMPANION_STANDALONE": "0"}, clear=False):
+                relay = make_server("127.0.0.1:0", f"http://{host}:{port}")
+                threading.Thread(target=relay.serve_forever, daemon=True).start()
+                rhost, rport = relay.server_address
+                import socket as _s
+
+                conn = _s.create_connection((rhost, rport), timeout=5)
+                conn.sendall(b"GET /api/status HTTP/1.1\r\nHost: x\r\nConnection: Keep-Alive\r\n\r\n")
+                buf = b""
+                deadline = time.monotonic() + 5
+                while b'"ok":true' not in buf and time.monotonic() < deadline:
+                    chunk = conn.recv(65536)
+                    if not chunk:
+                        break
+                    buf += chunk
+                self.assertIn(b'"ok":true', buf)
+                # The relay must close its side promptly (EOF), well under the 1s join it used to wait.
+                t0 = time.monotonic()
+                tail = conn.recv(65536)
+                self.assertEqual(tail, b"", "expected EOF after the proxied response")
+                self.assertLess(time.monotonic() - t0, 0.9)
+                conn.close()
+        finally:
+            if relay is not None:
+                relay.shutdown()
+                relay.server_close()
+            up.shutdown()
+
     def test_proxy_closed_upstream_returns_502(self):
         with patch.dict(os.environ, {"HERMES_COMPANION_STANDALONE": "0"}, clear=False):
             relay = make_server("127.0.0.1:0", "http://127.0.0.1:1")
