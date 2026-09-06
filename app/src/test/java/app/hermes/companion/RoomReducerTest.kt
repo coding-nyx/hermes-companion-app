@@ -2,6 +2,7 @@ package app.hermes.companion
 
 import app.hermes.companion.data.remote.HostClientPool
 import app.hermes.companion.model.ChatEvent
+import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -90,6 +91,19 @@ class RoomReducerTest {
         val row = st.messages.single()
         assertEquals("upstream_timeout", row.toolDetail)
         assertEquals("coder", row.speaker)
+    }
+
+    @Test
+    fun postEchoAdoptsTheOptimisticLocalRow() {
+        val flow = MutableStateFlow(
+            CompanionState(
+                openRoomId = "r-1",
+                messages = listOf(ChatMessage(id = "u-room-123", role = MessageRole.USER, text = "who owns it?")),
+            ),
+        )
+        val st = manager(flow).applyRoomEvent(flow.value, ChatEvent.RoomPost(1, "who owns it?"))
+        assertEquals(listOf("rm-1"), st.messages.map { it.id })
+        assertEquals(1, st.messages.size)
     }
 
     @Test

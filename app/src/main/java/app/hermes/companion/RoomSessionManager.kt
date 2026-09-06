@@ -44,7 +44,9 @@ class RoomSessionManager(
                 _state.update { it.copy(rooms = rooms, roomsLoading = false, roomsError = null) }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
-                _state.update { it.copy(roomsLoading = false, roomsError = roomError(t)) }
+                // A host running an older plugin has no /companion/rooms at all: no section, no noise.
+                val unsupported = (t as? DashboardException)?.code == "http_404"
+                _state.update { it.copy(rooms = emptyList(), roomsLoading = false, roomsError = if (unsupported) null else roomError(t)) }
             }
         }
     }
@@ -147,7 +149,12 @@ class RoomSessionManager(
             try {
                 val seq = client(origin).postRoom(origin, room.id, text)
                 _state.update { st ->
-                    st.copy(messages = st.messages.map { m -> if (m.id == local.id) m.copy(id = "rm-$seq") else m })
+                    // The room.post echo can land before this reply; never end up with two rm-<seq> rows.
+                    val echoed = st.messages.any { m -> m.id == "rm-$seq" }
+                    st.copy(
+                        messages = if (echoed) st.messages.filter { m -> m.id != local.id }
+                        else st.messages.map { m -> if (m.id == local.id) m.copy(id = "rm-$seq") else m },
+                    )
                 }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
@@ -265,8 +272,17 @@ class RoomSessionManager(
         }
         is ChatEvent.RoomPost -> {
             val id = "rm-${event.seq}"
-            if (state.messages.any { it.id == id }) state
-            else state.copy(messages = state.messages + ChatMessage(id = id, role = MessageRole.USER, text = event.text), streaming = true)
+            when {
+                state.messages.any { it.id == id } -> state
+                // Our own optimistic row (still carrying its local id) is this post: adopt the seq.
+                state.messages.any { it.id.startsWith("u-room-") && it.text == event.text } -> state.copy(
+                    messages = state.messages.map { m ->
+                        if (m.id.startsWith("u-room-") && m.text == event.text) m.copy(id = id) else m
+                    },
+                    streaming = true,
+                )
+                else -> state.copy(messages = state.messages + ChatMessage(id = id, role = MessageRole.USER, text = event.text), streaming = true)
+            }
         }
         ChatEvent.Completed -> {
             currentTurn = null
@@ -276,6 +292,7 @@ class RoomSessionManager(
     }
 
     private fun roomError(t: Throwable): String = when ((t as? DashboardException)?.code) {
+        "http_404" -> "host plugin has no rooms · update hermes-companion on the host"
         "http_401", "room_unauthorized" -> "rooms need a paired phone · Device → PAIR"
         "http_503" -> "rooms unavailable · host relay is in standalone mode"
         "http_409" -> "room busy · interrupt first"

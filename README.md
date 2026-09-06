@@ -71,6 +71,16 @@ In a Hermes chat: `mobile_status` → `mobile_arm` → `mobile_snapshot` → tap
 
 Stop anytime: notification **DISARM**, Device **DISARM**, double volume-down, or `mobile_disarm`.
 
+### 6. Rooms (optional)
+
+A **room** puts two or more profiles in one thread with you. Each agent keeps its own memory, tools and model; the host runs their turns and streams them to the phone.
+
+1. Threads → **NEW ROOM** → pick profiles → **CREATE**. Rooms need a **paired** phone (step 3) and the relay in proxy mode (`HERMES_COMPANION_STANDALONE=0`, the systemd default).
+2. Post like a normal message. Every participant answers once; `@COD` / `@OPS` chips address one agent. Agents can hand off with `@GLYPH` or stay silent with `PASS`; the round cap (1–4) stops the chatter.
+3. **INTERRUPT ALL** stops every in-flight turn.
+
+Same from the host: `hermes companion room create "triage" coder ops` then `hermes companion room post <id> …`. Protocol: [docs/protocol/rooms.md](docs/protocol/rooms.md).
+
 ## Everyday commands
 
 ```bash
@@ -78,6 +88,7 @@ hermes companion list
 hermes companion approve CODE
 hermes companion revoke DEVICE_ID
 hermes companion lanes
+hermes companion room list|create|post|history|interrupt|delete
 ```
 
 In chat: `mobile_status` `mobile_arm` `mobile_disarm` `mobile_snapshot` `mobile_click` `mobile_type` `mobile_swipe` `mobile_scroll` `mobile_press` `mobile_open_app` `mobile_apps` `mobile_wait` `mobile_screenshot`.
@@ -102,6 +113,7 @@ In chat: `mobile_status` `mobile_arm` `mobile_disarm` `mobile_snapshot` `mobile_
 | [docs/PLAN.md](docs/PLAN.md) | Vision and slices |
 | [docs/protocol/operator.md](docs/protocol/operator.md) | Dashboard JSON-RPC |
 | [docs/protocol/mobile-control.md](docs/protocol/mobile-control.md) | Device-node frames |
+| [docs/protocol/rooms.md](docs/protocol/rooms.md) | Agent rooms (group chat) routes, events, turn policy |
 
 minSdk 31. Sideload only (not Play Store). Tag `v*` publishes the APK via GitHub Actions (set repo secrets `HERMES_KEYSTORE_B64`, `HERMES_KEYSTORE_PASSWORD`, `HERMES_KEY_ALIAS`, `HERMES_KEY_PASSWORD` for a release-signed build).
 

@@ -682,7 +682,11 @@ class DashboardClient internal constructor(
     fun roomEvents(origin: String, roomId: String): Flow<ChatEvent> = callbackFlow {
         val url = DashboardUrls.machine(origin, "/companion/rooms/events?room_id=$roomId")
             .replaceFirst("http://", "ws://").replaceFirst("https://", "wss://")
-        val request = Request.Builder().url(url).build()
+        // Websocket upgrades bypass the REST interceptors on this client, so attach the pairing
+        // credential here as well (the relay gates /companion/rooms/events).
+        val request = Request.Builder().url(url).apply {
+            companionAuth?.takeIf { it.isNotBlank() }?.let { header("Authorization", "Companion $it") }
+        }.build()
         val socket = wsHttp.newWebSocket(
             request,
             object : okhttp3.WebSocketListener() {
@@ -824,26 +828,18 @@ class DashboardClient internal constructor(
                 if (!url.isHttps && !OriginPolicy.privateHost(url.host)) {
                     throw java.io.IOException(OriginPolicy.CLEARTEXT_DENIED)
                 }
+                val req = chain.request().newBuilder()
                 val auth = companionAuth
-                val req = if (!auth.isNullOrBlank() && url.encodedPath.startsWith("/companion/")) {
-                    chain.request().newBuilder().header("Authorization", "Companion $auth").build()
-                } else {
-                    chain.request()
+                val token = sessionToken
+                if (!auth.isNullOrBlank() && url.encodedPath.startsWith("/companion/")) {
+                    // Plugin routes: the pairing credential is the identity. Must not be
+                    // overwritten by the dashboard bearer below.
+                    req.header("Authorization", "Companion $auth")
+                } else if (attachToken && !gated && !token.isNullOrBlank()) {
+                    req.header("X-Hermes-Session-Token", token)
+                    req.header("Authorization", "Bearer $token")
                 }
-                chain.proceed(req)
-            }
-            .apply {
-                if (attachToken) {
-                    addInterceptor { chain ->
-                        val token = sessionToken
-                        val req = chain.request().newBuilder()
-                        if (!gated && !token.isNullOrBlank()) {
-                            req.header("X-Hermes-Session-Token", token)
-                            req.header("Authorization", "Bearer $token")
-                        }
-                        chain.proceed(req.build())
-                    }
-                }
+                chain.proceed(req.build())
             }
             .build()
 

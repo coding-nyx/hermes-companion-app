@@ -222,7 +222,8 @@ fun ChatScreen(
                     item(key = "history.skeleton") { FetchSkeleton(lines = 4, padded = false) }
                 }
             }
-            items(messages, key = { it.id }) { message ->
+            // Duplicate keys crash LazyColumn outright; a reducer race must never take the app down.
+            items(messages.distinctBy { it.id }, key = { it.id }) { message ->
                 when (message.role) {
                     MessageRole.USER -> UserRow(message, if (roomMode) ({}) else onRewind, onFetchMedia, onOpenMedia)
                     MessageRole.TOOL -> Box(Modifier.padding(start = AgentRailInset)) {

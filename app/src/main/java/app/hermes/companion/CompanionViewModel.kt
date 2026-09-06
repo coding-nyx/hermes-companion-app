@@ -163,7 +163,6 @@ class CompanionViewModel(
                 }
                 sync.startWatch(origin, profileId)
                 rooms.refreshRooms()
-            rooms.refreshRooms()
             }
             val session = _state.value.sessions.find { it.id == sessionId }
                 ?: SessionRef(
@@ -319,6 +318,8 @@ class CompanionViewModel(
     fun selectTab(tab: MainTab) {
         _state.update { it.copy(tab = tab) }
         when (tab) {
+            // Pairing may have happened since the last fetch; the room list needs the credential.
+            MainTab.THREADS -> rooms.refreshRooms()
             MainTab.CONSOLE -> host.refreshHostMetrics()
             MainTab.REVIEW -> host.loadGitStatus()
             MainTab.REMINDERS -> host.loadCronJobs()
@@ -682,6 +683,7 @@ class CompanionViewModel(
                 sync.startHud(origin)
                 sync.startWatch(origin, active.id)
                 deviceNode.bind(origin)
+                rooms.refreshRooms()
                 sync.startWake()
                 sync.startFleetHealth()
                 host.refreshHostMetrics()

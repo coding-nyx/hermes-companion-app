@@ -57,3 +57,12 @@
   - Reducer segments assistant text around tool rows (`assistantId`, `assistantId.2`, …). Before, post-tool deltas were appended to the pre-tool row so the transcript read text→text→tool until reopened.
   - `CompanionState.openSessionRef` fallback: a freshly created thread vanished from `sessions` on the next `session.list` refresh (host does not persist empty threads), so `openSession` was null and SEND was a silent no-op. `send()` now reports `send blocked · …` instead of returning quietly.
 
+
+## Agent rooms P21 (`feat/agent-rooms`, 2026-09-07)
+- Host: `hermes-plugin/rooms.py` (RoomStore `companion-rooms.json`, UpstreamWs, RoomEvents, RoomController). Routes `/companion/rooms…` + events ws; CLI `hermes companion room …`; skill/prompt rules. Tests `tests/test_rooms.py` (scripted async fake dashboard).
+- **Auth gate** on `/companion/*`: loopback or `Authorization: Companion <device_id>:<credential>` from a paired device. Open: health, pair offer/status, register, ticket ws, media GET. Phone sets the header once a DeviceCred exists (interceptor + explicit header on the events ws — ws upgrades skip the REST interceptor). 401s are logged by the relay.
+- Phone: `RoomSessionManager` shares `messages/draft/streaming` with the single-agent chat; `openRoomId` decides which is shown. Backing sessions (`room:<id>`) are hidden from the rail. Rooms refresh on connect / profile switch / Threads tab (pairing may happen after connect). Old host plugin (404) → no ROOMS section.
+- **Relay proxy bug found on device (fixed):** `proxy_tcp` never sent FIN after a proxied response (close() with a thread still in recv), so OkHttp reused the pooled connection and the next request black-holed for its 60s read timeout. Connect went from 60–180s to ~3s. Regression test in `test_relay.py`. `HERMES_COMPANION_DEBUG=1` logs every relay request with timing.
+- E2E (S22, local relay in proxy mode over `mock-dashboard`, via LAN then Tailscale `100.121.113.13:9120`): pair → NEW ROOM (coder+ops) → post → mention-first turn order (`@OPS` first), round cap, follow-tail, no crash. Mock agents echo their prompt, so transcripts look noisy; real agents reply normally.
+- Known: markdown renderer italicises across `_` in agent text (`mobile_*`), pre-existing. The phone still has pairings/gateways for the two throwaway relay origins (192.168.0.11, 100.121.113.13) — harmless, can be forgotten from the connect picker.
+

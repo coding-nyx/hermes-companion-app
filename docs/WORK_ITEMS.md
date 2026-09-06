@@ -32,7 +32,7 @@
 | **P18** | Threads & Chat Polish (keyboard, history bug, loading, rich text, bottom bar, delete, gateway picker) | A18.1 – A18.8 | ✅ **100%** | P1 | v0.3.0 |
 | **P20** | Dashboard-Independent Operator Lane (plugin serves the operator API) | A20.1 – A20.3 | ✅ **100%** (A20.1–A20.3 done 2026-09-05; standalone default ON) | P2 | v0.9.0 |
 | **P19** | OpenClaw Gateway Support (second host kind) | A19.1 – A19.4 | 🔲 **Planned (last)** | P2 | v1.0.0 |
-| **P21** | Agent Rooms — multi-profile group chat (plan: `docs/superpowers/plans/2026-09-07-agent-group-chat.md`) | A21.1 – A21.6 | 🔲 **Planned (2026-09-07)** | P1 | v0.3.0 |
+| **P21** | Agent Rooms — multi-profile group chat (plan: `docs/superpowers/plans/2026-09-07-agent-group-chat.md`) | A21.1 – A21.6 | ✅ **v1 code done (2026-09-07)** — A21.1–A21.5 landed, S22 pass vs mock dashboard; A21.6 later | P1 | v0.3.0 |
 
 ---
 
@@ -608,11 +608,12 @@ Operator opens a **room** with two or more Hermes profiles; each agent keeps its
 
 ### Work Items
 
-#### A21.1 · Host: room store, controller, upstream WS client, `/companion/*` auth gate 🔲 PENDING (~3d)
-#### A21.2 · Agent-side skill + prompt hint for rooms 🔲 PENDING (~0.5d)
-#### A21.3 · Phone: `RoomRef`, `ChatMessage.speaker`, room client, reducer 🔲 PENDING (~1.5d)
-#### A21.4 · Phone: ROOMS rail, create sheet, speaker rows, mention chips, INTERRUPT ALL 🔲 PENDING (~2.5d)
-#### A21.5 · CLI `hermes companion room …` + docs 🔲 PENDING (~0.5d)
+#### A21.1 · Host: room store, controller, upstream WS client, `/companion/*` auth gate ✅ DONE (2026-09-07)
+- `hermes-plugin/rooms.py` + relay routes/events ws + auth gate (loopback or `Authorization: Companion id:cred`). Also fixed the relay proxy FIN bug (60s stall on reused connections). Tests: `test_rooms.py`, `test_relay.py`.
+#### A21.2 · Agent-side skill + prompt hint for rooms ✅ DONE (2026-09-07)
+#### A21.3 · Phone: `RoomRef`, `ChatMessage.speaker`, room client, reducer ✅ DONE (2026-09-07) — `RoomJson`, `RoomSessionManager`, tests
+#### A21.4 · Phone: ROOMS rail, create sheet, speaker rows, mention chips, INTERRUPT ALL ✅ DONE (2026-09-07) — render captures + S22 pass (mock dashboard, LAN + Tailscale)
+#### A21.5 · CLI `hermes companion room …` + docs ✅ DONE (2026-09-07) — `docs/protocol/rooms.md`, README §6
 #### A21.6 · Hands in rooms (controller election) 🔲 LATER (P2)
 
 ---
