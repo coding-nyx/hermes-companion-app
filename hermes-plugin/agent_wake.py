@@ -305,27 +305,18 @@ def _wake_botchat(profile: str, message: str, profile_home: Path) -> None:
 
 
 def _wake_telegram(profile: str, message: str, profile_home: Path) -> None:
-    """One-shot cron with deliver=telegram:home so ash runs and origin chat sees the reply."""
+    """Immediate Telegram nudge + agent turn (chat -Q). Never auto-injects.
+
+    Cron one-shots only accept minute+ delays (`in 1m`), so we:
+      1) `hermes send` a short line to the home DM (visible now)
+      2) `hermes chat -Q` so the agent actually runs and can call mobile_notifications
+    """
     chat_id = _read_telegram_home_chat(profile_home)
     if not chat_id:
         logger.warning("agent wake telegram: no home DM in %s; falling back to cli", profile_home)
         _wake_cli(profile, message, profile_home)
         return
-    deliver = f"telegram:{chat_id}"
-    name = f"companion-notif-wake-{int(time.time())}"
-    # cron create: schedule + optional positional prompt; no --accept-hooks on this subcommand.
-    argv_create = _hermes_argv(profile) + [
-        "cron",
-        "create",
-        "1s",
-        "--repeat",
-        "1",
-        "--name",
-        name,
-        "--deliver",
-        deliver,
-        message,
-    ]
+
     env = os.environ.copy()
     if profile and profile != "default":
         env.pop("HERMES_HOME", None)
@@ -333,31 +324,36 @@ def _wake_telegram(profile: str, message: str, profile_home: Path) -> None:
         env["HERMES_HOME"] = str(profile_home)
     env.setdefault("HERMES_ACCEPT_HOOKS", "1")
 
+    # Keep telegram text short; full tool hint stays in the chat -Q prompt.
+    first_line = (message.splitlines() or [""])[0].strip() or "mobile notif"
+    send_body = first_line + "\n(call mobile_notifications — never auto-inject)"
+
     def _run() -> None:
         try:
-            created = subprocess.run(
-                argv_create, capture_output=True, text=True, timeout=60, env=env
-            )
-            out = (created.stdout or "") + (created.stderr or "")
-            if created.returncode != 0:
-                logger.warning("agent wake telegram cron create failed: %s", out[-400:])
-                _wake_cli(profile, message, profile_home)
-                return
-            # Prefer immediate tick so we don't wait for the scheduler interval.
-            tick = _hermes_argv(profile) + ["cron", "tick"]
-            subprocess.run(tick, capture_output=True, text=True, timeout=30, env=env)
-            logger.info("agent wake telegram cron created+ticked profile=%s deliver=%s", profile, deliver)
+            send_argv = _hermes_argv(profile) + [
+                "send",
+                "--to",
+                f"telegram:{chat_id}",
+                send_body,
+            ]
+            sent = subprocess.run(send_argv, capture_output=True, text=True, timeout=60, env=env)
+            if sent.returncode != 0:
+                tail = ((sent.stderr or "") + (sent.stdout or "")).strip()[-400:]
+                logger.warning("agent wake telegram send failed rc=%s %s", sent.returncode, tail)
+            else:
+                logger.info("agent wake telegram send ok profile=%s chat=%s", profile, chat_id)
         except Exception as exc:
-            logger.warning("agent wake telegram error profile=%s: %s", profile, exc)
-            try:
-                _wake_cli(profile, message, profile_home)
-            except Exception:
-                pass
-        finally:
+            logger.warning("agent wake telegram send error profile=%s: %s", profile, exc)
+        # Agent turn regardless of send outcome (tools still useful).
+        try:
+            _wake_cli(profile, message, profile_home)
+        except Exception as exc:
+            logger.warning("agent wake telegram cli follow-up failed profile=%s: %s", profile, exc)
             with _lock:
                 _inflight.discard(profile)
 
     threading.Thread(target=_run, name=f"companion-wake-tg-{profile}", daemon=True).start()
+
 
 
 def maybe_wake_for_notification(event: dict, *, now: Callable[[], float] | None = None) -> bool:
