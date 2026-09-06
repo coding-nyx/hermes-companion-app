@@ -56,6 +56,7 @@ import app.hermes.companion.design.Hairline
 import app.hermes.companion.design.HudDot
 import app.hermes.companion.design.ProfileGlyph
 import app.hermes.companion.domain.DeviceLanePolicy
+import app.hermes.companion.domain.NotificationStreamPolicy
 import app.hermes.companion.gateway.GatewayScreen
 import androidx.compose.material3.ExperimentalMaterial3Api
 import app.hermes.companion.model.ChatMessage
@@ -407,6 +408,7 @@ fun CompanionShell(
                     onToggleBiometricLock = onToggleBiometricLock,
                     protectedCustom = state.protectedCustom,
                     protectedDefaults = DeviceLanePolicy.PROTECTED_PACKAGES.size,
+                    streamMuteDefaults = NotificationStreamPolicy.STREAM_SUPPRESS_PACKAGES.size,
                     protectedError = state.protectedError,
                     onAddProtected = onAddProtected,
                     onRemoveProtected = onRemoveProtected,

@@ -60,6 +60,7 @@ fun DeviceScreen(
     protectedCustom: List<String> = emptyList(),
     protectedDefaults: Int = 0,
     protectedError: String? = null,
+    streamMuteDefaults: Int = 0,
     nlsBound: Boolean = false,
     notifStreamEnabled: Boolean = false,
     notifStreamOrigin: String? = null,
@@ -343,6 +344,13 @@ fun DeviceScreen(
                         .clickable(onClick = onToggleNotifStream)
                         .padding(vertical = CompanionSpace.Xs),
                 )
+                if (streamMuteDefaults > 0) {
+                    Text(
+                        text = "STREAM MUTE  $streamMuteDefaults built-in (Telegram)",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                        modifier = Modifier.testTag("device.stream.mute"),
+                    )
+                }
                 if (notifStreamEnabled) {
                     val sinkHost = notifStreamOrigin.orEmpty().ifBlank { "(sticky host)" }
                     val sinkProfile = notifStreamProfile.orEmpty().ifBlank { "(sticky profile)" }
@@ -391,7 +399,7 @@ fun DeviceScreen(
                         }
                     }
                     Text(
-                        text = "exposes non-blocked shade content to the chosen host",
+                        text = "exposes non-muted shade content to the chosen host · Telegram muted",
                         style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
                         modifier = Modifier.testTag("device.stream.warn"),
                     )

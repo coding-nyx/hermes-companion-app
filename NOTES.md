@@ -6,6 +6,13 @@
 - Stream filter: self-package + FGS channels still suppressed; do not rely on built-in package list.
 
 
+## Telegram stream suppress (`feat/telegram-stream-suppress`)
+- Built-in `NotificationStreamPolicy.STREAM_SUPPRESS_PACKAGES`: `org.telegram.messenger`, `.web`, `.beta`, `org.thunderdog.challegram`.
+- Filters NLS forward path only; `DeviceLanePolicy.PROTECTED_PACKAGES` / broker `PROTECTED_PACKAGES` stay empty (Hands can control Telegram).
+- Wake skip default aligned via `agent_wake.STREAM_SUPPRESS_PACKAGES` (dual list — keep in sync).
+- Device tab: `STREAM MUTE  N built-in (Telegram)` near STREAM; BLOCKLIST remains Hands custom-only.
+
+
 ## Landed
 
 ### Slice 1 — Multi-gateway
