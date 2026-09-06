@@ -102,23 +102,47 @@ def format_telegram_nudge(package: str, title: str) -> str:
     return f"Phone ping — {tit} ({pkg}). Checking…"
 
 
-def format_wake_message(package: str, title: str, text: str = "") -> str:
-    """Strong chat -Q operating prompt. Must not be parroted as the user-visible reply."""
+def format_wake_message(
+    package: str,
+    title: str,
+    text: str = "",
+    *,
+    notification_key: str = "",
+    notification_id: str = "",
+) -> str:
+    """Strong chat -Q operating prompt. Must not be parroted as the user-visible reply.
+
+    Includes the ring event payload so the first reply can summarize even when
+    mobile_notifications fails in a detached process (relay is out-of-process on :9120).
+    Still instruct the agent to call the tool when available.
+    """
     pkg, tit = _short_pkg_title(package, title)
-    # text is intentionally omitted from the prompt body — agent must fetch via tools.
-    _ = text
+    body = (text or "").strip()
+    if len(body) > 500:
+        body = body[:497] + "..."
+    key = (notification_key or notification_id or "").strip()
+    payload_lines = [
+        f"package: {pkg}",
+        f"title: {tit}",
+    ]
+    if body:
+        payload_lines.append(f"text: {body}")
+    if key:
+        payload_lines.append(f"key: {key}")
+    payload_block = "\n".join(payload_lines)
     return (
         "[COMPANION WAKE — shade notification for this profile]\n"
-        f"Metadata hint only (unverified): {pkg} · {tit}\n\n"
+        "Ring event payload (from companion accept; prefer tool refresh when available):\n"
+        f"{payload_block}\n\n"
         "Do NOT echo or paraphrase this wake prompt as your reply.\n"
         "Operating steps:\n"
-        "1. Immediately call mobile_notifications (with profile= if needed). "
-        "Do not end the turn with only wake text.\n"
-        "2. From the tool result, briefly tell Nyx what matters "
-        "(package, title, text summary).\n"
+        "1. Call mobile_notifications (profile= if needed) to refresh/confirm the ring. "
+        "If the tool fails (e.g. relay unavailable), summarize from the payload above "
+        "and say the tool failed — do not invent extra details.\n"
+        "2. Briefly tell Nyx what matters (package, title, text summary).\n"
         "3. Call mobile_notifications_inject ONLY if Nyx would want this in the "
         "active thread; default is do NOT inject.\n"
-        "4. Never invent notification bodies — use only tool results.\n"
+        "4. Never invent notification bodies beyond the payload / tool results.\n"
         "5. Keep the user-visible reply short."
     )
 
@@ -188,7 +212,38 @@ def _read_telegram_home_chat(profile_home: Path) -> str | None:
 
 
 
-def _wake_cli(profile: str, message: str, profile_home: Path) -> None:
+def _chat_q_argv(profile: str, query_file: str) -> list[str]:
+    return _hermes_argv(profile) + [
+        "chat",
+        "-Q",
+        "--oneshot",
+        "--query-file",
+        query_file,
+        "--source",
+        "companion-notif",
+        "--max-turns",
+        os.environ.get("HERMES_COMPANION_NOTIF_WAKE_MAX_TURNS", "8"),
+        "--run-budget",
+        os.environ.get("HERMES_COMPANION_NOTIF_WAKE_RUN_BUDGET", "120"),
+        "--accept-hooks",
+    ]
+
+
+def _profile_env(profile: str, profile_home: Path) -> dict:
+    env = os.environ.copy()
+    # -p owns resolution; avoid shadowing when profile != default
+    if profile and profile != "default":
+        env.pop("HERMES_HOME", None)
+    else:
+        env["HERMES_HOME"] = str(profile_home)
+    env.setdefault("HERMES_ACCEPT_HOOKS", "1")
+    # Detached chat must hit the standalone companion relay for notifications.
+    env.setdefault("HERMES_COMPANION_RELAY_URL", "http://127.0.0.1:9120")
+    return env
+
+
+def _run_chat_q(profile: str, message: str, profile_home: Path) -> tuple[int, str, str]:
+    """Run hermes chat -Q synchronously. Returns (rc, stdout, stderr_or_err)."""
     query_file = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -196,64 +251,77 @@ def _wake_cli(profile: str, message: str, profile_home: Path) -> None:
         ) as fh:
             fh.write(message)
             query_file = fh.name
-        argv = _hermes_argv(profile) + [
-            "chat",
-            "-Q",
-            "--oneshot",
-            "--query-file",
-            query_file,
-            "--source",
-            "companion-notif",
-            "--max-turns",
-            os.environ.get("HERMES_COMPANION_NOTIF_WAKE_MAX_TURNS", "8"),
-            "--run-budget",
-            os.environ.get("HERMES_COMPANION_NOTIF_WAKE_RUN_BUDGET", "120"),
-            "--accept-hooks",
-        ]
-        env = os.environ.copy()
-        # -p owns resolution; avoid shadowing when profile != default
-        if profile and profile != "default":
-            env.pop("HERMES_HOME", None)
-        else:
-            env["HERMES_HOME"] = str(profile_home)
-        env.setdefault("HERMES_ACCEPT_HOOKS", "1")
-
-        def _run_and_cleanup() -> None:
-            try:
-                _spawn_sync = subprocess.run
-                result = _spawn_sync(
-                    argv,
-                    capture_output=True,
-                    text=True,
-                    timeout=float(os.environ.get("HERMES_COMPANION_NOTIF_WAKE_TIMEOUT_SEC", "180")),
-                    env=env,
-                )
-                if result.returncode != 0:
-                    tail = (result.stderr or result.stdout or "").strip()[-400:]
-                    logger.warning("agent wake cli failed rc=%s %s", result.returncode, tail)
-                else:
-                    logger.info("agent wake cli ok profile=%s", profile)
-            except subprocess.TimeoutExpired:
-                logger.warning("agent wake cli timed out profile=%s", profile)
-            except Exception as exc:
-                logger.warning("agent wake cli error profile=%s: %s", profile, exc)
-            finally:
-                if query_file:
-                    try:
-                        os.unlink(query_file)
-                    except OSError:
-                        pass
-                with _lock:
-                    _inflight.discard(profile)
-
-        threading.Thread(target=_run_and_cleanup, name=f"companion-wake-cli-{profile}", daemon=True).start()
-    except Exception:
+        argv = _chat_q_argv(profile, query_file)
+        env = _profile_env(profile, profile_home)
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=float(os.environ.get("HERMES_COMPANION_NOTIF_WAKE_TIMEOUT_SEC", "180")),
+            env=env,
+        )
+        return result.returncode, (result.stdout or ""), (result.stderr or "")
+    except subprocess.TimeoutExpired:
+        return 124, "", "agent wake cli timed out"
+    except Exception as exc:
+        return 1, "", f"agent wake cli error: {exc}"
+    finally:
         if query_file:
             try:
                 os.unlink(query_file)
             except OSError:
                 pass
-        raise
+
+
+def _extract_quiet_reply(stdout: str) -> str:
+    """Best-effort final reply from hermes chat -Q stdout."""
+    text = (stdout or "").strip()
+    if not text:
+        return ""
+    # Quiet mode prints the final response; drop trailing session-info lines if present.
+    lines = text.splitlines()
+    cleaned: list[str] = []
+    for line in lines:
+        low = line.strip().lower()
+        if low.startswith("session id:") or low.startswith("session:"):
+            break
+        cleaned.append(line)
+    out = "\n".join(cleaned).strip()
+    if len(out) > 3500:
+        out = out[:3497] + "..."
+    return out
+
+
+def _hermes_send(profile: str, profile_home: Path, chat_id: str, body: str, *, env: dict | None = None) -> None:
+    send_env = env or _profile_env(profile, profile_home)
+    send_argv = _hermes_argv(profile) + [
+        "send",
+        "--to",
+        f"telegram:{chat_id}",
+        body,
+    ]
+    sent = subprocess.run(send_argv, capture_output=True, text=True, timeout=60, env=send_env)
+    if sent.returncode != 0:
+        tail = ((sent.stderr or "") + (sent.stdout or "")).strip()[-400:]
+        logger.warning("agent wake telegram send failed rc=%s %s", sent.returncode, tail)
+        raise RuntimeError(f"hermes send failed rc={sent.returncode}")
+    logger.info("agent wake telegram send ok profile=%s chat=%s", profile, chat_id)
+
+
+def _wake_cli(profile: str, message: str, profile_home: Path) -> None:
+    def _run_and_cleanup() -> None:
+        try:
+            rc, stdout, stderr = _run_chat_q(profile, message, profile_home)
+            if rc != 0:
+                tail = (stderr or stdout or "").strip()[-400:]
+                logger.warning("agent wake cli failed rc=%s %s", rc, tail)
+            else:
+                logger.info("agent wake cli ok profile=%s", profile)
+        finally:
+            with _lock:
+                _inflight.discard(profile)
+
+    threading.Thread(target=_run_and_cleanup, name=f"companion-wake-cli-{profile}", daemon=True).start()
 
 
 def _wake_botchat(profile: str, message: str, profile_home: Path) -> None:
@@ -284,12 +352,7 @@ def _wake_botchat(profile: str, message: str, profile_home: Path) -> None:
             "--run-budget",
             os.environ.get("HERMES_COMPANION_NOTIF_WAKE_RUN_BUDGET", "120"),
         ]
-        env = os.environ.copy()
-        if profile and profile != "default":
-            env.pop("HERMES_HOME", None)
-        else:
-            env["HERMES_HOME"] = str(profile_home)
-        env.setdefault("HERMES_ACCEPT_HOOKS", "1")
+        env = _profile_env(profile, profile_home)
 
         def _run_and_cleanup() -> None:
             try:
@@ -327,11 +390,12 @@ def _wake_botchat(profile: str, message: str, profile_home: Path) -> None:
 
 
 def _wake_telegram(profile: str, message: str, profile_home: Path, *, package: str = "", title: str = "") -> None:
-    """Immediate Telegram nudge + agent turn (chat -Q). Never auto-injects.
+    """Telegram nudge + agent turn + follow-up DM with the reply (or honest error).
 
-    Cron one-shots only accept minute+ delays (`in 1m`), so we:
-      1) `hermes send` a short line to the home DM (visible now)
-      2) `hermes chat -Q` so the agent actually runs and can call mobile_notifications
+    Never auto-injects. Sequence:
+      1) `hermes send` short "Checking…" nudge
+      2) `hermes chat -Q` (sync) so the agent runs / can call mobile_notifications
+      3) `hermes send` the quiet reply (or a short failure note) to the same DM
     """
     chat_id = _read_telegram_home_chat(profile_home)
     if not chat_id:
@@ -339,42 +403,54 @@ def _wake_telegram(profile: str, message: str, profile_home: Path, *, package: s
         _wake_cli(profile, message, profile_home)
         return
 
-    env = os.environ.copy()
-    if profile and profile != "default":
-        env.pop("HERMES_HOME", None)
-    else:
-        env["HERMES_HOME"] = str(profile_home)
-    env.setdefault("HERMES_ACCEPT_HOOKS", "1")
-
-    # Keep telegram text short + human; full operating prompt stays in chat -Q.
+    env = _profile_env(profile, profile_home)
     send_body = format_telegram_nudge(package, title)
 
     def _run() -> None:
         try:
-            send_argv = _hermes_argv(profile) + [
-                "send",
-                "--to",
-                f"telegram:{chat_id}",
-                send_body,
-            ]
-            sent = subprocess.run(send_argv, capture_output=True, text=True, timeout=60, env=env)
-            if sent.returncode != 0:
-                tail = ((sent.stderr or "") + (sent.stdout or "")).strip()[-400:]
-                logger.warning("agent wake telegram send failed rc=%s %s", sent.returncode, tail)
+            try:
+                _hermes_send(profile, profile_home, chat_id, send_body, env=env)
+                print(f"companion agent wake telegram nudge ok profile={profile}", flush=True)
+            except Exception as exc:
+                logger.warning("agent wake telegram send error profile=%s: %s", profile, exc)
+                print(f"companion agent wake telegram nudge failed profile={profile}: {exc}", flush=True)
+
+            rc, stdout, stderr = _run_chat_q(profile, message, profile_home)
+            reply = _extract_quiet_reply(stdout)
+            if rc != 0:
+                tail = (stderr or stdout or "").strip()[-300:] or f"exit {rc}"
+                logger.warning("agent wake telegram cli failed rc=%s %s", rc, tail)
+                print(f"companion agent wake cli failed profile={profile} rc={rc}", flush=True)
+                follow = (
+                    reply
+                    if reply
+                    else f"Wake check failed (chat exit {rc}). I couldn't finish reading the shade ping."
+                )
             else:
-                logger.info("agent wake telegram send ok profile=%s chat=%s", profile, chat_id)
-        except Exception as exc:
-            logger.warning("agent wake telegram send error profile=%s: %s", profile, exc)
-        # Agent turn regardless of send outcome (tools still useful).
-        try:
-            _wake_cli(profile, message, profile_home)
-        except Exception as exc:
-            logger.warning("agent wake telegram cli follow-up failed profile=%s: %s", profile, exc)
+                logger.info("agent wake telegram cli ok profile=%s", profile)
+                print(f"companion agent wake cli ok profile={profile}", flush=True)
+                follow = reply or (
+                    "Wake check finished but produced no reply text. "
+                    "Try asking me to call mobile_notifications."
+                )
+
+            # Always attempt a second DM so Nyx sees a real follow-up after "Checking…".
+            try:
+                _hermes_send(profile, profile_home, chat_id, follow, env=env)
+                print(f"companion agent wake telegram follow-up ok profile={profile}", flush=True)
+            except Exception as exc:
+                logger.warning(
+                    "agent wake telegram follow-up send failed profile=%s: %s", profile, exc
+                )
+                print(
+                    f"companion agent wake telegram follow-up failed profile={profile}: {exc}",
+                    flush=True,
+                )
+        finally:
             with _lock:
                 _inflight.discard(profile)
 
     threading.Thread(target=_run, name=f"companion-wake-tg-{profile}", daemon=True).start()
-
 
 
 def maybe_wake_for_notification(event: dict, *, now: Callable[[], float] | None = None) -> bool:
@@ -390,6 +466,7 @@ def maybe_wake_for_notification(event: dict, *, now: Callable[[], float] | None 
     package = str(notif.get("package") or event.get("package") or "")
     title = str(notif.get("title") or event.get("title") or "")
     text = str(notif.get("text") or event.get("text") or "")
+    notif_key = str(notif.get("key") or notif.get("id") or event.get("key") or "")
     if package in wake_skip_packages():
         logger.debug("agent wake skip package=%s profile=%s", package, profile)
         return False
@@ -414,7 +491,9 @@ def maybe_wake_for_notification(event: dict, *, now: Callable[[], float] | None 
             _inflight.discard(profile)
         return False
 
-    message = format_wake_message(package, title, text)
+    message = format_wake_message(
+        package, title, text, notification_key=notif_key
+    )
     mode = wake_mode()
     try:
         if mode in ("telegram", "tg", "origin"):

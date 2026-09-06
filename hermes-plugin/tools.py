@@ -39,6 +39,61 @@ def _with_device(params: dict | None) -> dict:
     return args
 
 
+
+def _notifications_via_http(
+    *,
+    device_id: str | None = None,
+    limit: int | str | None = 20,
+    since_ms: int | str | None = None,
+    profile: str | None = None,
+) -> dict:
+    """Fetch notification ring from the standalone companion relay (default :9120)."""
+    import os
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    base = (os.environ.get("HERMES_COMPANION_RELAY_URL") or "http://127.0.0.1:9120").rstrip("/")
+    qs: dict[str, str] = {"limit": str(int(limit or 20))}
+    if device_id:
+        qs["device_id"] = str(device_id)
+    if profile:
+        qs["profile"] = str(profile)
+    if since_ms not in (None, ""):
+        qs["since_ms"] = str(int(since_ms))
+    url = f"{base}/companion/device/notifications?{urllib.parse.urlencode(qs)}"
+    try:
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            payload = json.loads(resp.read().decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode() if hasattr(exc, "read") else ""
+        try:
+            body = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            body = {}
+        err = body.get("error") if isinstance(body, dict) else None
+        if isinstance(err, dict):
+            raise BrokerError(str(err.get("code") or "http_error"), str(err.get("message") or exc.reason)) from exc
+        raise BrokerError("no_device", f"relay http {exc.code}: {exc.reason}") from exc
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", None) or str(exc)
+        raise BrokerError("no_device", f"relay unavailable ({reason})") from exc
+    if not isinstance(payload, dict) or not payload.get("ok", True):
+        err = (payload or {}).get("error") if isinstance(payload, dict) else None
+        if isinstance(err, dict):
+            raise BrokerError(str(err.get("code") or "relay_error"), str(err.get("message") or "relay error"))
+        raise BrokerError("no_device", "relay unavailable")
+    rows = payload.get("notifications") or []
+    return {
+        "ok": True,
+        "device_id": device_id or payload.get("device_id"),
+        "profile": profile or payload.get("profile"),
+        "notifications": rows,
+        "count": int(payload.get("count") if payload.get("count") is not None else len(rows)),
+        "source": "http",
+    }
+
+
 def make_handlers(broker: Broker):
     def mobile_status(params, **kwargs):
         del kwargs
@@ -241,8 +296,6 @@ def make_handlers(broker: Broker):
         del kwargs
         try:
             state = _relay_state
-            if state is None:
-                raise BrokerError("no_device", "relay unavailable")
             pairing = _pairing_store
             args = dict(params or {})
             device_id = None
@@ -262,18 +315,22 @@ def make_handlers(broker: Broker):
             limit = args.get("limit", 20)
             since = args.get("since_ms")
             profile = str(args.get("profile") or "").strip() or None
-            rows = state.list_notifications(
-                device_id=device_id, limit=limit, since_ms=since, profile=profile
-            )
-            return _dump(
-                {
-                    "ok": True,
-                    "device_id": device_id,
-                    "profile": profile,
-                    "notifications": rows,
-                    "count": len(rows),
-                }
-            )
+            if state is not None:
+                rows = state.list_notifications(
+                    device_id=device_id, limit=limit, since_ms=since, profile=profile
+                )
+                return _dump(
+                    {
+                        "ok": True,
+                        "device_id": device_id,
+                        "profile": profile,
+                        "notifications": rows,
+                        "count": len(rows),
+                        "source": "inprocess",
+                    }
+                )
+            # Detached CLI / gateway when companion owns :9120 — read ring over HTTP.
+            return _dump(_notifications_via_http(device_id=device_id, limit=limit, since_ms=since, profile=profile))
         except BrokerError as exc:
             return _err(exc)
 

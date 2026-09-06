@@ -34,10 +34,13 @@ class AgentWakeUnitTests(unittest.TestCase):
 
     def test_format_wake_message(self):
         msg = format_wake_message("com.example.app", "Hello")
-        self.assertIn("com.example.app · Hello", msg)
+        self.assertIn("package: com.example.app", msg)
+        self.assertIn("title: Hello", msg)
         self.assertIn("mobile_notifications", msg)
         self.assertIn("Do NOT echo", msg)
-        self.assertIn("Immediately call mobile_notifications", msg)
+        self.assertIn("Call mobile_notifications", msg)
+        self.assertIn("Ring event payload", msg)
+        self.assertIn("text:", format_wake_message("com.ex", "T", "Body text here"))
         self.assertIn("Never invent notification bodies", msg)
         self.assertIn("default is do NOT inject", msg)
         # Must not look like a parrot-able one-liner alone
@@ -109,8 +112,10 @@ class AgentWakeUnitTests(unittest.TestCase):
                 self.assertFalse(maybe_wake_for_notification(ev, now=lambda: 1010.0))
                 self.assertTrue(maybe_wake_for_notification(ev, now=lambda: 1070.0))
             self.assertEqual(len(calls), 2)
-            self.assertIn("com.android.shell · Smoke", calls[0][1])
-            self.assertIn("Immediately call mobile_notifications", calls[0][1])
+            self.assertIn("package: com.android.shell", calls[0][1])
+            self.assertIn("title: Smoke", calls[0][1])
+            self.assertIn("Call mobile_notifications", calls[0][1])
+            self.assertIn("Ring event payload", calls[0][1])
 
 
 class RelayWakeIntegrationTests(unittest.TestCase):
