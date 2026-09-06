@@ -209,15 +209,52 @@ class DashboardClient internal constructor(
         post(DashboardUrls.machine(origin, "/companion/device/revoke"), payload) { }
     }
 
-    suspend fun registerDevice(origin: String, cred: DeviceCred): DeviceTicket {
-        val payload = DeviceLanePolicy.registerJson(cred.deviceId, cred.profileId, cred.credential)
+    suspend fun registerDevice(
+        origin: String,
+        cred: DeviceCred,
+        deviceName: String = "",
+        model: String = "",
+        manufacturer: String = "",
+        osVersion: String = "",
+        protectedPackages: Collection<String> = emptyList(),
+    ): DeviceTicket {
+        val payload = DeviceLanePolicy.registerJson(
+            deviceId = cred.deviceId,
+            profileId = cred.profileId,
+            credential = cred.credential,
+            deviceName = deviceName,
+            model = model,
+            manufacturer = manufacturer,
+            osVersion = osVersion,
+            protectedPackages = protectedPackages,
+        )
         return post(DashboardUrls.machine(origin, "/companion/device/register"), payload) { parseDeviceTicket(it) }
     }
 
-    suspend fun openDeviceLane(origin: String, cred: DeviceCred) {
+    suspend fun renameDevice(origin: String, deviceId: String, name: String) {
+        val payload = """{"device_id":${deviceId.json()},"name":${name.json()}}"""
+        post(DashboardUrls.machine(origin, "/companion/device/rename"), payload) { }
+    }
+
+    suspend fun openDeviceLane(
+        origin: String,
+        cred: DeviceCred,
+        deviceName: String = "",
+        model: String = "",
+        manufacturer: String = "",
+        osVersion: String = "",
+        protectedPackages: Collection<String> = emptyList(),
+    ) {
         deviceLock.withLock {
             deviceWs?.close()
-            val ticket = registerDevice(origin, cred)
+            val ticket = registerDevice(
+                origin, cred,
+                deviceName = deviceName,
+                model = model,
+                manufacturer = manufacturer,
+                osVersion = osVersion,
+                protectedPackages = protectedPackages,
+            )
             if (ticket.ticket.isBlank()) throw DashboardException("device_ticket", "empty device ticket")
             val socket = DeviceSocket(wsHttp)
             socket.connect(DashboardUrls.deviceWs(origin), DeviceLanePolicy.protocolHeader(ticket.ticket))
@@ -292,7 +329,9 @@ class DashboardClient internal constructor(
             }
             val live = liveSessionId(sessionId)
             val rpcPage = runCatching { listMessagesRpc(socket, live, profileId, cap, beforeId) }.getOrNull()
-            if (rpcPage != null && !(beforeId.isNullOrBlank() && rpcPage.messages.isEmpty())) {
+            // Empty RPC (first page OR older-page beforeId) → REST fallback. Some gateways
+            // answer session.history with [] for Telegram/imported threads that still have REST history.
+            if (rpcPage != null && rpcPage.messages.isNotEmpty()) {
                 return rpcPage.copy(source = "rpc")
             }
         }

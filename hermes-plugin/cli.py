@@ -44,6 +44,11 @@ def setup(parser) -> None:
     revoke = sub.add_parser("revoke", help="Revoke a paired device")
     revoke.add_argument("device_id")
     sub.add_parser("lanes", help="Show live device-control lanes")
+    default = sub.add_parser("default", help="Set the default target device")
+    default.add_argument("device", help="Device id or friendly name")
+    rename = sub.add_parser("rename", help="Assign a friendly label to a paired device")
+    rename.add_argument("device_id")
+    rename.add_argument("name")
     check = sub.add_parser("relay", help="Relay preflight (`--check` upstream reachability)")
     check.add_argument("--check", action="store_true", help="Print /companion/health equivalent and exit")
 
@@ -56,7 +61,9 @@ def handle(args) -> None:
             print("no paired devices")
             return
         for row in rows:
-            print(f"{row.get('device_id')}  {row.get('profile')}")
+            mark = "*" if row.get("is_default") else " "
+            name = row.get("name") or row.get("device_id")
+            print(f"{mark} {row.get('device_id')}  {name}  {row.get('profile')}")
         return
     if cmd == "approve":
         result = _json("POST", f"/companion/device/pair/{args.code}/approve", {})
@@ -68,15 +75,40 @@ def handle(args) -> None:
         return
     if cmd == "lanes":
         rows = _json("GET", "/companion/device/lanes").get("devices") or []
-        if not rows:
+        live = [r for r in rows if (isinstance(r, dict) and r.get("lane")) or isinstance(r, str)]
+        if not live:
             print("no live lanes")
             return
-        for device_id in rows:
-            print(device_id)
+        print(f"{'D':1} {'DEVICE ID':22} {'NAME':18} {'MODEL':14} {'ARMED':5} {'LANE'}")
+        for row in rows:
+            if isinstance(row, str):
+                print(f"  {row:22}")
+                continue
+            if not row.get("lane"):
+                continue
+            mark = "*" if row.get("is_default") else " "
+            armed = "yes" if row.get("armed") else "no"
+            print(
+                f"{mark} {str(row.get('device_id') or ''):22} "
+                f"{str(row.get('name') or '')[:18]:18} "
+                f"{str(row.get('model') or '')[:14]:14} "
+                f"{armed:5} live"
+            )
+        return
+    if cmd == "default":
+        result = _json("POST", "/companion/device/default", {"device": args.device})
+        print(f"default {result.get('device_id')}  {result.get('name')}")
+        return
+    if cmd == "rename":
+        result = _json("POST", "/companion/device/rename", {"device_id": args.device_id, "name": args.name})
+        print(f"renamed {result.get('device_id')}  {result.get('name')}")
         return
     if cmd == "relay":
         if getattr(args, "check", False):
-            from relay import check_upstream
+            try:
+                from .relay import check_upstream
+            except ImportError:
+                from relay import check_upstream
 
             report = check_upstream()
             print(json.dumps(report, indent=2))

@@ -64,5 +64,35 @@ class PairingTests(unittest.TestCase):
             self.assertEqual(again.devices[device.device_id].credential, device.credential)
 
 
+    def test_rename_and_default(self):
+        store = PairingStore(now=lambda: 1.0)
+        a = store.approve(store.issue("ops"))
+        b = store.approve(store.issue("ops"))
+        store.rename(a.device_id, "Galaxy S22")
+        store.set_default("Galaxy S22")
+        self.assertEqual(store.default_device_id, a.device_id)
+        self.assertEqual(store.resolve("galaxy s22").device_id, a.device_id)
+        self.assertEqual(store.display_name(a), "Galaxy S22")
+        rows = store.lane_descriptors([a.device_id, b.device_id], {a.device_id: {"armed": True}})
+        self.assertTrue(any(r["is_default"] and r["name"] == "Galaxy S22" for r in rows))
+        store.touch(a.device_id, model="SM-S901E", manufacturer="samsung", os_version="Android 16", extra_protected=["com.mybank.app"])
+        self.assertIn("com.mybank.app", store.all_extra_protected())
+        self.assertEqual(store.devices[a.device_id].model, "SM-S901E")
+
+    def test_persist_metadata_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "companion-devices.json"
+            store = PairingStore(now=lambda: 1.0, path=path)
+            device = store.approve(store.issue("knight"))
+            store.rename(device.device_id, "Pixel")
+            store.touch(device.device_id, model="Pixel 8", extra_protected=["com.corp.*"])
+            store.set_default(device.device_id)
+            again = PairingStore(path=path)
+            self.assertEqual(again.devices[device.device_id].name, "Pixel")
+            self.assertEqual(again.devices[device.device_id].model, "Pixel 8")
+            self.assertEqual(again.default_device_id, device.device_id)
+            self.assertEqual(again.devices[device.device_id].extra_protected, ("com.corp.*",))
+
+
 if __name__ == "__main__":
     unittest.main()

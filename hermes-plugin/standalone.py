@@ -10,7 +10,10 @@ import time
 from pathlib import Path
 from urllib.parse import parse_qs
 
-from drift import profiles_dir, self_test
+try:
+    from .drift import profiles_dir, self_test
+except ImportError:  # script/tests on sys.path
+    from drift import profiles_dir, self_test
 
 TINY_PNG = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="

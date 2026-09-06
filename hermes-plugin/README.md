@@ -30,6 +30,23 @@ hermes companion revoke DEVICE_ID
 hermes companion lanes
 ```
 
+
+## Companion CLI (Hermes 0.21 fallback)
+
+Hermes Agent v0.21 may not expose `register_cli_command`, so `hermes companion …`
+never appears. Use the bundled fallback (same subcommands: `lanes`, `approve`,
+`default`, `rename`, `list`, `revoke`, `relay`):
+
+```bash
+python ~/.hermes/plugins/hermes-companion/cli_main.py lanes
+python ~/.hermes/plugins/hermes-companion/cli_main.py approve CODE
+python ~/.hermes/plugins/hermes-companion/cli_main.py default DEVICE
+python ~/.hermes/plugins/hermes-companion/cli_main.py rename DEVICE_ID NAME
+```
+
+Or from a checkout: `python hermes-plugin/cli_main.py lanes`.
+Relay URL override: `HERMES_COMPANION_RELAY_URL=http://127.0.0.1:9120`.
+
 Pairing file: `~/.hermes/companion-devices.json` (mode 600).
 
 ## Boot persistence (systemd user units)

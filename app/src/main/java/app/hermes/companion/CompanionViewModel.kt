@@ -193,14 +193,76 @@ class CompanionViewModel(
 
     fun selectConnectChoice(choice: GatewayChoice) {
         val cred = operatorCreds.load(choice.origin)
+        // Clear leftover password so connect() loads this host's saved creds (A8 leftover).
         _state.update {
             it.copy(
                 originInput = choice.origin,
                 username = cred?.username.orEmpty(),
+                password = "",
                 error = null,
             )
         }
         connect(choice.origin)
+    }
+
+    /** Leave the active operator host: cancel sync/watch/fleet, clear session UI, stop stay-connected. */
+    fun disconnect() {
+        connectJob?.cancel()
+        connectJob = null
+        chat.cancelAll()
+        voiceStream.stopStream()
+        sticky.stayConnected = false
+        sticky.origin = null
+        val origin = _state.value.origin
+        sync.stopAll()
+        origin?.let { clients.existing(it)?.closeRpc() }
+        // Keep device lanes while ARMED so Hands survives an operator disconnect (A8.5).
+        if (deviceNode.state.value.arm == DeviceArm.DISARMED) {
+            deviceNode.unbind()
+        }
+        _state.update {
+            it.copy(
+                origin = null,
+                hostName = "",
+                loading = false,
+                sessionsLoading = false,
+                transcriptLoading = false,
+                historySource = "",
+                error = null,
+                password = "",
+                profiles = emptyList(),
+                activeProfileId = null,
+                sessions = emptyList(),
+                openSessionId = null,
+                messages = emptyList(),
+                draft = "",
+                streaming = false,
+                approval = null,
+                historyHasMore = false,
+                historyLoading = false,
+                rewindTargetId = null,
+                gatewayHello = null,
+                status = null,
+                hud = app.hermes.companion.model.GatewayHud(),
+                ntfyTopic = "",
+                stayConnected = false,
+                hostMetrics = null,
+                modelCatalog = null,
+                cronJobs = emptyList(),
+                gitStatus = null,
+                gitDiff = null,
+                gitSelectedFile = null,
+                terminalLogs = emptyList(),
+                pendingAttachments = emptyList(),
+                attachOpen = false,
+                tab = MainTab.THREADS,
+            ).mirror(deviceNode.state.value)
+        }
+        StayConnectedService.refresh(runtime)
+        refreshConnectChoices()
+        probeConnectChoices()
+        sync.startWake()
+        sync.startFleetHealth()
     }
 
     fun forgetConnectChoice(choice: GatewayChoice) {
@@ -346,6 +408,8 @@ class CompanionViewModel(
     fun arm() = deviceNode.arm()
 
     fun disarm() = deviceNode.disarm()
+
+    fun renameDeviceLabel(name: String) = deviceNode.renameDeviceLabel(name)
 
     fun addProtectedPackage(raw: String) = deviceNode.addProtectedPackage(raw)
 

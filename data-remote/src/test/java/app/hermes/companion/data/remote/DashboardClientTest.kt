@@ -874,6 +874,60 @@ class DashboardClientTest {
     }
 
     @Test
+    fun olderPageEmptyRpcFallsBackToRest() = runBlocking {
+        MockWebServer().use { server ->
+            val methods = java.util.concurrent.CopyOnWriteArrayList<String>()
+            server.enqueue(
+                MockResponse().withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onOpen(webSocket: WebSocket, response: Response) {
+                            webSocket.send(
+                                """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"change_events":false,"heartbeat":false,"instance_id":"h3"}}}""",
+                            )
+                        }
+
+                        override fun onMessage(webSocket: WebSocket, text: String) {
+                            val obj = Json.parseToJsonElement(text).jsonObject
+                            val id = obj["id"]!!.jsonPrimitive.content
+                            val method = obj["method"]!!.jsonPrimitive.content
+                            methods += method
+                            when (method) {
+                                "session.history" -> webSocket.send(
+                                    """{"jsonrpc":"2.0","id":"$id","result":{"messages":[]}}""",
+                                )
+                            }
+                        }
+                    },
+                ),
+            )
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"messages":[
+                      {"id":"m-old","role":"user","content":"older-rest"},
+                      {"id":"m-newest","role":"assistant","content":"newest"}
+                    ]}""",
+                ),
+            )
+            val http = server.toOkHttp()
+            val client = DashboardClient(http)
+            val origin = server.url("/").toString().trimEnd('/')
+            client.wsHello(origin, "knight")
+            server.takeRequest()
+            val page = client.pageMessages(origin, "tg-older", "knight", beforeId = "m-newest")
+            assertEquals("older-rest", page.messages.single().text)
+            assertEquals("rest", page.source)
+            assertTrue(methods.contains("session.history"))
+            assertFalse(methods.contains("session.resume"))
+            val rest = server.takeRequest()
+            assertTrue(rest.path.orEmpty().contains("/api/sessions/tg-older/messages"))
+            assertTrue(rest.path.orEmpty().contains("before=m-newest"))
+            client.closeRpc()
+            http.dispatcher.executorService.shutdown()
+            http.connectionPool.evictAll()
+        }
+    }
+
+    @Test
     fun endedSessionSkipsResumeAndFallsBackToRest() = runBlocking {
         MockWebServer().use { server ->
             val methods = java.util.concurrent.CopyOnWriteArrayList<String>()

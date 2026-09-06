@@ -75,30 +75,24 @@ class DeviceLanePolicyTest {
     }
 
     @Test
-    fun defaultAllowsAllAppsWhenBlocklistEmpty() {
+    fun minimalBuiltInDenylistProtectsSettingsAuthAndPasswordManagers() {
         for (pkg in listOf(
             "com.android.settings",
+            "com.android.permissioncontroller",
+            "com.android.packageinstaller",
+            "com.android.keychain",
+            "com.google.android.apps.authenticator2",
             "com.authy.authy",
             "com.onepassword.android",
             "com.x8bit.bitwarden",
             "com.kunzisoft.keepass.free",
             "com.beemdevelopment.aegis",
-            "com.azure.authenticator",
-            "com.android.vending",
-            "com.google.android.permissioncontroller",
-            "com.android.packageinstaller",
-            "com.samsung.android.spay",
-            "com.samsung.android.settings.deviceowner",
-            "com.phonepe.app",
-            "com.chase.sig.android",
-            "com.capitalone.mobile",
-            "com.example.fixture",
-            "org.telegram.messenger",
+            "com.samsung.android.settings.foo",
         )) {
-            // Nothing is protected by default
-            assertFalse(pkg, DeviceLanePolicy.isProtected(pkg))
-            assertNull(
+            assertTrue(pkg, DeviceLanePolicy.isProtected(pkg))
+            assertEquals(
                 pkg,
+                "protected_package",
                 DeviceLanePolicy.reject(
                     DeviceArm.ARMED,
                     a11yBound = true,
@@ -107,6 +101,16 @@ class DeviceLanePolicyTest {
                     targetPackage = pkg,
                 ),
             )
+        }
+        for (pkg in listOf(
+            "com.example.fixture",
+            "org.telegram.messenger",
+            "com.android.vending",
+            "com.phonepe.app",
+            "com.chase.sig.android",
+            "com.samsung.android.spay",
+        )) {
+            assertFalse(pkg, DeviceLanePolicy.isProtected(pkg))
             assertNull(
                 pkg,
                 DeviceLanePolicy.reject(

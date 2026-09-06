@@ -21,6 +21,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -83,8 +84,8 @@ class SyncManager(
     }
 
     fun setFleetHealthForeground(on: Boolean) {
-        runtime.fleetHealthForeground = on
-        if (on) startFleetHealth()
+        runtime.fleetHealthForeground.value = on
+        if (on && runtime.fleetHealthJob?.isActive != true) startFleetHealth()
     }
 
     /** Probe every saved host every 60s while the UI is foregrounded (A8.4). */
@@ -92,7 +93,7 @@ class SyncManager(
         runtime.fleetHealthJob?.cancel()
         runtime.fleetHealthJob = liveScope.launch {
             while (isActive) {
-                while (isActive && !runtime.fleetHealthForeground) delay(250)
+                runtime.fleetHealthForeground.first { it }
                 if (!isActive) break
                 probeFleet()
                 delay(FLEET_MS)
@@ -107,7 +108,10 @@ class SyncManager(
         }.map { it.trim().trimEnd('/') }
             .filter { it.isNotBlank() }
             .distinctBy { GatewayBook.key(it) }
-        if (origins.isEmpty()) return
+        if (origins.isEmpty()) {
+            _state.update { it.copy(hostHealth = emptyMap()) }
+            return
+        }
         val results = coroutineScope {
             origins.map { origin ->
                 async {
@@ -119,7 +123,8 @@ class SyncManager(
                 }
             }.awaitAll()
         }
-        _state.update { it.copy(hostHealth = it.hostHealth + results.toMap()) }
+        // Replace (do not forever-merge) so forgotten hosts leave hostHealth.
+        _state.update { it.copy(hostHealth = results.toMap()) }
     }
 
     fun startHud(origin: String) {

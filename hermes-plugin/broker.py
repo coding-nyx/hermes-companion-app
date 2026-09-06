@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from audit import AuditLog
+try:
+    from .audit import AuditLog
+except ImportError:  # script/tests on sys.path
+    from audit import AuditLog
 
 ALLOWLIST = frozenset(
     {
@@ -28,9 +31,40 @@ ALLOWLIST = frozenset(
 META = frozenset({"device.arm", "device.disarm"})
 
 # Fail-closed denylist, mirrored from domain/DeviceLanePolicy.kt (keep both in sync).
-# Empty by default so Hermes Companion controls everything.
-# Only caller-supplied extra blocklist rules are blocked.
-PROTECTED_PACKAGES: frozenset[str] = frozenset()
+# Minimal built-in set: Settings / permission / installer / keychain + authenticators / password managers.
+PROTECTED_PACKAGES: frozenset[str] = frozenset(
+    {
+        "com.android.settings",
+        "com.android.systemui",
+        "com.android.packageinstaller",
+        "com.google.android.packageinstaller",
+        "com.android.permissioncontroller",
+        "com.google.android.permissioncontroller",
+        "com.android.keychain",
+        "com.android.certinstaller",
+        "com.samsung.android.settings.*",
+        "com.google.android.apps.authenticator2",
+        "com.authy.authy",
+        "com.azure.authenticator",
+        "com.duosecurity.duomobile",
+        "com.beemdevelopment.aegis",
+        "org.fedorahosted.freeotp",
+        "com.yubico.yubioath",
+        "com.okta.android.auth",
+        "com.onepassword.android",
+        "com.agilebits.onepassword",
+        "com.lastpass.lpandroid",
+        "com.bitwarden.mobile",
+        "com.x8bit.bitwarden",
+        "com.kunzisoft.keepass.free",
+        "com.kunzisoft.keepass.libre",
+        "keepass2android.*",
+        "com.dashlane",
+        "proton.android.pass",
+        "com.samsung.android.samsungpass",
+        "com.samsung.android.authfw",
+    }
+)
 
 
 def is_protected(package: str, extra=()) -> bool:
@@ -153,21 +187,35 @@ class LiveDevice:
 class Broker:
     device: MockDevice | LiveDevice | None = None
     extra_protected: tuple[str, ...] = field(default_factory=tuple)
+    # Optional provider merges phone-synced custom denylist rules (per register).
+    extra_protected_fn: Callable[[], tuple[str, ...]] | None = None
     hits: list[float] = field(default_factory=list)
     clock: Callable[[], float] = lambda: 0.0
     audit: AuditLog = field(default_factory=AuditLog)
 
+    def _extras(self) -> tuple[str, ...]:
+        extra = list(self.extra_protected)
+        if self.extra_protected_fn is not None:
+            extra.extend(self.extra_protected_fn())
+        # Preserve order, drop dupes.
+        return tuple(dict.fromkeys(extra))
+
     def dispatch(self, action: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-        arguments = arguments or {}
+        arguments = dict(arguments or {})
+        # Optional device hint for multi-device routing (live send consumes `_device`).
+        device_hint = arguments.pop("device", None)
+        if device_hint is not None and str(device_hint).strip():
+            arguments["_device"] = str(device_hint).strip()
         if action not in ALLOWLIST:
             raise BrokerError("capability_denied", f"{action} is not grantable")
         if self.device is None:
             raise BrokerError("no_device", "nothing paired")
         if action not in META and not self.device.armed:
             raise BrokerError("disarmed", "device is DISARMED")
+        extras = self._extras()
         app = self.device.foreground_app
         target = str(arguments.get("package") or "") or app
-        if action not in META and (is_protected(app, self.extra_protected) or is_protected(target, self.extra_protected)):
+        if action not in META and (is_protected(app, extras) or is_protected(target, extras)):
             raise BrokerError("protected_package", target)
         if action == "device.click" and "xy" in arguments:
             xy = arguments["xy"]

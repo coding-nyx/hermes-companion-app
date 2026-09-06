@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
 
 class CompanionApp : Application() {
     /** One DashboardClient per host (A8.5): token, cookies and sockets never cross hosts. */
@@ -42,7 +43,8 @@ class CompanionApp : Application() {
     var watchJob: Job? = null
     var hudJob: Job? = null
     var fleetHealthJob: Job? = null
-    @Volatile var fleetHealthForeground: Boolean = true
+    /** When false, fleet health waits on this flow instead of spinning (A8.4). */
+    val fleetHealthForeground = MutableStateFlow(true)
     /** ntfy wake subscriptions, one per host with a topic. */
     val wakeJobs: MutableMap<String, Job> = mutableMapOf()
 

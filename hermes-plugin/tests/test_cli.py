@@ -44,5 +44,37 @@ class CliTests(unittest.TestCase):
             relay.server_close()
 
 
+    def test_cli_main_fallback(self):
+        state = RelayState(pairing=PairingStore(now=lambda: 50.0))
+        device = state.pairing.approve(state.pairing.issue("ops"))
+        state.pairing.rename(device.device_id, "Pixel")
+        relay = make_server("127.0.0.1:0", "http://127.0.0.1:9", state)
+        threading.Thread(target=relay.serve_forever, daemon=True).start()
+        try:
+            host, port = relay.server_address
+            env = {"HERMES_COMPANION_RELAY_URL": f"http://{host}:{port}"}
+            with patch.dict(os.environ, env, clear=False):
+                from cli_main import main
+                buf = StringIO()
+                with patch("sys.stdout", buf):
+                    main(["list"])
+                self.assertIn(device.device_id, buf.getvalue())
+                lanes = StringIO()
+                with patch("sys.stdout", lanes):
+                    main(["lanes"])
+                self.assertIn("no live lanes", lanes.getvalue())
+                renamed = StringIO()
+                with patch("sys.stdout", renamed):
+                    main(["rename", device.device_id, "LabPhone"])
+                self.assertIn("LabPhone", renamed.getvalue())
+                defaulted = StringIO()
+                with patch("sys.stdout", defaulted):
+                    main(["default", "LabPhone"])
+                self.assertIn(device.device_id, defaulted.getvalue())
+        finally:
+            relay.shutdown()
+            relay.server_close()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -16,15 +16,26 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from drift import self_test
-from fs_explorer import list_dir_tree, read_file_content
-from git_workspace import commit_git, get_git_branches, get_git_diff, get_git_status, stage_git_file
-from host_metrics import collect_metrics
-from media import MediaError, MediaStore
-from standalone import Operator, OperatorError
-from pairing import PairingError, PairingStore, default_store_path
-from terminal_pty import PtySession, execute_quick_command
-from tickets import ALLOWLIST, PROTOCOL, TICKET_PREFIX, TicketError, TicketStore, parse_subprotocols
+try:
+    from .drift import self_test
+    from .fs_explorer import list_dir_tree, read_file_content
+    from .git_workspace import commit_git, get_git_branches, get_git_diff, get_git_status, stage_git_file
+    from .host_metrics import collect_metrics
+    from .media import MediaError, MediaStore
+    from .standalone import Operator, OperatorError
+    from .pairing import PairingError, PairingStore, default_store_path
+    from .terminal_pty import PtySession, execute_quick_command
+    from .tickets import ALLOWLIST, PROTOCOL, TICKET_PREFIX, TicketError, TicketStore, parse_subprotocols
+except ImportError:  # script/tests on sys.path
+    from drift import self_test
+    from fs_explorer import list_dir_tree, read_file_content
+    from git_workspace import commit_git, get_git_branches, get_git_diff, get_git_status, stage_git_file
+    from host_metrics import collect_metrics
+    from media import MediaError, MediaStore
+    from standalone import Operator, OperatorError
+    from pairing import PairingError, PairingStore, default_store_path
+    from terminal_pty import PtySession, execute_quick_command
+    from tickets import ALLOWLIST, PROTOCOL, TICKET_PREFIX, TicketError, TicketStore, parse_subprotocols
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -176,6 +187,8 @@ class RelayState:
         self.operator = operator or Operator()
         self.media = media or MediaStore()
         self.lanes: dict[str, object] = {}
+        # Per-device armed / foreground hints from phone status frames.
+        self.live_meta: dict[str, dict] = {}
         self.lock = threading.Lock()
         self.seq = 0
         self.pending: dict[str, threading.Event] = {}
@@ -219,7 +232,37 @@ class RelayState:
             self.pending.pop(command_id, None)
             return self.results.pop(command_id, {"ok": False, "error": {"code": "missing_result"}})
 
-    def on_frame(self, raw: str) -> None:
+    def _apply_live_meta(self, device_id: str, fields: dict) -> None:
+        """Merge phone status / arm-disarm hints into live_meta + pairing last_seen."""
+        if not device_id or not isinstance(fields, dict):
+            return
+        now = None
+        try:
+            now = float(self.pairing.now())
+        except Exception:
+            now = None
+        with self.lock:
+            meta = self.live_meta.setdefault(device_id, {})
+            if "armed" in fields:
+                meta["armed"] = bool(fields["armed"])
+            if "foreground_app" in fields:
+                meta["foreground_app"] = str(fields.get("foreground_app") or "")
+            app = fields.get("app")
+            if isinstance(app, str) and app and "foreground_app" not in fields:
+                meta["foreground_app"] = app
+            if "a11y_bound" in fields:
+                meta["a11y_bound"] = bool(fields["a11y_bound"])
+            if "overlay" in fields:
+                meta["overlay"] = bool(fields["overlay"])
+            if now is not None:
+                meta["last_seen"] = now
+        # Pairing store last_seen feeds GET /companion/device/lanes for offline-ish age.
+        try:
+            self.pairing.note_seen(device_id, persist=False)
+        except Exception:
+            pass
+
+    def on_frame(self, raw: str, device_id: str | None = None) -> None:
         if not raw:
             return
         try:
@@ -228,11 +271,24 @@ class RelayState:
             return
         if not isinstance(payload, dict):
             return
-        if payload.get("type") != "mobile.controller.result":
+        kind = payload.get("type")
+        lane_id = str(payload.get("device_id") or device_id or "")
+        if kind == "mobile.controller.status":
+            if lane_id:
+                self._apply_live_meta(lane_id, payload)
+            return
+        if kind != "mobile.controller.result":
             return
         command_id = str(payload.get("command_id") or "")
         if not command_id:
             return
+        # Arm/disarm (and status-bearing) results must refresh lanes JSON immediately.
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        if lane_id and isinstance(result, dict) and (
+            "armed" in result or "foreground_app" in result or "app" in result
+            or "a11y_bound" in result or "overlay" in result
+        ):
+            self._apply_live_meta(lane_id, result)
         with self.lock:
             self.results[command_id] = payload
             event = self.pending.get(command_id)
@@ -490,6 +546,22 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 device = self.state.pairing.devices.get(device_id)
                 if device is None or device.credential != credential:
                     return self._json({"error": "unauthorized"}, 401)
+                extras = body.get("protected_packages")
+                if not isinstance(extras, list):
+                    extras = body.get("extra_protected")
+                if not isinstance(extras, list):
+                    extras = None
+                try:
+                    self.state.pairing.touch(
+                        device_id,
+                        name=body.get("device_name") or body.get("name"),
+                        model=body.get("model"),
+                        manufacturer=body.get("manufacturer"),
+                        os_version=body.get("os_version"),
+                        extra_protected=extras,
+                    )
+                except PairingError:
+                    pass
                 caps = [c for c in (body.get("capabilities") or []) if c in ALLOWLIST]
                 issued = self.state.tickets.mint(device_id, profile or device.profile, caps)
                 return self._json({"ticket": issued.ticket, "device_id": device_id, "ttl_ms": 30_000})
@@ -497,23 +569,57 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 body = self._read_json()
                 self.state.pairing.revoke(str(body.get("device_id") or ""))
                 return self._json({"ok": True})
+            if path == "/companion/device/default" and self.command == "POST":
+                body = self._read_json()
+                hint = str(body.get("device_id") or body.get("device") or "")
+                device = self.state.pairing.set_default(hint)
+                return self._json({"ok": True, "device_id": device.device_id, "name": self.state.pairing.display_name(device)})
+            if path == "/companion/device/rename" and self.command == "POST":
+                body = self._read_json()
+                device = self.state.pairing.rename(
+                    str(body.get("device_id") or ""),
+                    str(body.get("name") or body.get("device_name") or ""),
+                )
+                return self._json({"ok": True, "device_id": device.device_id, "name": device.name})
             if path == "/companion/device/list" and self.command == "GET":
                 return self._json({"devices": self.state.pairing.public_list()})
             if path == "/companion/device/lanes" and self.command == "GET":
                 with self.state.lock:
                     ids = list(self.state.lanes)
-                return self._json({"devices": ids})
+                    meta = {k: dict(v) for k, v in self.state.live_meta.items()}
+                return self._json({"devices": self.state.pairing.lane_descriptors(ids, meta)})
             if path == "/companion/device/command" and self.command == "POST":
+                # Operator HTTP control path (same resolution as mobile_* / attach_http).
+                # Intentionally accepts either an operator bearer/basic session OR an
+                # unauthenticated local call on the companion bind — tickets gate the
+                # device WS only; this endpoint is for the host/agent/CLI.
                 body = self._read_json()
+                try:
+                    from .live import resolve_device_id
+                    from .broker import BrokerError as _BrokerError
+                except ImportError:
+                    from live import resolve_device_id
+                    from broker import BrokerError as _BrokerError
+                hint = body.get("device_id") or body.get("device") or ""
+                try:
+                    device_id = resolve_device_id(self.state, str(hint) if hint else None)
+                except _BrokerError as exc:
+                    status = 503 if exc.code in ("lane_down", "no_device") else 400
+                    return self._json({"error": exc.code, "message": exc.message}, status)
                 command_id = self.state.send_command(
-                    str(body.get("device_id") or ""),
+                    device_id,
                     str(body.get("action") or "device.noop"),
                     body.get("arguments") if isinstance(body.get("arguments"), dict) else {},
                 )
                 if body.get("wait") is False:
-                    return self._json({"command_id": command_id})
+                    return self._json({"command_id": command_id, "device_id": device_id})
                 result = self.state.wait_result(command_id)
                 result["command_id"] = command_id
+                result["device_id"] = device_id
+                # Mirror arm/disarm into live_meta even if the phone omitted device_id on the frame.
+                res = result.get("result") if isinstance(result.get("result"), dict) else {}
+                if isinstance(res, dict) and "armed" in res:
+                    self.state._apply_live_meta(device_id, res)
                 return self._json(result)
             if path in ("/companion/host/metrics", "/companion/host/status") and self.command == "GET":
                 repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
@@ -608,11 +714,12 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 raw = _ws_recv(self.rfile, self.wfile)
                 if raw is None:
                     break
-                self.state.on_frame(raw)
+                self.state.on_frame(raw, device_id=issued.device_id)
         finally:
             with self.state.lock:
                 if self.state.lanes.get(issued.device_id) is self.wfile:
                     self.state.lanes.pop(issued.device_id, None)
+                    self.state.live_meta.pop(issued.device_id, None)
         self.close_connection = True
         return None
 
