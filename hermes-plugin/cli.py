@@ -1,4 +1,6 @@
-"""hermes companion … — talks to the live relay, not a second in-memory store."""
+"""hermes companion … — talks to the live relay, not a second in-memory store.
+
+Subcommands: list approve revoke lanes default rename relay room{list,create,post,history,interrupt,delete}."""
 
 from __future__ import annotations
 
@@ -51,6 +53,24 @@ def setup(parser) -> None:
     rename.add_argument("name")
     check = sub.add_parser("relay", help="Relay preflight (`--check` upstream reachability)")
     check.add_argument("--check", action="store_true", help="Print /companion/health equivalent and exit")
+    room = sub.add_parser("room", help="Agent rooms: group chat between profiles")
+    rsub = room.add_subparsers(dest="room_cmd", required=True)
+    rsub.add_parser("list", help="List rooms")
+    create = rsub.add_parser("create", help="Create a room: create TITLE PROFILE [PROFILE…]")
+    create.add_argument("title")
+    create.add_argument("profiles", nargs="+")
+    create.add_argument("--rounds", type=int, default=2, help="Max agent rounds per operator message (1–4)")
+    post = rsub.add_parser("post", help="Post as the operator and run the agents' turns")
+    post.add_argument("room_id")
+    post.add_argument("text", nargs="+")
+    post.add_argument("--no-wait", action="store_true", help="Return immediately instead of printing the turns")
+    hist = rsub.add_parser("history", help="Print a room transcript")
+    hist.add_argument("room_id")
+    hist.add_argument("--after", type=int, default=0)
+    stop = rsub.add_parser("interrupt", help="Stop all in-flight turns in a room")
+    stop.add_argument("room_id")
+    rm = rsub.add_parser("delete", help="Delete a room (backing sessions stay in their profiles)")
+    rm.add_argument("room_id")
 
 
 def handle(args) -> None:
@@ -118,4 +138,75 @@ def handle(args) -> None:
         health = _json("GET", "/companion/health")
         print(json.dumps(health, indent=2))
         return
+    if cmd == "room":
+        _handle_room(args)
+        return
     raise SystemExit(f"unknown companion command: {cmd}")
+
+
+def _print_room_msg(m: dict) -> None:
+    tag = f"{m.get('glyph') or m.get('speaker'):>3}"
+    if m.get("passed"):
+        print(f"{tag}  (passed)")
+        return
+    for t in m.get("tools") or []:
+        print(f"{tag}  [ran {t.get('name')} · {str(t.get('detail') or '')[:80]}]")
+    if m.get("error"):
+        print(f"{tag}  !{m.get('error')}")
+    text = str(m.get("text") or "")
+    if text:
+        print(f"{tag}  {text}")
+
+
+def _handle_room(args) -> None:
+    sub = getattr(args, "room_cmd", None)
+    if sub == "list":
+        rows = _json("GET", "/companion/rooms").get("rooms") or []
+        if not rows:
+            print("no rooms")
+            return
+        for r in rows:
+            glyphs = " ".join(p.get("glyph") or p.get("profile") for p in r.get("participants") or [])
+            state = f"live {r.get('speaking')}" if r.get("busy") else "idle"
+            print(f"{r.get('id')}  {str(r.get('title') or '')[:28]:28} {glyphs:16} {r.get('message_count', 0):>3} msgs  {state}")
+        return
+    if sub == "create":
+        result = _json("POST", "/companion/rooms", {
+            "title": args.title, "participants": args.profiles, "policy": {"max_rounds": args.rounds},
+        })
+        room = result.get("room") or {}
+        print(f"created {room.get('id')}  {room.get('title')}  " + " ".join(p.get("glyph") for p in room.get("participants") or []))
+        return
+    if sub == "history":
+        result = _json("GET", f"/companion/rooms/{args.room_id}/history?after={int(args.after)}")
+        for m in result.get("messages") or []:
+            _print_room_msg(m)
+        return
+    if sub == "interrupt":
+        result = _json("POST", f"/companion/rooms/{args.room_id}/interrupt", {})
+        print("interrupted" if result.get("interrupted") else "nothing running")
+        return
+    if sub == "delete":
+        _json("DELETE", f"/companion/rooms/{args.room_id}")
+        print(f"deleted {args.room_id}")
+        return
+    if sub == "post":
+        import time as _time
+
+        text = " ".join(args.text)
+        result = _json("POST", f"/companion/rooms/{args.room_id}/post", {"text": text})
+        _print_room_msg(result.get("message") or {})
+        if args.no_wait:
+            return
+        seq = int(result.get("seq") or 0)
+        deadline = _time.monotonic() + 900
+        while _time.monotonic() < deadline:
+            _time.sleep(1.0)
+            page = _json("GET", f"/companion/rooms/{args.room_id}/history?after={seq}")
+            for m in page.get("messages") or []:
+                _print_room_msg(m)
+                seq = max(seq, int(m.get("seq") or 0))
+            if not (page.get("room") or {}).get("busy"):
+                break
+        return
+    raise SystemExit(f"unknown room command: {sub}")

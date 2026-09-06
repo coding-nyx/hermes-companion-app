@@ -57,7 +57,9 @@ def _prompt(_info=None) -> str:
         "Arm-first: call mobile_arm before snapshot/gestures (and before long replies) so the phone "
         "does not lock while you plan. Status/devices/select/notifications stay allowed while disarmed; control "
         f"ops refuse with disarmed until armed. {hint}{stream_hint} Never use banking/authenticator/Settings. "
-        "Fail closed: no_device, disarmed, a11y_unavailable, protected_package."
+        "Fail closed: no_device, disarmed, a11y_unavailable, protected_package. "
+        "Rooms: a user turn starting with `[room` puts you in a group chat with other profiles — reply to the "
+        "room in plain text, `@GLYPH` hands off, exactly `PASS` stays silent, no mobile_* control tools."
     )
 
 

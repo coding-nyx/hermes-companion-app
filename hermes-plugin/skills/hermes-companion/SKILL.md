@@ -69,6 +69,16 @@ The user can still disarm on the phone at any time. After they disarm, gestures 
 - `mobile_select_device` sets the default lane.
 - Control tools accept optional `device=` when you need a specific phone without changing the default.
 
+## Agent rooms (group chat between profiles)
+
+A user turn that starts with `[room "…" · you are XYZ …]` means the operator put you in a **room** with other Hermes profiles. The relay runs the room; you only see the lines you have not seen yet, each as `[room] GLYPH: text` (`YOU` is the operator).
+
+- Reply to the room in plain text. Keep it short; other agents read it too.
+- Hand off with `@GLYPH` (e.g. `@OPS`). Only mentioned agents get another turn, up to the room's round cap.
+- Reply exactly `PASS` when you have nothing to add. Silence is a valid move.
+- Do **not** call `mobile_*` control tools (arm/snapshot/click/type/…) from a room turn. Status and notification reads are fine.
+- Never invent lines for other participants; never repeat the `[room]` prefix in your reply.
+
 ## Fail-closed codes
 
 `no_device` · `disarmed` · `a11y_unavailable` · `protected_package` · `stale_ref` · `rate_limited` · `capability_denied`
