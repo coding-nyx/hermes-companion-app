@@ -57,7 +57,7 @@ The user can still disarm on the phone at any time. After they disarm, gestures 
 ## Phone notification stream
 
 - Phone Device tab: enable **NLS** (system Notification access) + **STREAM**, pick target gateway+profile.
-- Events land in the host relay ring (denylist: protected packages + Companion’s own notifs). **No auto-Telegram dump.**
+- Events land in the host relay ring (denylist: protected packages + Companion’s own notifs). **Telegram shade notifs are not streamed** (built-in echo guard). **No auto-Telegram dump.**
 - When a notification is accepted for your profile, the relay **wakes** this agent with a strong operating prompt (configurable; default on). That wake is **not** an inject and must **not** be parroted as the reply.
 - On wake: immediately call **`mobile_notifications`** (optional `profile=`), briefly tell Nyx what matters from the tool result, and only then consider inject.
 - **`mobile_notifications`** — read recent events (allowed while disarmed; optional `profile=` filter).

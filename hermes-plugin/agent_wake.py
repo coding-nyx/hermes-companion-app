@@ -43,13 +43,30 @@ def wake_debounce_sec() -> float:
         return 20.0
 
 
+# Mirrored from Android NotificationStreamPolicy.STREAM_SUPPRESS_PACKAGES.
+# Stream mute on phone + wake skip here — keep both lists in sync when adding clients.
+# Do NOT add these to broker PROTECTED_PACKAGES (Hands must still control Telegram).
+STREAM_SUPPRESS_PACKAGES: frozenset[str] = frozenset(
+    {
+        "org.telegram.messenger",
+        "org.telegram.messenger.web",
+        "org.telegram.messenger.beta",
+        "org.thunderdog.challegram",  # Telegram X
+    }
+)
+
+_DEFAULT_WAKE_SKIP = ",".join(
+    sorted(STREAM_SUPPRESS_PACKAGES | {"com.telegram.messenger", "app.hermes.companion"})
+)
+
+
 def wake_skip_packages() -> set[str]:
-    """Packages that still enter the ring but must not wake (avoid Telegram self-echo loops)."""
-    raw = os.environ.get(
-        "HERMES_COMPANION_NOTIF_WAKE_SKIP_PACKAGES",
-        "org.telegram.messenger,org.telegram.messenger.web,org.telegram.messenger.beta,"
-        "com.telegram.messenger,app.hermes.companion",
-    )
+    """Packages that still enter the ring but must not wake (avoid Telegram self-echo loops).
+
+    Default = STREAM_SUPPRESS_PACKAGES ∪ companion self ∪ legacy ``com.telegram.messenger``.
+    Override with HERMES_COMPANION_NOTIF_WAKE_SKIP_PACKAGES (comma-separated).
+    """
+    raw = os.environ.get("HERMES_COMPANION_NOTIF_WAKE_SKIP_PACKAGES", _DEFAULT_WAKE_SKIP)
     return {p.strip() for p in raw.split(",") if p.strip()}
 
 

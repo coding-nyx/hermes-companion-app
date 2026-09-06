@@ -23,8 +23,10 @@ internal class GatewaySocket(private val http: OkHttpClient) {
     private val opened = AtomicBoolean(false)
     private val helloDone = CompletableDeferred<GatewayHello>()
     private val gone = CompletableDeferred<Unit>()
+    // Deltas arrive on the OkHttp reader thread via tryEmit; a small buffer silently dropped
+    // tokens during bursts (visible as missing text). Keep enough headroom for a whole turn.
     private val _events = MutableSharedFlow<RpcEvent>(
-        extraBufferCapacity = 128,
+        extraBufferCapacity = EVENT_BUFFER,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
     val events: SharedFlow<RpcEvent> = _events.asSharedFlow()
@@ -129,6 +131,7 @@ internal class GatewaySocket(private val http: OkHttpClient) {
     }
 
     companion object {
+        internal const val EVENT_BUFFER = 8192
         internal fun parseReady(raw: String): GatewayHello? = RpcCodec.parseHello(raw)
     }
 }

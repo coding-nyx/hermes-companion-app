@@ -6,6 +6,13 @@
 - Stream filter: self-package + FGS channels still suppressed; do not rely on built-in package list.
 
 
+## Telegram stream suppress (`feat/telegram-stream-suppress`)
+- Built-in `NotificationStreamPolicy.STREAM_SUPPRESS_PACKAGES`: `org.telegram.messenger`, `.web`, `.beta`, `org.thunderdog.challegram`.
+- Filters NLS forward path only; `DeviceLanePolicy.PROTECTED_PACKAGES` / broker `PROTECTED_PACKAGES` stay empty (Hands can control Telegram).
+- Wake skip default aligned via `agent_wake.STREAM_SUPPRESS_PACKAGES` (dual list — keep in sync).
+- Device tab: `STREAM MUTE  N built-in (Telegram)` near STREAM; BLOCKLIST remains Hands custom-only.
+
+
 ## Landed
 
 ### Slice 1 — Multi-gateway
@@ -36,3 +43,17 @@
 - [ ] Custom denylist add/remove protects Settings/authenticator when added; UI shows empty built-in (0).
 - [ ] Camera/photo/file pickers do not trip biometric lock mid-pick.
 - [ ] Biometric prompt while busy surfaces failure (no silent no-op).
+
+
+## Chat streaming + role differentiation (`feat/telegram-stream-suppress`, 2026-09-07)
+- Rows: `UserRow` (right-shifted hairline panel, `YOU`, tap = rewind) vs `AssistantRow` (2dp signal rail, `HERMES`, blinking `SignalCursor` + `LiveDot · streaming`). Tool rows inset under the rail; a running tool (`ChatMessage.toolRunning`) shows `● running · …`.
+- `PendingRow` (`chat.pending`) fills the gap between send and first token / while a tool runs with no text. `[END]` pill becomes `● LIVE` while streaming.
+- Data path: `Flow<ChatEvent>.coalesceDeltas()` (domain, 40ms frames, order-preserving) sits in front of `applyEvent`, so the UI re-parses markdown at a bounded rate instead of per token. `GatewaySocket` event buffer 128 → 8192 (DROP_OLDEST was eating tokens on bursts). SSE turn stream uses a no-read-timeout client (60s killed long tool calls).
+- `toolRunning` is transient: set on `tool.start`, cleared on `tool.complete`, `finishStream`, and interrupt. Never persisted (`MessageEntity.toModel` defaults false).
+- **Open (host):** `standalone.py` is a local-store stub — `_reply()` echoes the prompt, never calls Hermes, and the relay replays the finished reply in 48-char chunks (fake streaming). Real token streaming only exists via proxy to the dashboard (`HERMES_COMPANION_STANDALONE=0`, which the systemd unit already sets; the in-process relay started by `register()` defaults to standalone ON).
+- **S22 live pass (2026-09-07, ASH profile, real host):** thinking row → `● streaming` + cursor → text grows over several frames → header settles. Found and fixed on device:
+  - Tail-follow: `ChatScreen.followTail` keeps the newest row in view while streaming; only a drag away turns it off (DragInteraction), drag-to-bottom or the LIVE/[END] pill turns it back on. The old "only if exactly at end" check stopped following the moment a row grew.
+  - Send always scrolls to the just-sent row (IME shrinks the viewport and left the list "away from end").
+  - Reducer segments assistant text around tool rows (`assistantId`, `assistantId.2`, …). Before, post-tool deltas were appended to the pre-tool row so the transcript read text→text→tool until reopened.
+  - `CompanionState.openSessionRef` fallback: a freshly created thread vanished from `sessions` on the next `session.list` refresh (host does not persist empty threads), so `openSession` was null and SEND was a silent no-op. `send()` now reports `send blocked · …` instead of returning quietly.
+

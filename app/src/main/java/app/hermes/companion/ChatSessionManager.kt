@@ -7,6 +7,7 @@ import app.hermes.companion.data.remote.DashboardClient
 import app.hermes.companion.data.remote.HostClientPool
 import app.hermes.companion.data.remote.DashboardException
 import app.hermes.companion.domain.ChatContent
+import app.hermes.companion.domain.coalesceDeltas
 import app.hermes.companion.domain.HistoryPaging
 import app.hermes.companion.domain.OutboxPolicy
 import app.hermes.companion.domain.ProfileScope
@@ -86,6 +87,7 @@ class ChatSessionManager(
             _state.update {
                 it.copy(
                     openSessionId = owned.id,
+                    openSessionRef = owned,
                     transcriptLoading = true,
                     historySource = "",
                     error = null,
@@ -126,6 +128,7 @@ class ChatSessionManager(
         _state.update {
             it.copy(
                 openSessionId = null,
+                openSessionRef = null,
                 messages = emptyList(),
                 draft = "",
                 streaming = false,
@@ -227,10 +230,15 @@ class ChatSessionManager(
         _state.update { it.copy(rewindTargetId = null) }
     }
 
+    /** Surface a blocked send instead of swallowing it — the composer keeps the draft. */
+    private fun fail(reason: String) {
+        _state.update { it.copy(error = "send blocked · $reason") }
+    }
+
     fun send() {
-        val origin = _state.value.origin ?: return
-        val session = _state.value.openSession ?: return
-        val profile = _state.value.activeProfileId ?: return
+        val origin = _state.value.origin ?: return fail("not connected")
+        val session = _state.value.openSession ?: return fail("no open thread")
+        val profile = _state.value.activeProfileId ?: return fail("no profile")
         val text = _state.value.draft.trim()
         val attachments = _state.value.pendingAttachments
         if (text.isBlank() && attachments.isEmpty()) return
@@ -360,7 +368,7 @@ class ChatSessionManager(
                 }
                 coroutineScope {
                     val job = launch {
-                        client(origin).streamTurn(origin, session.id, profile, text, spec, turnModel()).collect { event ->
+                        client(origin).streamTurn(origin, session.id, profile, text, spec, turnModel()).coalesceDeltas().collect { event ->
                             if (_state.value.openSessionId == session.id) {
                                 _state.update { applyEvent(it, event, assistantId) }
                                 if (event is ChatEvent.AssistantDelta) {
@@ -461,7 +469,7 @@ class ChatSessionManager(
         val origin = _state.value.origin
         val session = _state.value.openSession
         val profile = _state.value.activeProfileId
-        _state.update { it.copy(streaming = false, messages = it.messages.map { m -> m.copy(streaming = false) }) }
+        _state.update { it.copy(streaming = false, messages = it.messages.map { m -> m.copy(streaming = false, toolRunning = false) }) }
         onTurnInterrupted?.invoke()
         if (origin == null || session == null || profile == null) return
         scope.launch {
@@ -524,7 +532,7 @@ class ChatSessionManager(
                                 item.text,
                                 model = turnModel(),
                                 partsJson = partsJson,
-                            ).collect { event ->
+                            ).coalesceDeltas().collect { event ->
                                 if (_state.value.openSessionId == item.sessionId) {
                                     _state.update { applyEvent(it, event, assistantId) }
                                     if (event is ChatEvent.AssistantDelta) {
@@ -642,28 +650,33 @@ class ChatSessionManager(
 internal fun applyEvent(state: CompanionState, event: ChatEvent, assistantId: String): CompanionState =
     when (event) {
         is ChatEvent.AssistantDelta -> {
-            val existing = state.messages.find { it.id == assistantId }
-            val next = if (existing == null) {
+            // Text keeps flowing into the open segment only while it is still the last row. A tool
+            // row in between closes that segment, so post-tool text starts a new one *below* the
+            // tool — otherwise the transcript reorders itself (text, more text, tool) mid-turn.
+            val last = state.messages.lastOrNull()
+            val next = if (last != null && last.role == MessageRole.ASSISTANT && last.streaming && last.id.startsWith(assistantId)) {
+                state.messages.dropLast(1) + last.copy(text = last.text + event.text)
+            } else {
+                val segments = state.messages.count { it.id.startsWith(assistantId) }
                 state.messages + ChatMessage(
-                    id = assistantId,
+                    id = if (segments == 0) assistantId else "$assistantId.${segments + 1}",
                     role = MessageRole.ASSISTANT,
                     text = event.text,
                     streaming = true,
                 )
-            } else {
-                state.messages.map {
-                    if (it.id == assistantId) it.copy(text = it.text + event.text, streaming = true) else it
-                }
             }
             state.copy(messages = next)
         }
         is ChatEvent.ToolStarted -> state.copy(
-            messages = state.messages + ChatMessage(
+            messages = state.messages.map {
+                if (it.streaming) it.copy(streaming = false) else it
+            } + ChatMessage(
                 id = "t-${UUID.randomUUID()}",
                 role = MessageRole.TOOL,
                 text = event.detail,
                 toolName = event.name,
                 toolDetail = event.detail,
+                toolRunning = true,
             ),
         )
         is ChatEvent.Approval -> state.copy(approval = event.prompt, streaming = false)
@@ -679,6 +692,7 @@ internal fun applyEvent(state: CompanionState, event: ChatEvent, assistantId: St
                     toolDetail = event.detail + dur,
                     text = event.detail + dur,
                     blocks = shot.ifEmpty { updated[idx].blocks },
+                    toolRunning = false,
                 )
             }
             state.copy(messages = updated)
@@ -690,7 +704,7 @@ internal fun applyEvent(state: CompanionState, event: ChatEvent, assistantId: St
             val done = finishStream(state, assistantId)
             done.copy(
                 messages = done.messages.map { msg ->
-                    if (msg.id == assistantId && msg.blocks.isEmpty() && msg.text.isNotBlank()) {
+                    if (msg.id.startsWith(assistantId) && msg.blocks.isEmpty() && msg.text.isNotBlank()) {
                         msg.copy(blocks = ChatContent.fromMarkdown(msg.text))
                     } else msg
                 },
@@ -701,7 +715,12 @@ internal fun applyEvent(state: CompanionState, event: ChatEvent, assistantId: St
 internal fun finishStream(state: CompanionState, assistantId: String): CompanionState =
     state.copy(
         streaming = false,
-        messages = state.messages.map { if (it.id == assistantId) it.copy(streaming = false) else it },
+        messages = state.messages.map {
+            when {
+                it.streaming || it.toolRunning -> it.copy(streaming = false, toolRunning = false)
+                else -> it
+            }
+        },
     )
 
 internal fun Throwable.toMonoError(): String = when (this) {

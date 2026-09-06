@@ -3,9 +3,11 @@ package app.hermes.companion.chat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -48,6 +50,9 @@ import app.hermes.companion.design.FetchPane
 import app.hermes.companion.design.FetchRow
 import app.hermes.companion.design.FetchSkeleton
 import app.hermes.companion.design.Hairline
+import app.hermes.companion.design.LiveDot
+import app.hermes.companion.design.SignalCursor
+import app.hermes.companion.design.WalkingEllipsis
 import app.hermes.companion.model.ApprovalPrompt
 import app.hermes.companion.model.ChatAttachment
 import app.hermes.companion.model.ChatBlock
@@ -125,10 +130,32 @@ fun ChatScreen(
         prevLastId = lastId
         prevCount = count
     }
-    LaunchedEffect(threadId, messages.lastOrNull()?.id, messages.lastOrNull()?.text, messages.size) {
+    var lastSentId by remember(threadId) { mutableStateOf<String?>(null) }
+    // Tail-follow: keep the newest row in view while text streams. Only an operator drag away from
+    // the end turns it off; dragging back to the bottom or tapping the LIVE/[END] pill turns it on.
+    // Checking "am I exactly at the end?" per frame is not enough — a growing row is taller than
+    // the remaining space by the time the check runs, so the view silently stopped following.
+    var followTail by remember(threadId) { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is DragInteraction.Start -> followTail = false
+                is DragInteraction.Stop, is DragInteraction.Cancel -> if (!listState.canScrollForward) followTail = true
+            }
+        }
+    }
+    LaunchedEffect(threadId, messages.lastOrNull()?.id, messages.lastOrNull()?.text, messages.size, streaming) {
         if (messages.isEmpty()) return@LaunchedEffect
         snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
-        if (!landed || !listState.canScrollForward) {
+        // A message the operator just sent always lands in view, even when the IME shrank the
+        // viewport and left the list "away from end".
+        val last = messages.last()
+        val justSent = last.role == MessageRole.USER && last.id != lastSentId
+        if (justSent) {
+            lastSentId = last.id
+            followTail = true
+        }
+        if (!landed || followTail || !listState.canScrollForward) {
             listState.scrollToEnd()
             landed = true
         }
@@ -186,40 +213,24 @@ fun ChatScreen(
             }
             items(messages, key = { it.id }) { message ->
                 when (message.role) {
-                    MessageRole.USER -> Column(
-                        modifier = Modifier
-                            .testTag("chat.user")
-                            .clickable { onRewind(message) },
-                    ) {
-                        MessageBlocks(message, onFetchMedia, onOpenMedia)
-                        if (message.queued) {
-                            Text(
-                                text = "queued",
-                                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                                modifier = Modifier.testTag("chat.queued"),
-                            )
-                        }
+                    MessageRole.USER -> UserRow(message, onRewind, onFetchMedia, onOpenMedia)
+                    MessageRole.TOOL -> Box(Modifier.padding(start = AgentRailInset)) {
+                        ToolRow(message, onFetchMedia, onOpenMedia)
                     }
-                    MessageRole.TOOL -> ToolRow(message, onFetchMedia, onOpenMedia)
-                    MessageRole.ASSISTANT -> Row(verticalAlignment = Alignment.Bottom) {
-                        MessageBlocks(
-                            message = message,
-                            onFetchMedia = onFetchMedia,
-                            onOpenMedia = onOpenMedia,
-                            modifier = Modifier.weight(1f, fill = false),
-                        )
-                        if (message.streaming) {
-                            Spacer(Modifier.width(4.dp))
-                            Box(
-                                Modifier
-                                    .padding(top = 4.dp)
-                                    .width(7.dp)
-                                    .height(13.dp)
-                                    .background(CompanionColor.Signal)
-                                    .testTag("chat.cursor"),
-                            )
-                        }
-                    }
+                    MessageRole.ASSISTANT -> AssistantRow(message, onFetchMedia, onOpenMedia)
+                }
+            }
+            val last = messages.lastOrNull()
+            val awaitingText = streaming && !(last?.role == MessageRole.ASSISTANT && last.streaming)
+            if (awaitingText) {
+                item(key = "stream.pending") {
+                    PendingRow(
+                        label = if (last?.role == MessageRole.TOOL && last.toolRunning) {
+                            "running · ${last.toolName?.ifBlank { null } ?: "tool"}"
+                        } else {
+                            "thinking"
+                        },
+                    )
                 }
             }
         }
@@ -230,23 +241,30 @@ fun ChatScreen(
                 .padding(end = 2.dp, top = CompanionSpace.Md, bottom = CompanionSpace.Md),
         )
         if (awayFromEnd) {
-            Text(
-                text = "[END]",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = CompanionSpace.Md, bottom = CompanionSpace.Md)
                     .background(CompanionColor.VoidElevated)
                     .border(1.dp, CompanionColor.Signal)
                     .clickable {
+                        followTail = true
                         scope.launch {
                             listState.scrollToEnd()
                             landed = true
                         }
                     }
                     .padding(horizontal = CompanionSpace.Sm, vertical = CompanionSpace.Xs)
-                    .testTag("chat.end"),
-            )
+                    .testTag(if (streaming) "chat.live" else "chat.end"),
+            ) {
+                if (streaming) LiveDot()
+                Text(
+                    text = if (streaming) "LIVE" else "[END]",
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                )
+            }
         }
         }
         }
@@ -432,6 +450,153 @@ fun ChatScreen(
     }
 }
 
+/** Tool rows and the agent rail share this inset so a turn reads as one column. */
+private val AgentRailInset = 10.dp
+
+/** Operator turn: right-shifted panel, hairline frame, `YOU` label. Tap = rewind target. */
+@Composable
+private fun UserRow(
+    message: ChatMessage,
+    onRewind: (ChatMessage) -> Unit,
+    onFetchMedia: suspend (String) -> ByteArray?,
+    onOpenMedia: (ChatBlock) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("chat.user"),
+    ) {
+        Spacer(Modifier.width(CompanionSpace.Xxl))
+        Column(
+            modifier = Modifier.weight(1f),
+            horizontalAlignment = Alignment.End,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(end = 2.dp, bottom = 3.dp),
+            ) {
+                if (message.queued) {
+                    Text(
+                        text = "queued",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                        modifier = Modifier.testTag("chat.queued"),
+                    )
+                }
+                Text(
+                    text = "YOU",
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                )
+            }
+            Column(
+                modifier = Modifier
+                    .clickable { onRewind(message) }
+                    .background(CompanionColor.VoidElevated)
+                    .border(
+                        CompanionSpace.Hairline,
+                        if (message.queued) CompanionColor.Warn else CompanionColor.LineStrong,
+                    )
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                MessageBlocks(message, onFetchMedia, onOpenMedia)
+            }
+        }
+    }
+}
+
+/** Agent turn: full width, 2dp signal rail, `HERMES` label, live cursor while streaming. */
+@Composable
+private fun AssistantRow(
+    message: ChatMessage,
+    onFetchMedia: suspend (String) -> ByteArray?,
+    onOpenMedia: (ChatBlock) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .testTag("chat.assistant"),
+    ) {
+        Box(
+            Modifier
+                .width(2.dp)
+                .fillMaxHeight()
+                .background(if (message.streaming) CompanionColor.Signal else CompanionColor.SignalDim),
+        )
+        Spacer(Modifier.width(AgentRailInset - 2.dp))
+        Column(Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.padding(bottom = 3.dp),
+            ) {
+                Text(
+                    text = "HERMES",
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                )
+                if (message.streaming) {
+                    LiveDot()
+                    Text(
+                        text = "streaming",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                        modifier = Modifier.testTag("chat.streaming"),
+                    )
+                }
+            }
+            Row(verticalAlignment = Alignment.Bottom) {
+                MessageBlocks(
+                    message = message,
+                    onFetchMedia = onFetchMedia,
+                    onOpenMedia = onOpenMedia,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (message.streaming) {
+                    Spacer(Modifier.width(4.dp))
+                    SignalCursor(
+                        modifier = Modifier
+                            .padding(bottom = 3.dp)
+                            .testTag("chat.cursor"),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Shown between send and the first agent token, or while a tool runs with no text yet. */
+@Composable
+private fun PendingRow(label: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .testTag("chat.pending"),
+    ) {
+        Box(
+            Modifier
+                .width(2.dp)
+                .fillMaxHeight()
+                .background(CompanionColor.Signal),
+        )
+        Spacer(Modifier.width(AgentRailInset - 2.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = "HERMES",
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+            )
+            LiveDot()
+            Text(
+                text = label,
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+            )
+            WalkingEllipsis()
+        }
+    }
+}
+
 @Composable
 private fun RewindStrip(onCancel: () -> Unit) {
     Row(
@@ -520,18 +685,19 @@ private fun ToolRow(
     val summary = detail.ifBlank {
         if (body.isNotBlank() && body != name) body.take(80).replace('\n', ' ') else "completed"
     }
+    val running = message.toolRunning
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .border(
                 CompanionSpace.Hairline,
-                if (expanded) CompanionColor.Signal else CompanionColor.Line,
+                if (expanded || running) CompanionColor.Signal else CompanionColor.Line,
             )
             .background(CompanionColor.VoidElevated)
             .clickable { expanded = !expanded }
             .padding(horizontal = 10.dp, vertical = 8.dp)
-            .testTag("chat.tool"),
+            .testTag(if (running) "chat.tool.running" else "chat.tool"),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -543,6 +709,7 @@ private fun ToolRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                if (running) LiveDot()
                 Text(
                     text = name,
                     style = CompanionType.MonoSmall.copy(
@@ -555,8 +722,10 @@ private fun ToolRow(
                     style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
                 )
                 Text(
-                    text = summary,
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                    text = if (running) "running · $summary" else summary,
+                    style = CompanionType.MonoSmall.copy(
+                        color = if (running) CompanionColor.TextDim else CompanionColor.TextMute,
+                    ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )

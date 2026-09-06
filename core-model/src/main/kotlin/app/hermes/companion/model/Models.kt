@@ -86,6 +86,8 @@ data class ChatMessage(
     val streaming: Boolean = false,
     val queued: Boolean = false,
     val blocks: List<ChatBlock> = emptyList(),
+    /** Tool row whose `tool.start` has arrived but no `tool.complete` yet. Transient; never cached. */
+    val toolRunning: Boolean = false,
 )
 
 @Serializable

@@ -1,5 +1,6 @@
 package app.hermes.companion.domain
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -9,7 +10,7 @@ class NotificationStreamPolicyTest {
     fun forwardsOrdinaryPackages() {
         assertTrue(
             NotificationStreamPolicy.shouldForward(
-                packageName = "com.telegram.messenger",
+                packageName = "com.example.mail",
                 extraProtected = emptySet(),
             ),
         )
@@ -19,6 +20,29 @@ class NotificationStreamPolicyTest {
     fun doesNotBlockFormerBuiltInsWithoutCustom() {
         assertTrue(NotificationStreamPolicy.shouldForward("com.bitwarden.mobile"))
         assertTrue(NotificationStreamPolicy.shouldForward("com.android.settings"))
+    }
+
+    @Test
+    fun blocksBuiltinTelegramStreamSuppress() {
+        for (pkg in NotificationStreamPolicy.STREAM_SUPPRESS_PACKAGES) {
+            assertFalse(pkg, NotificationStreamPolicy.shouldForward(pkg))
+            assertTrue(pkg, NotificationStreamPolicy.isStreamSuppressed(pkg))
+        }
+        assertFalse(NotificationStreamPolicy.shouldForward("org.telegram.messenger.web"))
+        assertFalse(NotificationStreamPolicy.shouldForward("org.thunderdog.challegram"))
+    }
+
+    @Test
+    fun telegramStreamSuppressDoesNotImplyHandsProtect() {
+        for (pkg in NotificationStreamPolicy.STREAM_SUPPRESS_PACKAGES) {
+            assertFalse(pkg, DeviceLanePolicy.isProtected(pkg))
+        }
+        assertTrue(DeviceLanePolicy.PROTECTED_PACKAGES.isEmpty())
+    }
+
+    @Test
+    fun streamSuppressCountMatchesBuiltinSet() {
+        assertEquals(4, NotificationStreamPolicy.STREAM_SUPPRESS_PACKAGES.size)
     }
 
     @Test

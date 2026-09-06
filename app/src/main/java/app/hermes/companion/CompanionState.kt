@@ -56,6 +56,7 @@ data class CompanionState(
     val sessions: List<SessionRef> = emptyList(),
     val tab: MainTab = MainTab.THREADS,
     val openSessionId: String? = null,
+    val openSessionRef: SessionRef? = null,
     val messages: List<ChatMessage> = emptyList(),
     val draft: String = "",
     val streaming: Boolean = false,
@@ -121,8 +122,13 @@ data class CompanionState(
         get() = ProfileScope.visibleSessions(sessions, activeProfileId)
     val activeProfile: ProfileRef?
         get() = profiles.find { it.id == activeProfileId }
+    /**
+     * The open thread. Falls back to [openSessionRef] because a freshly created session can be
+     * missing from the host's next `session.list` (empty threads are not persisted yet), and
+     * without the fallback SEND became a silent no-op.
+     */
     val openSession: SessionRef?
-        get() = sessions.find { it.id == openSessionId }
+        get() = sessions.find { it.id == openSessionId } ?: openSessionRef?.takeIf { it.id == openSessionId }
 }
 
 internal fun CompanionState.mirror(node: DeviceNodeState): CompanionState = copy(

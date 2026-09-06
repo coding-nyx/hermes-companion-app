@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -12,12 +13,16 @@ import urllib.request
 from pathlib import Path
 from unittest import mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from agent_wake import (
+    STREAM_SUPPRESS_PACKAGES,
     _reset_wake_state_for_tests,
     format_telegram_nudge,
     format_wake_message,
     maybe_wake_for_notification,
     wake_enabled,
+    wake_skip_packages,
 )
 from relay import RelayState, make_server
 
@@ -64,17 +69,40 @@ class AgentWakeUnitTests(unittest.TestCase):
 
     def test_skip_telegram_packages(self):
         os.environ["HERMES_COMPANION_NOTIF_WAKE"] = "1"
-        self.assertFalse(
-            maybe_wake_for_notification(
-                {
-                    "profile": "ash",
-                    "notification": {
-                        "package": "org.telegram.messenger.web",
-                        "title": "ash",
-                        "text": "hi",
-                    },
-                }
+        for pkg in (
+            "org.telegram.messenger.web",
+            "org.telegram.messenger",
+            "org.telegram.messenger.beta",
+            "org.thunderdog.challegram",
+        ):
+            self.assertFalse(
+                maybe_wake_for_notification(
+                    {
+                        "profile": "ash",
+                        "notification": {
+                            "package": pkg,
+                            "title": "ash",
+                            "text": "hi",
+                        },
+                    }
+                ),
+                pkg,
             )
+
+    def test_stream_suppress_mirrored_in_wake_skip(self):
+        skips = wake_skip_packages()
+        for pkg in STREAM_SUPPRESS_PACKAGES:
+            self.assertIn(pkg, skips)
+        self.assertEqual(
+            STREAM_SUPPRESS_PACKAGES,
+            frozenset(
+                {
+                    "org.telegram.messenger",
+                    "org.telegram.messenger.web",
+                    "org.telegram.messenger.beta",
+                    "org.thunderdog.challegram",
+                }
+            ),
         )
 
     def test_requires_profile(self):
