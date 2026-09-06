@@ -41,6 +41,8 @@ class CompanionApp : Application() {
     val launchNonce: String = java.util.UUID.randomUUID().toString()
     var watchJob: Job? = null
     var hudJob: Job? = null
+    var fleetHealthJob: Job? = null
+    @Volatile var fleetHealthForeground: Boolean = true
     /** ntfy wake subscriptions, one per host with a topic. */
     val wakeJobs: MutableMap<String, Job> = mutableMapOf()
 

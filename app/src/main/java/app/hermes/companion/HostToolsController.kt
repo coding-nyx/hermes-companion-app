@@ -203,4 +203,11 @@ class HostToolsController(
         _state.update { it.copy(savedGateways = current) }
         onConnect(gw.origin)
     }
+
+    fun removeSavedGateway(origin: String) {
+        val key = HostClientPool.key(origin)
+        val updated = operatorCreds.loadGateways().filter { HostClientPool.key(it.origin) != key }
+        operatorCreds.saveGateways(updated)
+        _state.update { it.copy(savedGateways = updated) }
+    }
 }

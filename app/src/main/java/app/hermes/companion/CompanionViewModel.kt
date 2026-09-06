@@ -13,15 +13,17 @@ import app.hermes.companion.data.remote.DashboardClient
 import app.hermes.companion.data.remote.DashboardException
 import app.hermes.companion.data.remote.HostClientPool
 import app.hermes.companion.domain.AuthPolicy
+import app.hermes.companion.domain.ChatContent
+import app.hermes.companion.domain.GatewayBook
 import app.hermes.companion.domain.GatewayHudMap
 import app.hermes.companion.domain.OriginPolicy
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.WakePing
-import app.hermes.companion.domain.ChatContent
 import app.hermes.companion.model.ChatAttachment
 import app.hermes.companion.model.ChatBlockKind
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.DeviceArm
+import app.hermes.companion.model.GatewayChoice
 import app.hermes.companion.model.SavedGateway
 import app.hermes.companion.model.SessionRef
 import app.hermes.companion.voice.VoiceStreamEngine
@@ -29,10 +31,13 @@ import app.hermes.companion.voice.WakeWordService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class CompanionViewModel(
     private val clients: HostClientPool,
@@ -58,12 +63,15 @@ class CompanionViewModel(
             username = initialOrigin?.let { operatorCreds.load(it)?.username }.orEmpty(),
             ntfyTopic = initialOrigin?.let { sticky.ntfyTopicFor(it) }.orEmpty(),
             stayConnected = sticky.stayConnected,
+            biometricLock = sticky.biometricLock,
+            appLocked = sticky.biometricLock,
             loading = !initialOrigin.isNullOrBlank(),
         ).mirror(runtime.deviceNode.state.value),
     )
     val state: StateFlow<CompanionState> = _state
     private var pendingWake: WakePing? = null
     private var connectJob: Job? = null
+    private var probeJob: Job? = null
     private val chat = ChatSessionManager(clients, cache, outbox, _state, viewModelScope)
     private val voiceStream = VoiceStreamEngine(
         context = runtime,
@@ -82,7 +90,7 @@ class CompanionViewModel(
         },
     )
     private val host = HostToolsController(clients, operatorCreds, _state, viewModelScope) { origin -> connect(origin) }
-    private val sync = SyncManager(clients, cache, sticky, runtime, chat, _state, viewModelScope) { ping ->
+    private val sync = SyncManager(clients, cache, sticky, operatorCreds, runtime, chat, _state, viewModelScope) { ping ->
         openWake(ping.origin, ping.profile, ping.sessionId)
     }
 
@@ -96,8 +104,13 @@ class CompanionViewModel(
         viewModelScope.launch {
             deviceNode.errors.collect { message -> _state.update { it.copy(error = message) } }
         }
+        refreshConnectChoices()
+        host.loadSavedGateways()
+        sync.startFleetHealth()
         if (!initialOrigin.isNullOrBlank()) {
             connect(initialOrigin)
+        } else {
+            probeConnectChoices()
         }
     }
 
@@ -178,6 +191,56 @@ class CompanionViewModel(
         _state.update { it.copy(originInput = value, error = null) }
     }
 
+    fun selectConnectChoice(choice: GatewayChoice) {
+        val cred = operatorCreds.load(choice.origin)
+        _state.update {
+            it.copy(
+                originInput = choice.origin,
+                username = cred?.username.orEmpty(),
+                error = null,
+            )
+        }
+        connect(choice.origin)
+    }
+
+    fun forgetConnectChoice(choice: GatewayChoice) {
+        if (!choice.forgettable) return
+        host.removeSavedGateway(choice.origin)
+        refreshConnectChoices()
+        probeConnectChoices()
+    }
+
+    private fun refreshConnectChoices() {
+        val previous = _state.value.connectChoices.associate { GatewayBook.key(it.origin) to it.health }
+        val merged = GatewayBook.merge(
+            saved = operatorCreds.loadGateways(),
+            pairedOrigins = deviceCreds.loadAll().map { it.origin },
+            lastGoodOrigin = sticky.lastGoodOrigin,
+        ).map { row ->
+            row.copy(health = previous[GatewayBook.key(row.origin)].orEmpty())
+        }
+        _state.update { it.copy(connectChoices = merged) }
+    }
+
+    private fun probeConnectChoices() {
+        val snapshot = _state.value.connectChoices
+        if (snapshot.isEmpty()) return
+        probeJob?.cancel()
+        probeJob = viewModelScope.launch {
+            val results = snapshot.map { choice ->
+                async {
+                    val up = withTimeoutOrNull(3_000) {
+                        runCatching { client(choice.origin).probe(choice.origin) }.getOrNull() != null
+                    } == true
+                    GatewayBook.key(choice.origin) to up
+                }
+            }.awaitAll()
+            val up = results.filter { it.second }.map { it.first }.toSet()
+            val down = results.filter { !it.second }.map { it.first }.toSet()
+            _state.update { it.copy(connectChoices = GatewayBook.markHealth(it.connectChoices, up, down)) }
+        }
+    }
+
     fun onUsernameChange(value: String) {
         _state.update { it.copy(username = value, error = null) }
     }
@@ -217,6 +280,23 @@ class CompanionViewModel(
         _state.update { it.copy(lockedAccess = !it.lockedAccess) }
     }
 
+    fun noteError(message: String?) {
+        _state.update { it.copy(error = message?.trim()?.ifBlank { null }) }
+    }
+
+    fun setBiometricLock(enabled: Boolean) {
+        sticky.biometricLock = enabled
+        _state.update { it.copy(biometricLock = enabled, appLocked = if (enabled) it.appLocked else false) }
+    }
+
+    fun lockIfEnabled() {
+        if (sticky.biometricLock) _state.update { it.copy(appLocked = true) }
+    }
+
+    fun unlock() {
+        _state.update { it.copy(appLocked = false, error = null) }
+    }
+
     fun setVoiceListening(listening: Boolean) {
         _state.update { it.copy(isListeningVoice = listening) }
     }
@@ -245,9 +325,20 @@ class CompanionViewModel(
         deviceNode.cancelPair()
     }
 
+    fun approvePair() {
+        _state.update { it.copy(error = null) }
+        deviceNode.approvePair()
+    }
+
     fun revokePair() {
         _state.update { it.copy(error = null) }
         deviceNode.revokePair()
+    }
+
+    fun repair() {
+        _state.update { it.copy(error = null) }
+        val profile = _state.value.activeProfileId ?: "default"
+        deviceNode.repair(profile)
     }
 
     fun setA11yBound(bound: Boolean) = deviceNode.setA11yBound(bound)
@@ -366,8 +457,12 @@ class CompanionViewModel(
     fun checkUpdates() = host.checkUpdates()
     fun applyUpdate() = host.applyUpdate()
     fun loadSavedGateways() = host.loadSavedGateways()
-    fun addSavedGateway(name: String, origin: String) = host.addSavedGateway(name, origin)
+    fun addSavedGateway(name: String, origin: String) {
+        host.addSavedGateway(name, origin)
+        sync.startFleetHealth()
+    }
     fun selectGateway(gw: SavedGateway) = host.selectGateway(gw)
+    fun setFleetHealthForeground(on: Boolean) = sync.setFleetHealthForeground(on)
 
     fun setOverlayGranted(granted: Boolean) {
         _state.update { it.copy(overlayGranted = granted) }
@@ -389,6 +484,7 @@ class CompanionViewModel(
         }
         if (connectJob?.isActive == true && _state.value.originInput == origin) return
         if (_state.value.origin == origin && originOverride == null && _state.value.error == null) return
+        probeJob?.cancel()
         connectJob = viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null, originInput = origin, hostName = runtime.hostName(origin)) }
             var gatedHost = _state.value.authRequired
@@ -489,6 +585,7 @@ class CompanionViewModel(
                 sync.startWatch(origin, active.id)
                 deviceNode.bind(origin)
                 sync.startWake()
+                sync.startFleetHealth()
                 host.refreshHostMetrics()
                 host.loadModelCatalog()
                 host.loadCronJobs()
@@ -508,6 +605,8 @@ class CompanionViewModel(
                         error = t.toMonoError(),
                     )
                 }
+                refreshConnectChoices()
+                probeConnectChoices()
             }
         }
     }

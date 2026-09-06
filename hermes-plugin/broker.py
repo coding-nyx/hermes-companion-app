@@ -28,94 +28,9 @@ ALLOWLIST = frozenset(
 META = frozenset({"device.arm", "device.disarm"})
 
 # Fail-closed denylist, mirrored from domain/DeviceLanePolicy.kt (keep both in sync).
-# Exact package ids, or a prefix rule ending in "*".
-PROTECTED_PACKAGES = frozenset(
-    {
-        # platform: settings, permission grants, installs, keystore, billing
-        "com.android.settings",
-        "com.android.systemui",
-        "com.android.vending",
-        "com.android.packageinstaller",
-        "com.google.android.packageinstaller",
-        "com.android.permissioncontroller",
-        "com.google.android.permissioncontroller",
-        "com.android.keychain",
-        "com.android.certinstaller",
-        "com.google.android.gms",
-        "com.samsung.android.settings.*",
-        "com.samsung.android.lool",
-        "com.samsung.knox.*",
-        # authenticators
-        "com.google.android.apps.authenticator2",
-        "com.authy.authy",
-        "com.azure.authenticator",
-        "com.duosecurity.duomobile",
-        "com.beemdevelopment.aegis",
-        "org.fedorahosted.freeotp",
-        "com.yubico.yubioath",
-        "com.okta.android.auth",
-        "com.rsa.securidapp",
-        # password managers
-        "com.onepassword.android",
-        "com.agilebits.onepassword",
-        "com.lastpass.lpandroid",
-        "com.bitwarden.mobile",
-        "com.x8bit.bitwarden",
-        "com.kunzisoft.keepass.free",
-        "com.kunzisoft.keepass.libre",
-        "keepass2android.*",
-        "com.dashlane",
-        "com.nordpass.android.app.password.manager",
-        "proton.android.pass",
-        "com.enpass.app",
-        "com.samsung.android.samsungpass",
-        "com.samsung.android.authfw",
-        # payments / wallets
-        "com.google.android.apps.walletnfcrel",
-        "com.google.android.apps.nbu.paisa.user",
-        "com.samsung.android.spay",
-        "com.samsung.android.spayfw",
-        "com.paypal.android.p2pmobile",
-        "com.venmo",
-        "com.squareup.cash",
-        "com.phonepe.app",
-        "net.one97.paytm",
-        "in.org.npci.upiapp",
-        "in.amazon.mShop.android.shopping",
-        "com.coinbase.android",
-        "com.binance.dev",
-        # banking
-        "com.chase.sig.android",
-        "com.infonow.bofa",
-        "com.wf.wellsfargo",
-        "com.citi.citimobile",
-        "com.usbank.mobilebanking",
-        "com.capitalone.*",
-        "com.discoverfinancial.mobile",
-        "com.revolut.revolut",
-        "co.uk.getmondo",
-        "com.barclays.*",
-        "com.hsbc.*",
-        "com.sbi.*",
-        "com.csam.icici.bank.imobile",
-        "com.snapwork.hdfc",
-        "com.axis.mobile",
-        "com.msf.kbank.mobile",
-        "com.idbibank.*",
-        "com.db.pwcc.dbmobile",
-        "de.comdirect.android",
-        "com.ing.*",
-        "com.commbank.netbank",
-        "au.com.nab.mobile",
-        "org.westpac.bank",
-        "com.anz.android.gomoney",
-        "com.rbc.mobile.android",
-        "com.td",
-        "com.scotiabank.banking",
-        "com.cibc.android.mobi",
-        "com.bmo.mobile",
-    }
-)
+# Empty by default so Hermes Companion controls everything.
+# Only caller-supplied extra blocklist rules are blocked.
+PROTECTED_PACKAGES: frozenset[str] = frozenset()
 
 
 def is_protected(package: str, extra=()) -> bool:
@@ -237,6 +152,7 @@ class LiveDevice:
 @dataclass
 class Broker:
     device: MockDevice | LiveDevice | None = None
+    extra_protected: tuple[str, ...] = field(default_factory=tuple)
     hits: list[float] = field(default_factory=list)
     clock: Callable[[], float] = lambda: 0.0
     audit: AuditLog = field(default_factory=AuditLog)
@@ -251,7 +167,7 @@ class Broker:
             raise BrokerError("disarmed", "device is DISARMED")
         app = self.device.foreground_app
         target = str(arguments.get("package") or "") or app
-        if action not in META and (is_protected(app) or is_protected(target)):
+        if action not in META and (is_protected(app, self.extra_protected) or is_protected(target, self.extra_protected)):
             raise BrokerError("protected_package", target)
         if action == "device.click" and "xy" in arguments:
             xy = arguments["xy"]

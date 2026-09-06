@@ -4,6 +4,7 @@ import app.hermes.companion.domain.RewindSubmit
 import app.hermes.companion.model.BusFrame
 import app.hermes.companion.model.ChatEvent
 import app.hermes.companion.model.DeviceCred
+import app.hermes.companion.model.MessageRole
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -64,6 +65,7 @@ class DashboardClientTest {
             assertTrue(path.startsWith("/api/sessions/sess-cod-1/messages?"))
             assertTrue(path.contains("profile=coder"))
             assertTrue(path.contains("limit="))
+            assertTrue(path.contains("order=latest"))
             val events = client.streamTurn(origin, "sess-cod-1", "coder", "ping").toList()
             assertTrue(events.any { it is ChatEvent.AssistantDelta && it.text == "ok" })
             assertTrue(events.any { it is ChatEvent.Completed })
@@ -127,10 +129,76 @@ class DashboardClientTest {
             val recorded = server.takeRequest()
             assertTrue(recorded.path.orEmpty().contains("before=m41"))
             assertTrue(recorded.path.orEmpty().contains("limit="))
+            assertTrue(recorded.path.orEmpty().contains("order=latest"))
+            assertEquals("rest", page.source)
             assertEquals("m1", page.messages.first().id)
             assertEquals("m40", page.messages.last().id)
             assertFalse(page.messages.any { it.id == "m41" })
         }
+    }
+
+    @Test
+    fun parseMessagesPairsToolCallsAndResolvesNamesAndArgs() {
+        val json = """
+            {
+              "messages": [
+                {
+                  "id": "1",
+                  "role": "user",
+                  "content": "check date"
+                },
+                {
+                  "id": "2",
+                  "role": "assistant",
+                  "content": "",
+                  "tool_calls": [
+                    {
+                      "id": "call_123",
+                      "function": {
+                        "name": "terminal",
+                        "arguments": "{\"command\": \"date -u +%Y-%m-%d\"}"
+                      }
+                    },
+                    {
+                      "id": "call_456",
+                      "function": {
+                        "name": "skill_view",
+                        "arguments": "{\"name\": \"hermes-agent\"}"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "3",
+                  "role": "tool",
+                  "tool_name": "terminal",
+                  "tool_call_id": "call_123",
+                  "content": "{\"output\": \"2026-08-04\", \"exit_code\": 0}"
+                },
+                {
+                  "id": "4",
+                  "role": "tool",
+                  "tool_name": "skill_view",
+                  "tool_call_id": "call_456",
+                  "content": "# hermes-agent skill"
+                }
+              ]
+            }
+        """.trimIndent()
+        val messages = parseMessages(json)
+        assertEquals(3, messages.size)
+        assertEquals(MessageRole.USER, messages[0].role)
+        assertEquals("check date", messages[0].text)
+
+        assertEquals(MessageRole.TOOL, messages[1].role)
+        assertEquals("terminal", messages[1].toolName)
+        assertEquals("date -u +%Y-%m-%d", messages[1].toolDetail)
+        assertEquals("2026-08-04", messages[1].text)
+
+        assertEquals(MessageRole.TOOL, messages[2].role)
+        assertEquals("skill_view", messages[2].toolName)
+        assertEquals("hermes-agent", messages[2].toolDetail)
+        assertEquals("# hermes-agent skill", messages[2].text)
     }
 
     @Test
@@ -140,6 +208,10 @@ class DashboardClientTest {
         val done = DashboardClient.parseSse("run.completed", "{}")
         assertEquals(ChatEvent.AssistantDelta("hi"), delta)
         assertEquals(ChatEvent.ToolStarted("terminal", "ls"), tool)
+        assertEquals(
+            ChatEvent.ToolStarted("skill_view", "axolotl"),
+            DashboardClient.parseSse("tool.started", """{"name":"skill_view","context":"axolotl"}"""),
+        )
         assertEquals(ChatEvent.Completed, done)
         val apr = DashboardClient.parseSse(
             "approval.request",
@@ -184,6 +256,19 @@ class DashboardClientTest {
         assertEquals("20260901_193952_8a33ee0b", rows.single().id)
         assertEquals("Nyx", rows.single().title)
         assertEquals(1756750000_000L, rows.single().updatedAtEpochMs)
+        assertFalse(rows.single().ended)
+    }
+
+    @Test
+    fun parseSessionsMarksEndedTelegramRows() {
+        val rows = parseSessions(
+            """{"sessions":[
+              {"id":"tg-1","profile":"knight","title":"Nyx","end_reason":"agent_close","message_count":24},
+              {"id":"live-1","profile":"knight","title":"open"}
+            ]}""",
+        )
+        assertTrue(rows.first { it.id == "tg-1" }.ended)
+        assertFalse(rows.first { it.id == "live-1" }.ended)
     }
 
     @Test
@@ -219,6 +304,24 @@ class DashboardClientTest {
             """{"count":1,"messages":[{"role":"assistant","content":[{"type":"text","text":"hello "} ,{"type":"text","text":"lab"}]}]}""",
         )
         assertEquals("hello lab", messages.single().text)
+    }
+
+    @Test
+    fun parseHistoryToolRowsUseContextAndArgs() {
+        val messages = parseMessages(
+            """
+            {"messages":[
+              {"role":"tool","name":"terminal","context":"ls -la /tmp","args":{"command":"ls -la /tmp"}},
+              {"role":"tool","name":"skill_view","args":{"name":"axolotl"}}
+            ]}
+            """.trimIndent(),
+        )
+        assertEquals("terminal", messages[0].toolName)
+        assertEquals("ls -la /tmp", messages[0].toolDetail)
+        assertEquals("ls -la /tmp", messages[0].text)
+        assertEquals("skill_view", messages[1].toolName)
+        assertEquals("axolotl", messages[1].toolDetail)
+        assertEquals("axolotl", messages[1].text)
     }
 
     @Test
@@ -586,6 +689,29 @@ class DashboardClientTest {
     }
 
     @Test
+    fun approvePairRemoteCall() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"device_id":"dev_test","status":"approved","profile":"knight"}"""))
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"status":"approved","device_id":"dev_test","profile":"knight","credential":"cred-abc"}""",
+                ),
+            )
+            val client = DashboardClient(server.toOkHttp())
+            val origin = server.url("/").toString().trimEnd('/')
+            val result = client.approvePair(origin, "XYZ789")
+            assertTrue(result.approved)
+            assertEquals("dev_test", result.deviceId)
+            assertEquals("cred-abc", result.credential)
+            val approveReq = server.takeRequest()
+            assertEquals("/companion/device/pair/XYZ789/approve", approveReq.path)
+            assertEquals("POST", approveReq.method)
+            val pollReq = server.takeRequest()
+            assertEquals("/companion/device/pair/XYZ789", pollReq.path)
+        }
+    }
+
+    @Test
     fun authorizationHeaderContainsBearerToken() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"status":"ok"}"""))
@@ -690,6 +816,111 @@ class DashboardClientTest {
             assertTrue(posted.contains("\"parts\""))
             assertTrue(posted.contains("/companion/media/abc"))
             assertTrue(posted.contains("\"type\":\"image\""))
+        }
+    }
+
+    @Test
+    fun emptyRpcHistoryFallsBackToRest() = runBlocking {
+        MockWebServer().use { server ->
+            val methods = java.util.concurrent.CopyOnWriteArrayList<String>()
+            server.enqueue(
+                MockResponse().withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onOpen(webSocket: WebSocket, response: Response) {
+                            webSocket.send(
+                                """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"change_events":false,"heartbeat":false,"instance_id":"h1"}}}""",
+                            )
+                        }
+
+                        override fun onMessage(webSocket: WebSocket, text: String) {
+                            val obj = Json.parseToJsonElement(text).jsonObject
+                            val id = obj["id"]!!.jsonPrimitive.content
+                            val method = obj["method"]!!.jsonPrimitive.content
+                            methods += method
+                            when (method) {
+                                "session.resume" -> webSocket.send(
+                                    """{"jsonrpc":"2.0","id":"$id","result":{"session_id":"live-empty","stored_session_id":"tg-empty"}}""",
+                                )
+                                "session.history" -> webSocket.send(
+                                    """{"jsonrpc":"2.0","id":"$id","result":{"messages":[]}}""",
+                                )
+                            }
+                        }
+                    },
+                ),
+            )
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"messages":[{"id":"m-rest","role":"user","content":"from-rest"}]}""",
+                ),
+            )
+            val http = server.toOkHttp()
+            val client = DashboardClient(http)
+            val origin = server.url("/").toString().trimEnd('/')
+            client.wsHello(origin, "knight")
+            server.takeRequest()
+            val page = client.pageMessages(origin, "tg-empty", "knight")
+            assertEquals("from-rest", page.messages.single().text)
+            assertEquals("rest", page.source)
+            assertTrue(methods.contains("session.resume"))
+            assertTrue(methods.contains("session.history"))
+            val rest = server.takeRequest()
+            assertTrue(rest.path.orEmpty().contains("/api/sessions/tg-empty/messages"))
+            assertTrue(rest.path.orEmpty().contains("order=latest"))
+            client.closeRpc()
+            http.dispatcher.executorService.shutdown()
+            http.connectionPool.evictAll()
+        }
+    }
+
+    @Test
+    fun endedSessionSkipsResumeAndFallsBackToRest() = runBlocking {
+        MockWebServer().use { server ->
+            val methods = java.util.concurrent.CopyOnWriteArrayList<String>()
+            server.enqueue(
+                MockResponse().withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onOpen(webSocket: WebSocket, response: Response) {
+                            webSocket.send(
+                                """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"change_events":false,"heartbeat":false,"instance_id":"h2"}}}""",
+                            )
+                        }
+
+                        override fun onMessage(webSocket: WebSocket, text: String) {
+                            val obj = Json.parseToJsonElement(text).jsonObject
+                            val id = obj["id"]!!.jsonPrimitive.content
+                            val method = obj["method"]!!.jsonPrimitive.content
+                            methods += method
+                            when (method) {
+                                "session.resume" -> webSocket.send(
+                                    """{"jsonrpc":"2.0","id":"$id","result":{"session_id":"spawned","stored_session_id":"tg-ended"}}""",
+                                )
+                                "session.history" -> webSocket.send(
+                                    """{"jsonrpc":"2.0","id":"$id","result":{"messages":[]}}""",
+                                )
+                            }
+                        }
+                    },
+                ),
+            )
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"messages":[{"id":"m2","role":"assistant","content":"archived"}]}""",
+                ),
+            )
+            val http = server.toOkHttp()
+            val client = DashboardClient(http)
+            val origin = server.url("/").toString().trimEnd('/')
+            client.wsHello(origin, "knight")
+            server.takeRequest()
+            val page = client.pageMessages(origin, "tg-ended", "knight", ended = true)
+            assertEquals("archived", page.messages.single().text)
+            assertEquals("rest", page.source)
+            assertFalse(methods.contains("session.resume"))
+            assertTrue(methods.contains("session.history"))
+            client.closeRpc()
+            http.dispatcher.executorService.shutdown()
+            http.connectionPool.evictAll()
         }
     }
 

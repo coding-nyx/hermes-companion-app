@@ -72,6 +72,23 @@ object ChatContent {
         return emptyList()
     }
 
+    fun formatToolOutput(raw: String): String {
+        val trimmed = raw.trim()
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return trimmed
+        val outputRegex = Regex(""""(?:output|result|stdout|content|text)"\s*:\s*"((?:[^"\\]|\\.)*)"""")
+        val errorRegex = Regex(""""(?:error|stderr)"\s*:\s*"((?:[^"\\]|\\.)*)"""")
+        val outMatch = outputRegex.find(trimmed)?.groupValues?.get(1)
+        val errMatch = errorRegex.find(trimmed)?.groupValues?.get(1)
+        val unescapedOut = outMatch?.replace("\\n", "\n")?.replace("\\\"", "\"")?.replace("\\\\", "\\")
+        val unescapedErr = errMatch?.replace("\\n", "\n")?.replace("\\\"", "\"")?.replace("\\\\", "\\")
+        return when {
+            !unescapedOut.isNullOrBlank() && !unescapedErr.isNullOrBlank() -> "$unescapedOut\n\nERROR: $unescapedErr"
+            !unescapedOut.isNullOrBlank() -> unescapedOut
+            !unescapedErr.isNullOrBlank() && unescapedErr != "null" -> "ERROR: $unescapedErr"
+            else -> trimmed
+        }
+    }
+
     fun kindOf(mime: String, name: String = "", url: String = ""): ChatBlockKind {
         val probe = "$mime $name $url".lowercase()
         return when {

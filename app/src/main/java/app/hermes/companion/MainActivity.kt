@@ -12,10 +12,13 @@ import android.provider.Settings
 import android.view.WindowManager
 import app.hermes.companion.domain.WakePolicy
 import app.hermes.companion.model.ChatBlock
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
@@ -35,11 +38,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import app.hermes.companion.device.LiveOverlay
 import app.hermes.companion.design.CompanionTheme
 import app.hermes.companion.domain.DeviceLanePolicy
+import app.hermes.companion.domain.PrivilegePolicy
 import app.hermes.companion.model.DeviceArm
 import app.hermes.companion.voice.VoiceInputManager
 import app.hermes.companion.voice.WakeWordService
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     private val reconnectNonce = MutableStateFlow(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -96,6 +100,11 @@ class MainActivity : ComponentActivity() {
                 val lifecycleOwner = LocalLifecycleOwner.current
                 DisposableEffect(lifecycleOwner) {
                     val observer = LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_START) vm.setFleetHealthForeground(true)
+                        if (event == Lifecycle.Event.ON_STOP) {
+                            vm.setFleetHealthForeground(false)
+                            vm.lockIfEnabled()
+                        }
                         if (event == Lifecycle.Event.ON_RESUME) {
                             val enabled = Settings.Secure.getString(
                                 contentResolver,
@@ -213,12 +222,34 @@ class MainActivity : ComponentActivity() {
                     if (granted) launchCamera()
                 }
 
+                val gate = remember { BiometricGate(this@MainActivity) }
+                DisposableEffect(state.appLocked) {
+                    if (state.appLocked) {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    } else {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    }
+                    onDispose { }
+                }
+                LaunchedEffect(state.appLocked) {
+                    if (state.appLocked) {
+                        gate.authenticate(
+                            title = "Unlock Hermes",
+                            onSuccess = vm::unlock,
+                            onFail = { msg -> if (msg.isNotBlank()) vm.noteError(msg) },
+                        )
+                    }
+                }
+
+                Box(Modifier.fillMaxSize()) {
                 CompanionShell(
                     state = state,
                     onOriginChange = vm::onOriginChange,
                     onUsernameChange = vm::onUsernameChange,
                     onPasswordChange = vm::onPasswordChange,
                     onConnect = { vm.connect() },
+                    onSelectConnectGateway = vm::selectConnectChoice,
+                    onForgetConnectGateway = vm::forgetConnectChoice,
                     onSelectProfile = vm::selectProfile,
                     onTab = vm::selectTab,
                     onOpenSession = vm::openSession,
@@ -230,11 +261,28 @@ class MainActivity : ComponentActivity() {
                     onDraftChange = vm::onDraftChange,
                     onSend = vm::send,
                     onInterrupt = vm::interrupt,
-                    onApproval = vm::respondApproval,
+                    onApproval = { choice ->
+                        val prompt = state.approval
+                        if (prompt != null && PrivilegePolicy.requiresPresence(prompt.kind, prompt.command, choice)) {
+                            gate.authenticate(
+                                title = "Confirm ${prompt.kind}",
+                                subtitle = prompt.command.take(120),
+                                onSuccess = {
+                                    dismissKeyguardIfNeeded()
+                                    vm.respondApproval(choice)
+                                },
+                                onFail = { msg -> if (msg.isNotBlank()) vm.noteError(msg) },
+                            )
+                        } else {
+                            vm.respondApproval(choice)
+                        }
+                    },
                     onLoadOlder = vm::loadOlder,
                     onRewind = vm::beginRewind,
                     onCancelRewind = vm::cancelRewind,
                     onPair = vm::startPair,
+                    onRepairPair = vm::repair,
+                    onApprovePair = vm::approvePair,
                     onCancelPair = vm::cancelPair,
                     onRevokePair = vm::revokePair,
                     onArm = vm::arm,
@@ -262,8 +310,23 @@ class MainActivity : ComponentActivity() {
                     onToggleStay = vm::toggleStayConnected,
                     onToggleAwakeOnVoice = vm::toggleAwakeOnVoice,
                     onToggleLockedAccess = vm::toggleLockedAccess,
+                    onToggleBiometricLock = {
+                        val enabling = !state.biometricLock
+                        gate.authenticate(
+                            title = if (enabling) "Enable biometric lock" else "Disable biometric lock",
+                            onSuccess = { vm.setBiometricLock(enabling) },
+                            onFail = { msg -> if (msg.isNotBlank()) vm.noteError(msg) },
+                        )
+                    },
                     onAddProtected = vm::addProtectedPackage,
-                    onRemoveProtected = vm::removeProtectedPackage,
+                    onRemoveProtected = { pkg ->
+                        gate.authenticate(
+                            title = "Remove denylist rule",
+                            subtitle = pkg,
+                            onSuccess = { vm.removeProtectedPackage(pkg) },
+                            onFail = { msg -> if (msg.isNotBlank()) vm.noteError(msg) },
+                        )
+                    },
                     onConfirmDeepLink = vm::confirmDeepLink,
                     onDismissDeepLink = vm::dismissDeepLink,
                     onExecuteTerminal = vm::executeTerminal,
@@ -277,6 +340,7 @@ class MainActivity : ComponentActivity() {
                     onTriggerCron = vm::triggerCronJob,
                     onToggleCron = vm::toggleCronJob,
                     onSwitchModel = vm::switchModel,
+                    onRefreshModels = vm::loadModelCatalog,
                     onSelectGateway = vm::selectGateway,
                     onAddGateway = vm::addSavedGateway,
                     onCheckUpdate = vm::checkUpdates,
@@ -344,7 +408,26 @@ class MainActivity : ComponentActivity() {
                     onOpenMedia = { openMedia(it) },
                     onFetchMedia = vm::fetchMedia,
                 )
+                if (state.appLocked) {
+                    BiometricLockOverlay(
+                        onUnlock = {
+                            gate.authenticate(
+                                title = "Unlock Hermes",
+                                onSuccess = vm::unlock,
+                                onFail = { msg -> if (msg.isNotBlank()) vm.noteError(msg) },
+                            )
+                        },
+                    )
+                }
+                }
             }
+        }
+    }
+
+    private fun dismissKeyguardIfNeeded() {
+        val km = getSystemService(KeyguardManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && km?.isKeyguardLocked == true) {
+            km.requestDismissKeyguard(this, null)
         }
     }
 

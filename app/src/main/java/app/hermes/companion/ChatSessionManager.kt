@@ -86,6 +86,7 @@ class ChatSessionManager(
                 it.copy(
                     openSessionId = owned.id,
                     transcriptLoading = true,
+                    historySource = "",
                     error = null,
                     draft = "",
                     approval = null,
@@ -96,7 +97,7 @@ class ChatSessionManager(
                 )
             }
             try {
-                val page = client(origin).pageMessages(origin, owned.id, profile)
+                val page = client(origin).pageMessages(origin, owned.id, profile, ended = owned.ended)
                 runCatching { cache.replaceMessages(origin, profile, owned.id, page.messages) }
                 val approval = runCatching { client(origin).pendingApproval(origin, owned.id, profile) }.getOrNull()
                 val merged = withQueued(origin, profile, owned.id, page.messages)
@@ -104,6 +105,7 @@ class ChatSessionManager(
                     if (state.openSessionId != owned.id) state
                     else state.copy(
                         transcriptLoading = false,
+                        historySource = page.source,
                         messages = merged,
                         approval = approval,
                         historyHasMore = page.hasMore,
@@ -131,6 +133,7 @@ class ChatSessionManager(
                 historyHasMore = false,
                 historyLoading = false,
                 transcriptLoading = false,
+                historySource = "",
             )
         }
     }
@@ -145,7 +148,13 @@ class ChatSessionManager(
         scope.launch {
             _state.update { it.copy(historyLoading = true) }
             try {
-                val page = client(origin).pageMessages(origin, session.id, profile, beforeId = before)
+                val page = client(origin).pageMessages(
+                    origin,
+                    session.id,
+                    profile,
+                    beforeId = before,
+                    ended = session.ended,
+                )
                 val seen = _state.value.messages.map { it.id }.toSet()
                 val older = page.messages.filter { it.id !in seen }
                 _state.update { state ->

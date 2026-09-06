@@ -46,6 +46,7 @@ data class SessionRef(
     val title: String,
     val updatedAtEpochMs: Long,
     val unread: Boolean = false,
+    val ended: Boolean = false,
 )
 
 enum class MessageRole { USER, ASSISTANT, TOOL }
@@ -114,6 +115,7 @@ data class CompanionHealth(
 data class HistoryPage(
     val messages: List<ChatMessage>,
     val hasMore: Boolean,
+    val source: String = "",
 )
 
 @Serializable
@@ -364,5 +366,19 @@ data class SavedGateway(
     val isActive: Boolean = false,
     /** Host kind: `hermes` today, `openclaw` later (P19). */
     val kind: String = "hermes",
+)
+
+/** Connect-screen chip (A18.5): one row per distinct origin. */
+@Serializable
+data class GatewayChoice(
+    val id: String,
+    val origin: String,
+    val name: String,
+    val host: String,
+    val paired: Boolean = false,
+    val lastOk: Boolean = false,
+    val forgettable: Boolean = false,
+    /** `""` unknown, `"up"`, `"down"`. */
+    val health: String = "",
 )
 

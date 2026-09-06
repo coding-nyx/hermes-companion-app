@@ -110,6 +110,18 @@ fun ThreadsScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
+                    if (session.ended) {
+                        Text(
+                            text = "ENDED",
+                            style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                            maxLines = 1,
+                            overflow = TextOverflow.Clip,
+                            softWrap = false,
+                            modifier = Modifier
+                                .padding(end = CompanionSpace.Sm)
+                                .testTag("threads.ended.${session.id}"),
+                        )
+                    }
                     Text(
                         text = session.profileId,
                         style = CompanionType.MonoSmall,

@@ -1,6 +1,7 @@
 package app.hermes.companion
 
 import app.hermes.companion.console.TerminalLogEntry
+import app.hermes.companion.domain.HostHealth
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.WakePing
 import app.hermes.companion.model.ApprovalPrompt
@@ -18,6 +19,7 @@ import app.hermes.companion.model.HostMetrics
 import app.hermes.companion.model.ModelCatalog
 import app.hermes.companion.model.PairingPhase
 import app.hermes.companion.model.ProfileRef
+import app.hermes.companion.model.GatewayChoice
 import app.hermes.companion.model.SavedGateway
 import app.hermes.companion.model.SessionRef
 
@@ -31,6 +33,7 @@ data class DeepLinkRequest(val profileId: String, val sessionId: String, val ori
 
 data class CompanionState(
     val originInput: String = "",
+    val connectChoices: List<GatewayChoice> = emptyList(),
     val origin: String? = null,
     /** Gateway-book name of [origin] (bare host if unnamed). Shown in the header and every notification. */
     val hostName: String = "",
@@ -42,6 +45,8 @@ data class CompanionState(
     val sessionsLoading: Boolean = false,
     /** First history page in flight for the open thread. Cached tail still shown. */
     val transcriptLoading: Boolean = false,
+    /** `rpc` or `rest` after the first history page lands (A18.8). */
+    val historySource: String = "",
     val hostLoading: Boolean = false,
     val modelLoading: Boolean = false,
     val updateLoading: Boolean = false,
@@ -86,9 +91,13 @@ data class CompanionState(
     val terminalLogs: List<TerminalLogEntry> = emptyList(),
     val terminalExecuting: Boolean = false,
     val savedGateways: List<SavedGateway> = emptyList(),
+    /** Per-origin `/api/status` classification (A8.4), keyed by [app.hermes.companion.domain.GatewayBook.key]. */
+    val hostHealth: Map<String, HostHealth> = emptyMap(),
     val updateStatus: HermesUpdateStatus? = null,
     val awakeOnVoice: Boolean = false,
     val lockedAccess: Boolean = false,
+    val biometricLock: Boolean = false,
+    val appLocked: Boolean = false,
     val isListeningVoice: Boolean = false,
     val voiceStreamState: VoiceStreamState = VoiceStreamState.IDLE,
     val protectedCustom: List<String> = emptyList(),

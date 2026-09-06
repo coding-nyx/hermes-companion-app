@@ -1,7 +1,7 @@
 # Hermes Companion — Work Item Management & Engineering Backlog
 
 **Repository**: `hermes-companion-app`  
-**Updated**: 2026-09-05 (A7.11 / A13.1 / A20.1–A20.3 code complete; S22 install pending this slice)  
+**Updated**: 2026-09-05 (A12.3 biometric lock)  
 **Status**: Active Living Roadmap  
 **Target Platform**: Android 12+ (minSdk 31, targetSdk 35) & Python 3.10+ Host Plugin  
 
@@ -19,17 +19,17 @@
 | **P5** | Wake, Polish & Background Sync | A5.1 – A5.5 | ⚠️ **75%** | P1 | M3 Wake |
 | **P6** | Hands Rollout & Multi-Device Control | A6.1 – A6.7 | ⚠️ **80%** (A6.1–A6.5 done, A6.6 pending check, A6.7 planned) | P1 | M2 Hands |
 | **P7** | Production Hardening, Security & Architecture | A7.1 – A7.12 | ✅ **100%** (A7.11 done 2026-09-05) | **P0 (Critical)** | Production Beta |
-| **P8** | Multi-Host Gateway Book & Switching + host-scoped everything | A8.1 – A8.5 | ⚠️ **60%** (A8.5 code done 2026-09-04; A8.3 creds ✅ via A8.5, A8.4 pending) | **P0** | v0.3.0 |
+| **P8** | Multi-Host Gateway Book & Switching + host-scoped everything | A8.1 – A8.5 | ⚠️ **80%** (A8.4 done; A8.3 leftover isolation pending) | **P0** | v0.3.0 |
 | **P9** | Model Inspector & Dynamic Model Switching | A9.1 – A9.4 | ⚠️ **75%** (3/4 done) | P1 | v0.3.0 |
 | **P10** | Reminders & Scheduled Tasks Surface (Hermes Cron) | A10.1 – A10.5 | ⚠️ **40%** (2/5 done) | P1 | v0.4.0 |
 | **P11** | Voice & Wake-On-Voice (Hands-Free Hermes) | A11.1 – A11.5 | ⚠️ **30%** (1.5/5 done) | P1 | v0.5.0 |
-| **P12** | Locked Device Access & Secure Ambient Control | A12.1 – A12.5 | ⚠️ **25%** (1.5/5 done) | P2 | v0.6.0 |
+| **P12** | Locked Device Access & Secure Ambient Control | A12.1 – A12.5 | ⚠️ **50%** (A12.3 done; A12.1 partial) | P2 | v0.6.0 |
 | **P13** | Advanced Operator & Multimodal Capabilities | A13.1 – A13.5 | ⚠️ **20%** (A13.1 done 2026-09-05) | P2 | v0.7.0 |
 | **P14** | Host Machine Console & Remote Terminal Access | A14.1 – A14.5 | ⚠️ **40%** (2/5 done) | P1 | v0.8.0 |
 | **P15** | Code Review, Diff Inspector & Git Workspace | A15.1 – A15.5 | ⚠️ **45%** (1 done, 3 partial) | P1 | v0.8.0 |
 | **P16** | Host Workspace Files, Artifacts & Skill Hub | A16.1 – A16.4 | ⚠️ **10%** (0.5/4 done) | P2 | v0.9.0 |
 | **P17** | App & Host Update Lifecycle | A17.1 – A17.3 | ⚠️ **65%** (2/3 done) | P1 | v0.3.0 |
-| **P18** | Threads & Chat Polish (keyboard, history bug, loading, rich text, bottom bar, delete, gateway picker) | A18.1 – A18.8 | ⚠️ **62%** (A18.1–A18.4/A18.6 done; **A18.8 next**) | P1 | v0.3.0 |
+| **P18** | Threads & Chat Polish (keyboard, history bug, loading, rich text, bottom bar, delete, gateway picker) | A18.1 – A18.8 | ✅ **100%** | P1 | v0.3.0 |
 | **P20** | Dashboard-Independent Operator Lane (plugin serves the operator API) | A20.1 – A20.3 | ✅ **100%** (A20.1–A20.3 done 2026-09-05; standalone default ON) | P2 | v0.9.0 |
 | **P19** | OpenClaw Gateway Support (second host kind) | A19.1 – A19.4 | 🔲 **Planned (last)** | P2 | v1.0.0 |
 
@@ -158,13 +158,38 @@ Allows the companion to connect to multiple Hermes installations and seamlessly 
   - `DeviceNodeCoordinator`: one lane per paired host (`startAllLanes`, `openLanes`, `pairedHosts`), pairing/revoke scoped to the bound host, legacy orphan pairing adopted by the first host that binds; HANDS mirrors the connected host's pairing.
   - Wake: `SyncManager.startWake` subscribes once per host with a topic; `WakePing.origin` comes from payload `origin`/`host` or the topic's host; `openWake(origin, …)` switches host first when needed. Deep link gains `host=`; `DeepLinkRequest.origin`.
   - Notifications: `HERMES CONNECTED · <host>` (re-posted via `StayConnectedService.refresh` after every connect), `HERMES HAS HANDS · <live lanes>` (re-posted as lanes open/close while armed), wake notifications titled `<type> · <host>` and grouped per host with a hosted deep link. Header shows `<host> · <tab>`.
-  - Not in this pass: A8.4 per-host health list, A18.5 Connect picker (uses `lastGoodOrigin`), Room host schema (A8.1 — Room is already origin-keyed).
+  - Not in this pass: A8.4 per-host health list (done separately), A18.5 Connect picker (done), Room host schema (A8.1 — Room is already origin-keyed).
 - **Estimate**: 3 days | **Dependencies**: A7.4 ✅, A8.1 (Room host schema — fold in), supersedes the credential part of A8.3
 
-#### A8.4 · Multi-Host Health Monitor 🔲 PENDING
+#### A8.4 · ~~Multi-Host Health Monitor~~ ✅ DONE
 - **Deliverable**: Background probe checking `/api/status` across all saved hosts every 60 seconds (when app is foregrounded).
 - **Acceptance Criteria**: Gateway book displays live status chips (Online, Offline, Gated) for all hosts.
+- **Resolution**: `HostHealthMap.classify` → ONLINE / OFFLINE / GATED. `SyncManager.startFleetHealth` probes every saved origin in parallel (3s timeout) every 60s while the activity is STARTED; paused on ON_STOP. `GatewayScreen` fleet rows show ONLINE (signal) / OFFLINE (mute) / GATED (warn). Connected-host HUD unchanged. Connect 3s one-shot probe (A18.5) unchanged.
 - **Estimate**: 1 day | **Dependencies**: A8.2 ✅
+
+#### A8.6 · ~~Device Lane 401 Recovery, One-Tap Auto-Approve & Chat Tool Call Expansion~~ ✅ DONE (2026-09-05)
+- **Problem (reported on S22 live testing)**:
+  1. **Device Not Connected (`devices: []`)**: S22 showed `LANE down` and Hermes reported "The S22 is not currently connected to the Companion relay (`devices: []`), so I can't inspect its open apps." The host relay on lab had been restarted with an empty `companion-devices.json`, rejecting the phone with `401 Unauthorized`. The app coordinator was catching all errors and retrying indefinitely with backoff without clearing the stale credential, keeping the device in `PAIRED` state with no simple way to re-pair. Furthermore, pairing required manual CLI invocation of `hermes companion approve CODE`.
+  2. **Empty Tool Call Pills**: Tool execution pills on the chat thread rendered as empty boxes (`skill_view · `, `terminal · `) missing tool arguments and output summaries, unformatted, and non-expandable.
+- **Resolution**:
+  1. **Device Connection & Pairing**:
+     - `DeviceNodeCoordinator.kt`: Added explicit `http_401` / `device_ticket` catch in `startLane()` to clear stale credentials, transition state to `PairingPhase.IDLE`, close the dead lane socket, and emit a clear operator error.
+     - Added `repair(profile)` to `DeviceNodeCoordinator` and `CompanionViewModel` to clear and re-initiate pairing in one action.
+     - Added `approvePair(origin, code)` to `DashboardClient`, `DeviceNodeCoordinator`, and `CompanionViewModel`. `startPair()` now automatically attempts immediate self-approval via `POST /companion/device/pair/{code}/approve` against the reachable host relay.
+     - `DeviceScreen.kt`: Added `RE-PAIR` action when `!laneOpen` in `PairingPhase.PAIRED`. Added direct `APPROVE` button alongside `COPY` and `CANCEL` in `PairingPhase.WAITING`.
+     - Host relay pairing store on `lab` populated and verified with active device IDs.
+  2. **Tool Call Parsing & Expandable UI**:
+     - `ProfileJson.kt`: Fixed `parseMessages()` to index assistant `tool_calls` by ID into `toolCallsMap`, extract command/file/query previews via `extractToolArgsPreview()`, correlate `toolName` and `toolDetail` for `MessageRole.TOOL` messages, format output via `ChatContent.formatToolOutput()`, and suppress empty assistant messages containing only `tool_calls`.
+     - `DashboardClient.kt` & `RpcCodec.kt`: Updated live SSE and JSON-RPC tool events (`tool.start`, `tool.completed`) to resolve tool name and detail.
+     - `ChatScreen.kt`: Replaced static 1-line `ToolRow` with interactive expandable cards:
+       - **Collapsed**: Displays `name` in Signal bold + ` · ` + argument summary (e.g. `terminal · date -u +%Y-%m-%d + 1 command  ▾`, `skill_view · hermes-agent  ▾`).
+       - **Expanded**: Highlights border in Signal, displays formatted `INPUT / ARGS` block in monospace, `OUTPUT` block, and media chips.
+- **Verified**:
+  - Full `./gradlew test` (369 tasks successful across all modules).
+  - New unit test `approvePairRemoteCall()` in `DashboardClientTest.kt` passing.
+  - Live on physical S22: Verified tool pills rendering populated text (`terminal · date -u +%Y-%m-%d + 1 command  ▾`, `terminal · hermes cron list  ▾`) and expanding to show `INPUT / ARGS` and `OUTPUT` blocks (captured in artifacts `s22_aug04_chat.png`, `s22_tool_expanded.png`, `s22_cron_expanded.png`).
+  - Assembled `app-debug.apk`.
+- **Estimate**: 1 day | **Dependencies**: A6.3 ✅, A8.5 ✅
 
 ---
 
@@ -277,10 +302,9 @@ Enables safe interaction and emergency controls when the phone screen is locked.
 - **Acceptance Criteria**: No private chat history visible on lock screen without user unlock.
 - **Estimate**: 2 days | **Dependencies**: A12.1
 
-#### A12.3 · Biometric & PIN Dismissal for High-Privilege Actions 🔲 PENDING
-- **Deliverable**: Integrate Android `BiometricPrompt` and `requestDismissKeyguard()` before executing destructive actions or disabling denylist checks.
-- **Acceptance Criteria**: Destructive tool approvals (e.g. `rm -rf`, credential input) require fingerprint/face/PIN unlock.
-- **Estimate**: 2 days | **Dependencies**: A12.2
+#### A12.3 · ~~Biometric & PIN Dismissal for High-Privilege Actions~~ ✅ DONE (2026-09-05)
+- **Resolution**: `PrivilegePolicy` flags sudo/secret and destructive commands (`rm -rf`, `dd`, `mkfs`, `DROP TABLE`, pipe-to-shell, …). Deny never prompts. `BiometricPrompt` (strong biometric **or** device PIN) gates: app lock overlay (`BIOMETRIC LOCK` on HANDS, persisted), ALLOW on high-privilege approvals (`requestDismissKeyguard` after success), and removing denylist rules. Overlay + `FLAG_SECURE` while locked. No credentials enrolled → `set a device PIN or biometric first`.
+- **Verified**: `PrivilegePolicyTest`. S22 install this APK.
 
 #### A12.4 · Safe Lock-Screen Device Automation 🔲 PENDING
 - **Deliverable**: Allow device automation to wake screen and interact with allowed ambient surfaces; fail closed (`locked_device_restricted`) if screen is securely locked and action requires user presence.
@@ -292,7 +316,7 @@ Enables safe interaction and emergency controls when the phone screen is locked.
 - **Acceptance Criteria**: Device can be disarmed blindly in pocket in < 300ms.
 - **Estimate**: 1 day | **Dependencies**: None
 
-**UI Toggles**: `DeviceScreen.kt` has `AWAKE ON VOICE` and `LOCKED ACCESS` toggles in the HANDS tab (verified live on S22).
+**UI Toggles**: `DeviceScreen.kt` has `AWAKE ON VOICE`, `LOCKED ACCESS`, and `BIOMETRIC LOCK` toggles in the HANDS tab.
 
 ---
 
@@ -454,14 +478,17 @@ Manages updates for both the host Hermes Agent installation and the companion An
 
 Operator-side polish requested after the first P7 device pass: the thread rail gives no feedback while it loads, assistant markdown renders as raw text, and threads cannot be removed from the phone.
 
-**Order (2026-09-05):** ~~A18.4 keyboard handling~~ ✅ → ~~A8.5 host-scoped everything~~ ✅ → ~~A18.1 loading states~~ ✅ → ~~A18.2 markdown~~ ✅ → ~~A18.3 delete threads~~ ✅ → ~~A13.1 images/video/docs~~ ✅ → ~~A7.11 relay 502~~ ✅ → ~~A20.1–A20.3 standalone operator~~ ✅ → A18.8 chats-not-loading fix → A18.7 bottom bar → A18.5 gateway picker.
+**Order (2026-09-05):** ~~A18.4 keyboard handling~~ ✅ → ~~A8.5 host-scoped everything~~ ✅ → ~~A18.1 loading states~~ ✅ → ~~A18.2 markdown~~ ✅ → ~~A18.3 delete threads~~ ✅ → ~~A13.1 images/video/docs~~ ✅ → ~~A7.11 relay 502~~ ✅ → ~~A20.1–A20.3 standalone operator~~ ✅ → ~~A18.8 chats-not-loading fix~~ ✅ → ~~A18.7 bottom bar~~ ✅ → ~~A18.5 gateway picker~~ ✅.
 
 ### Work Items
 
-#### A18.8 · Chats Not Loading (history path) 🔴 BUG (reported 2026-09-04) 🔲 PENDING
-- **Problem**: Opening many threads on the S22 shows an empty or stuck transcript. REST probe from the Mac with the loopback token: hub-11 `default` 16/16 sessions return history, lab `knight` 56/60 return history, the 4 empties are ended Telegram sessions (`end_reason=agent_close`, `message_count` 8–124) that return `[]` from `GET /api/sessions/{id}/messages` — so the server has the rows but the endpoint does not return them for those sessions. The app, however, prefers the **RPC** path (`session.resume` + `session.history` over `/api/ws`) and only falls back to REST when the RPC call throws — an RPC page that is empty (ended / archived / foreign-live-id session) is accepted as the answer, so REST never runs.
-- **Deliverable**: (1) `pageMessages`: treat an empty first RPC page as a miss and fall back to REST; carry `order=latest` like the dashboard SPA; log which path served the page (`historySource` in state for the loading row). (2) Investigate the 4 REST-empty Telegram sessions against the dashboard SPA (does the Sessions page show their transcript? if yes, find the query it uses; if no, mark `ended` in the rail). (3) `session.resume` must not be called for ended sessions (it can spawn a fresh live session and shift the live-id map). (4) Loading/empty/error states in `ChatScreen` (`loading transcript`, `no messages`, `history failed · retry`) instead of a blank list. (5) Unit tests: RPC-empty → REST fallback; ended session → no resume.
-- **Acceptance Criteria**: Every thread in the rail on both hosts opens with its transcript or an explicit `no messages` / `history failed` row within 3 s; the 4 known Telegram sessions either render or are labelled; no thread shows a blank list.
+#### A18.8 · ~~Chats Not Loading (history path)~~ ✅ DONE (2026-09-05)
+- **Problem**: Opening many threads on the S22 shows an empty or stuck transcript. RPC `session.history` returning `[]` was treated as success, so REST never ran. `session.resume` on ended Telegram sessions could spawn a fresh live id.
+- **Resolution**:
+  - `pageMessages`: empty first RPC page is a miss → REST with `order=latest`; `HistoryPage.source` is `rpc`/`rest` and lands in `CompanionState.historySource` for the loading row (`loading transcript · rest`).
+  - `ended` on `SessionRef` from `end_reason` / `ended_at` / status; Room v4 persists it. `pageMessages(ended=true)` skips `session.resume`. Rail shows `ENDED` in warn.
+  - Chat chrome already has `loading transcript` / `no messages` / `history failed` + RETRY (A18.1); empty pane hint is `// rest` when that path served.
+- **Verified**: `emptyRpcHistoryFallsBackToRest`, `endedSessionSkipsResumeAndFallsBackToRest`, `parseSessionsMarksEndedTelegramRows`. S22 install pending this slice.
 - **Estimate**: 1 day | **Dependencies**: None
 
 #### A18.7 · ~~Bottom Bar Redesign — Profile Glyph, Tab Glyphs, Stream Toggle, IME-Aware Chrome~~ ✅ DONE (2026-09-04)
@@ -511,15 +538,12 @@ Operator-side polish requested after the first P7 device pass: the thread rail g
 - **Resolution**: `HairlineField` now owns keyboard behaviour: no autocorrect / no auto-caps for Uri, Ascii and Password types (Sentences + autocorrect only for free text), `BringIntoViewRequester` on focus so the field scrolls above the IME inside `verticalScroll` parents, Done/Send/Go run `onDone` then clear focus + hide the IME (`keepKeyboardOnDone` opt-out), Next moves focus (`onNext` / `focusRequester`), optional placeholder; `rememberDismissKeyboard()` for submit buttons. Shell: every non-chat tab body gets `imePadding()`, the bottom nav bar collapses while the IME is visible, and a tap on empty chrome clears focus. Gateway add form → two `HairlineField`s (name `Text`+Next, origin `Uri`+Done → save), SAVE & SWITCH / CANCEL dismiss the keyboard. Device PROTECTED input: placeholder + ADD dismisses. Console input: Ascii, no autocorrect, Send executes (keyboard intentionally kept for the next command). Code-review commit field: Done commits and dismisses. Connect: username `Ascii` + Next → password → Done connects. Composer: Shift/Ctrl+Enter sends on hardware keyboards, focused-empty hint `message · ↵ newline · SEND to submit`; SEND keeps the keyboard (messaging convention).
 - **Verified**: unit suite + release build; installed on S22 16:39 — **user to check** focus-scroll, no autocorrect on URL, dismissal on ADD / SAVE.
 
-#### A18.5 · Gateway Picker on the Connect (Login) Screen 🔲 PENDING
-- **Problem**: The Connect screen is a single origin field. Saved gateways (`OperatorCredStore.loadGateways()`, HOST tab "fleet / installations") and the paired device credential's origin (`DeviceCredStore`) are only reachable after a successful connect, so when the last-used origin is down (seen live: `http://100.88.4.63:9120` → `unexpected end of stream`) the user has to retype the working host. A failed origin also overwrites `sticky.origin`, so the next cold start retries the dead host.
-- **Deliverable**:
-  - `ConnectScreen` gains a `gateways: List<GatewayChoice>` rail above the origin field: one hairline chip per saved gateway (name + host), the **paired** origin marked `PAIRED`, the last successful origin marked `LAST OK`. Tapping fills the origin field and connects; saved username is prefilled when the origin has a stored password credential.
-  - Per-gateway health dot: `DashboardClient.probe()` with a 3 s timeout run in parallel on screen entry (reuses A8.4's health monitor once it exists; until then a one-shot probe). Unreachable chips stay tappable but show `down`.
-  - `StickyStore` gains `lastGoodOrigin`, written only after a successful connect; `initialOrigin` prefers it over the last attempted origin.
-  - Long-press a chip → `FORGET` (removes from the gateway book; the paired origin cannot be forgotten here, revoke lives on HANDS).
-  - Error text stays under the field, with the failing host name kept (already mono-clipped).
-- **Acceptance Criteria**: With two saved gateways and one down, the Connect screen shows both, marks the dead one `down`, and a single tap on the other connects; killing the app and relaunching auto-connects to the last **successful** origin, not the last attempted one; the paired origin is always offered even if it was never saved as a gateway.
+#### A18.5 · ~~Gateway Picker on the Connect (Login) Screen~~ ✅ DONE (2026-09-05)
+- **Problem**: Connect was a single origin field. Saved/paired hosts were only reachable after a successful connect; a failed origin overwrote sticky so the next cold start retried the dead host.
+- **Resolution**:
+  - `GatewayBook.merge` builds `GatewayChoice` chips from the gateway book, `DeviceCredStore` pairings, and `lastGoodOrigin`. Rail above the origin field: name + host, `PAIRED` / `LAST OK` / `down`, health dot (3 s parallel `probe`). Tap fills origin + saved username and connects. Long-press `FORGET` removes a book entry (paired chips are not forgettable).
+  - `StickyStore.lastGoodOrigin` written only after a successful connect; `initialOrigin` prefers it over last attempted (already wired in `CompanionViewModel` / `StayConnectedService`).
+- **Verified**: `GatewayBookTest` (dedupe, paired-not-forgettable, last-ok-only, health). S22 install pending this slice.
 - **Estimate**: 1 day | **Dependencies**: A7.3 ✅, A8.2 ✅
 
 #### A18.6 · ~~Restore Profile Switching UI~~ ✅ DONE (2026-09-04)
@@ -643,12 +667,12 @@ Addresses host-side multi-device routing for the "Hands" control plane. While th
 |---|---|:---:|:---:|
 | A18.4 | Keyboard & text field handling | 1d | ✅ (S22 check) |
 | A8.5 | Host-scoped everything: client pool, per-host creds/profile/ntfy, per-host lanes, host in wake + deep link, host named in every notification | 3d | ✅ code (review + S22) |
-| **A18.8** | **Chats not loading — RPC-empty → REST fallback, ended sessions, explicit states (3rd)** | 1d | 🔲 |
+| **A18.8** | **Chats not loading — RPC-empty → REST fallback, ended sessions, explicit states (3rd)** | 1d | ✅ |
 | A18.7 | Bottom bar redesign: profile glyph + tab glyphs + stream toggle + IME-aware | 1d | ✅ |
 | A13.1 | Images in chat: inbound thumbnails/viewer + camera/photo attachments (promoted from P2) | 2.5d | ✅ |
 | A8.1 | Multi-Host Room Schema (upgrade from SharedPrefs) — folded into A8.5 | 1d | ⚠️ |
 | A8.3 | Per-Host Cache & Credential Isolation (incl. per-host device pairing) | 1.5d | 🔲 |
-| A8.4 | Multi-Host Health Monitor | 1d | 🔲 |
+| A8.4 | Multi-Host Health Monitor | 1d | ✅ |
 | A9.3 | Protocol Model Override Parameter | 1d | ✅ |
 | A9.4 | Model Sampling Parameters Drawer | 1.5d | 🔲 |
 | A10.3 | Natural Language Reminder Creation | 1.5d | 🔲 |
@@ -670,7 +694,7 @@ Addresses host-side multi-device routing for the "Hands" control plane. While th
 | A18.1 | Thread list & chat loading states | 0.5d | ✅ |
 | A18.2 | Rich text (markdown) rendering in chat | 1.5d | ✅ |
 | A18.3 | Delete threads (long-press + confirm) | 1d | ✅ |
-| A18.5 | Gateway picker on Connect screen (saved + paired, health, last-good origin) | 1d | 🔲 |
+| A18.5 | Gateway picker on Connect screen (saved + paired, health, last-good origin) | 1d | ✅ |
 | A18.6 | Restore profile switching (header glyph → inline picker + profiles tab) | 0.5d | ✅ |
 | A6.7 | Multi-Device Selection & Targeted Hands Control (Choose Device) | 1.5d | 🔲 |
 
@@ -682,7 +706,7 @@ Addresses host-side multi-device routing for the "Hands" control plane. While th
 |---|---|:---:|:---:|
 | A12.1 | Lock-Screen Activity (dedicated) | 1d | ⚠️ |
 | A12.2 | Keyguard Privacy Shield | 2d | 🔲 |
-| A12.3 | Biometric Dismissal | 2d | 🔲 |
+| A12.3 | Biometric Dismissal | 2d | ✅ |
 | A12.4 | Safe Lock Automation | 2d | 🔲 |
 | A12.5 | Ambient HUD & Hardware Chord | 1d | 🔲 |
 | A13.2 | Notification Listener Service | 3d | 🔲 |
@@ -719,7 +743,7 @@ graph TD
 
     A8.1 --> A8.2[A8.2 Host Book UI ✅]
     A8.1 --> A8.3[A8.3 Host Cache Isolation]
-    A8.2 --> A8.4[A8.4 Multi-Host Health]
+    A8.2 --> A8.4[A8.4 Multi-Host Health ✅]
 
     A9.1[A9.1 Model Discovery ✅] --> A9.2[A9.2 Model Switcher UI ✅]
     A9.2 --> A9.3[A9.3 Protocol Model Override ✅]
@@ -759,7 +783,7 @@ graph TD
     A18.6[A18.6 Profile Picker ✅] --> A18.7[A18.7 Bottom Bar Redesign]
     A18.7 --> A18.4
     A18.4 --> A8.5[A8.5 Host-Scoped Everything]
-    A8.5 --> A18.8[A18.8 Chats Not Loading]
+    A8.5 --> A18.8[A18.8 Chats Not Loading ✅]
     A18.8 --> A18.1
     A18.2 --> A13.1[A13.1 Images in Chat]
     A8.5 --> A13.1
@@ -768,7 +792,7 @@ graph TD
     A8.5 --> A8.4
     A8.5 --> A18.5
     A8.5 --> A19.2
-    A8.2 --> A18.5[A18.5 Connect Gateway Picker]
+    A8.2 --> A18.5[A18.5 Connect Gateway Picker ✅]
     A18.5 --> A8.4
 
     A7.11[A7.11 Relay 502 ✅] --> A20.1[A20.1 Standalone Operator API ✅]
@@ -806,6 +830,9 @@ graph TD
     style A20.1 fill:#1a472a,stroke:#2ea043
     style A20.2 fill:#1a472a,stroke:#2ea043
     style A20.3 fill:#1a472a,stroke:#2ea043
+    style A18.8 fill:#1a472a,stroke:#2ea043
+    style A18.5 fill:#1a472a,stroke:#2ea043
+    style A8.4 fill:#1a472a,stroke:#2ea043
     style A10.1 fill:#1a472a,stroke:#2ea043
     style A10.2 fill:#1a472a,stroke:#2ea043
     style A11.1 fill:#1a472a,stroke:#2ea043

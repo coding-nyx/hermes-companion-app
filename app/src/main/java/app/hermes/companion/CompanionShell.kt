@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -42,6 +43,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.hermes.companion.profiles.ProfileBottomSheet
+import app.hermes.companion.settings.ModelBottomSheet
+import app.hermes.companion.settings.SettingsBottomSheet
 import app.hermes.companion.chat.ChatScreen
 import app.hermes.companion.connect.ConnectScreen
 import app.hermes.companion.console.ConsoleScreen
@@ -58,6 +61,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.DeviceArm
 import app.hermes.companion.model.HudState
+import app.hermes.companion.model.GatewayChoice
 import app.hermes.companion.model.SavedGateway
 import app.hermes.companion.model.SessionRef
 import app.hermes.companion.profiles.ProfilesScreen
@@ -73,6 +77,8 @@ fun CompanionShell(
     onUsernameChange: (String) -> Unit = {},
     onPasswordChange: (String) -> Unit = {},
     onConnect: () -> Unit,
+    onSelectConnectGateway: (GatewayChoice) -> Unit = {},
+    onForgetConnectGateway: (GatewayChoice) -> Unit = {},
     onSelectProfile: (String) -> Unit,
     onTab: (MainTab) -> Unit,
     onOpenSession: (SessionRef) -> Unit,
@@ -93,6 +99,8 @@ fun CompanionShell(
     onPair: () -> Unit = {},
     onCancelPair: () -> Unit = {},
     onRevokePair: () -> Unit = {},
+    onRepairPair: () -> Unit = {},
+    onApprovePair: () -> Unit = {},
     onArm: () -> Unit = {},
     onDisarm: () -> Unit = {},
     onEnableA11y: () -> Unit = {},
@@ -103,6 +111,7 @@ fun CompanionShell(
     onToggleStay: () -> Unit = {},
     onToggleAwakeOnVoice: () -> Unit = {},
     onToggleLockedAccess: () -> Unit = {},
+    onToggleBiometricLock: () -> Unit = {},
     onAddProtected: (String) -> Unit = {},
     onRemoveProtected: (String) -> Unit = {},
     onConfirmDeepLink: () -> Unit = {},
@@ -118,6 +127,7 @@ fun CompanionShell(
     onTriggerCron: (String) -> Unit = {},
     onToggleCron: (String, Boolean) -> Unit = { _, _ -> },
     onSwitchModel: (String, String) -> Unit = { _, _ -> },
+    onRefreshModels: () -> Unit = {},
     onSelectGateway: (SavedGateway) -> Unit = {},
     onAddGateway: (String, String) -> Unit = { _, _ -> },
     onCheckUpdate: () -> Unit = {},
@@ -143,6 +153,9 @@ fun CompanionShell(
             password = state.password,
             onUsernameChange = onUsernameChange,
             onPasswordChange = onPasswordChange,
+            gateways = state.connectChoices,
+            onSelectGateway = onSelectConnectGateway,
+            onForgetGateway = onForgetConnectGateway,
         )
         return
     }
@@ -162,11 +175,20 @@ fun CompanionShell(
             .pointerInput(Unit) { detectTapGestures { focusManager.clearFocus() } },
     ) {
         var showProfileSheet by rememberSaveable { mutableStateOf(false) }
+        var showModelSheet by rememberSaveable { mutableStateOf(false) }
+        var showSettingsSheet by rememberSaveable { mutableStateOf(false) }
+
+        LaunchedEffect(showModelSheet, showSettingsSheet) {
+            if ((showModelSheet || showSettingsSheet) && state.modelCatalog == null) {
+                onRefreshModels()
+            }
+        }
         Header(
             state = state,
             inChat = inChat,
             onCloseChat = onCloseChat,
             onProfileTap = { showProfileSheet = true },
+            onOpenSettings = { showSettingsSheet = true },
         )
         Hairline()
         if (showProfileSheet) {
@@ -183,6 +205,38 @@ fun CompanionShell(
                     onTab(MainTab.PROFILES)
                 },
                 onDismiss = { showProfileSheet = false },
+            )
+        }
+        if (showModelSheet) {
+            ModelBottomSheet(
+                modelCatalog = state.modelCatalog,
+                currentModel = state.modelOverride,
+                profiles = state.profiles,
+                onSelectModel = { model, provider ->
+                    onSwitchModel(model, provider)
+                },
+                onDismiss = { showModelSheet = false },
+            )
+        }
+        if (showSettingsSheet) {
+            SettingsBottomSheet(
+                state = state,
+                onSelectProfile = onSelectProfile,
+                onSwitchModel = onSwitchModel,
+                onOpenModelPicker = {
+                    showSettingsSheet = false
+                    showModelSheet = true
+                },
+                onTab = { tab ->
+                    showSettingsSheet = false
+                    if (inChat) onCloseChat()
+                    onTab(tab)
+                },
+                onToggleStay = onToggleStay,
+                onNtfyTopicChange = onNtfyTopicChange,
+                onSaveNtfy = onSaveNtfy,
+                onDisconnect = {},
+                onDismiss = { showSettingsSheet = false },
             )
         }
         state.pendingDeepLink?.let { req ->
@@ -211,8 +265,12 @@ fun CompanionShell(
                 isListeningVoice = state.isListeningVoice,
                 onVoiceClick = onVoiceClick,
                 loading = state.transcriptLoading,
+                historySource = state.historySource,
                 onRetryHistory = { state.openSession?.let(onOpenSession) },
                 modelOverride = state.modelOverride,
+                modelCatalog = state.modelCatalog,
+                onSwitchModel = onSwitchModel,
+                onOpenModelPicker = { showModelSheet = true },
                 pendingAttachments = state.pendingAttachments,
                 attachOpen = state.attachOpen,
                 onToggleAttach = onToggleAttach,
@@ -223,6 +281,7 @@ fun CompanionShell(
                 onRemoveAttachment = onRemoveAttachment,
                 onOpenMedia = onOpenMedia,
                 onFetchMedia = onFetchMedia,
+                threadId = state.openSessionId,
                 modifier = body,
             )
         } else {
@@ -278,6 +337,7 @@ fun CompanionShell(
                     modelCatalog = state.modelCatalog,
                     modelOverride = state.modelOverride,
                     savedGateways = state.savedGateways,
+                    hostHealth = state.hostHealth,
                     updateStatus = state.updateStatus,
                     ntfyTopic = state.ntfyTopic,
                     stayConnected = state.stayConnected,
@@ -285,6 +345,7 @@ fun CompanionShell(
                     onSaveNtfy = onSaveNtfy,
                     onToggleStay = onToggleStay,
                     onSwitchModel = onSwitchModel,
+                    onOpenModelPicker = { showModelSheet = true },
                     onSelectGateway = onSelectGateway,
                     onAddGateway = onAddGateway,
                     onCheckUpdate = onCheckUpdate,
@@ -309,7 +370,10 @@ fun CompanionShell(
                     arm = state.arm,
                     awakeOnVoice = state.awakeOnVoice,
                     lockedAccess = state.lockedAccess,
+                    biometricLock = state.biometricLock,
                     onPair = onPair,
+                    onRepair = onRepairPair,
+                    onApprove = onApprovePair,
                     onCancel = onCancelPair,
                     onRevoke = onRevokePair,
                     onArm = onArm,
@@ -319,6 +383,7 @@ fun CompanionShell(
                     onEnableNotify = onEnableNotify,
                     onToggleAwakeOnVoice = onToggleAwakeOnVoice,
                     onToggleLockedAccess = onToggleLockedAccess,
+                    onToggleBiometricLock = onToggleBiometricLock,
                     protectedCustom = state.protectedCustom,
                     protectedDefaults = DeviceLanePolicy.PROTECTED_PACKAGES.size,
                     protectedError = state.protectedError,
@@ -339,15 +404,6 @@ fun CompanionShell(
                         onCloseChat()
                     }
                     onTab(tab)
-                },
-                onProfileClick = { showProfileSheet = true },
-                onProfileLongClick = {
-                    val profiles = state.profiles
-                    if (profiles.isNotEmpty()) {
-                        val curr = profiles.indexOfFirst { it.id == state.activeProfileId }
-                        val next = if (curr in profiles.indices) (curr + 1) % profiles.size else 0
-                        onSelectProfile(profiles[next].id)
-                    }
                 },
                 onToggleVoiceStream = onToggleVoiceStream,
             )
@@ -440,6 +496,7 @@ private fun Header(
     inChat: Boolean,
     onCloseChat: () -> Unit,
     onProfileTap: () -> Unit,
+    onOpenSettings: () -> Unit = {},
 ) {
     Row(
         modifier = Modifier
@@ -488,6 +545,18 @@ private fun Header(
         HudGlyph("TG", state.hud.telegram)
         HudGlyph("DC", state.hud.discord)
         HudGlyph("API", state.hud.api)
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clickable(onClick = onOpenSettings)
+                .testTag("header.settings"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "⚙",
+                style = CompanionType.Mono.copy(color = CompanionColor.Signal, fontSize = 16.sp),
+            )
+        }
     }
 }
 
@@ -506,8 +575,6 @@ private fun NavBar(
     state: CompanionState,
     inChat: Boolean,
     onTab: (MainTab) -> Unit,
-    onProfileClick: () -> Unit,
-    onProfileLongClick: () -> Unit,
     onToggleVoiceStream: () -> Unit,
 ) {
     Row(
@@ -520,30 +587,6 @@ private fun NavBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Xs),
     ) {
-        // Zone 1: Profile glyph box (tap opens sheet, long-press cycles)
-        val active = state.activeProfile
-        val profileGlyph = active?.glyph ?: "---"
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .border(CompanionSpace.Hairline, CompanionColor.LineStrong)
-                .background(CompanionColor.Void)
-                .testTag("nav.profile")
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = { onProfileClick() },
-                        onLongPress = { onProfileLongClick() },
-                    )
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = profileGlyph,
-                style = CompanionType.Mono.copy(color = CompanionColor.Signal),
-            )
-        }
-
-        // Zone 2: Cyberpunk tab glyphs
         Row(
             modifier = Modifier.weight(1f),
             horizontalArrangement = Arrangement.SpaceEvenly,

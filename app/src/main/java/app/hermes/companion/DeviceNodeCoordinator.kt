@@ -6,6 +6,7 @@ import androidx.core.content.ContextCompat
 import app.hermes.companion.data.local.DeviceCredStore
 import app.hermes.companion.data.local.StickyStore
 import app.hermes.companion.data.remote.DashboardClient
+import app.hermes.companion.data.remote.DashboardException
 import app.hermes.companion.data.remote.HostClientPool
 import app.hermes.companion.device.CompanionAccessibilityService
 import app.hermes.companion.device.HandsBridge
@@ -192,8 +193,8 @@ class DeviceNodeCoordinator(
             _state.update { it.copy(protectedError = "not a package id") }
             return
         }
-        if (!pkg.endsWith("*") && DeviceLanePolicy.isProtected(pkg)) {
-            _state.update { it.copy(protectedError = "already built-in") }
+        if (sticky.protectedPackages.contains(pkg)) {
+            _state.update { it.copy(protectedError = "already in blocklist") }
             return
         }
         val next = (sticky.protectedPackages + pkg).toSortedSet()
@@ -219,6 +220,10 @@ class DeviceNodeCoordinator(
             _state.update { it.copy(pairingPhase = PairingPhase.WAITING, pairingCode = code) }
             try {
                 var status = client(origin).offerPair(origin, code, profile)
+                val auto = runCatching { client(origin).approvePair(origin, code) }.getOrNull()
+                if (auto != null && auto.approved) {
+                    status = auto
+                }
                 while (isActive) {
                     if (status.approved) {
                         deviceCreds.save(
@@ -254,6 +259,39 @@ class DeviceNodeCoordinator(
             } catch (e: Exception) {
                 _state.update { it.copy(pairingPhase = PairingPhase.IDLE, pairingCode = "") }
                 _errors.tryEmit(e.message ?: "pair failed")
+            }
+        }
+    }
+
+    fun approvePair() {
+        val origin = origin ?: return
+        val code = _state.value.pairingCode.ifBlank { return }
+        scope.launch {
+            try {
+                val status = client(origin).approvePair(origin, code)
+                if (status.approved) {
+                    val profile = _state.value.deviceProfileId ?: "default"
+                    deviceCreds.save(
+                        DeviceCred(
+                            deviceId = status.deviceId,
+                            profileId = status.profileId.ifBlank { profile },
+                            credential = status.credential,
+                            origin = origin,
+                        ),
+                    )
+                    _state.update {
+                        it.copy(
+                            pairingPhase = PairingPhase.PAIRED,
+                            pairingCode = "",
+                            deviceId = status.deviceId,
+                            deviceProfileId = status.profileId.ifBlank { profile },
+                            pairedHosts = deviceCreds.loadAll().map { c -> c.origin },
+                        )
+                    }
+                    startLane(origin)
+                }
+            } catch (e: Exception) {
+                _errors.tryEmit(e.message ?: "approve failed")
             }
         }
     }
@@ -299,6 +337,26 @@ class DeviceNodeCoordinator(
         }
     }
 
+    fun repair(profile: String? = null) {
+        val orig = origin ?: return
+        pairJob?.cancel()
+        pairJob = null
+        stopLane(orig)
+        deviceCreds.clear(orig)
+        val remaining = deviceCreds.loadAll().map { it.origin }
+        _state.update {
+            it.copy(
+                pairingPhase = PairingPhase.IDLE,
+                pairingCode = "",
+                deviceId = null,
+                deviceProfileId = null,
+                laneOpen = false,
+                pairedHosts = remaining,
+            )
+        }
+        startPair(profile ?: _state.value.deviceProfileId ?: "default")
+    }
+
     // ---- device lane ------------------------------------------------------------------------
 
     private fun startLane(laneOrigin: String) {
@@ -316,6 +374,25 @@ class DeviceNodeCoordinator(
                     client(laneOrigin).deviceCommands().collect { handleCommand(laneOrigin, it) }
                 } catch (c: CancellationException) {
                     throw c
+                } catch (d: DashboardException) {
+                    markLane(key, open = false)
+                    if (d.code == "http_401" || d.code == "device_ticket") {
+                        deviceCreds.clear(laneOrigin)
+                        if (laneOrigin == origin) {
+                            _state.update {
+                                it.copy(
+                                    deviceId = null,
+                                    deviceProfileId = null,
+                                    laneOpen = false,
+                                    pairingPhase = PairingPhase.IDLE,
+                                    pairingCode = "",
+                                )
+                            }
+                            _errors.tryEmit("host rejected device (unauthorized) · please tap PAIR")
+                        }
+                        client(laneOrigin).closeDeviceLane()
+                        return@launch
+                    }
                 } catch (_: Throwable) {
                     markLane(key, open = false)
                 }

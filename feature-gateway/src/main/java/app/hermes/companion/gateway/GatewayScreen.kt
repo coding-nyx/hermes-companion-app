@@ -37,6 +37,8 @@ import app.hermes.companion.design.rememberDismissKeyboard
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import app.hermes.companion.domain.GatewayBook
+import app.hermes.companion.domain.HostHealth
 import app.hermes.companion.model.DashboardStatus
 import app.hermes.companion.model.GatewayHud
 import app.hermes.companion.model.HermesUpdateStatus
@@ -53,6 +55,7 @@ fun GatewayScreen(
     modelCatalog: ModelCatalog? = null,
     modelOverride: String = "",
     savedGateways: List<SavedGateway> = emptyList(),
+    hostHealth: Map<String, HostHealth> = emptyMap(),
     updateStatus: HermesUpdateStatus? = null,
     ntfyTopic: String = "",
     stayConnected: Boolean = false,
@@ -60,6 +63,7 @@ fun GatewayScreen(
     onSaveNtfy: () -> Unit = {},
     onToggleStay: () -> Unit = {},
     onSwitchModel: (String, String) -> Unit = { _, _ -> },
+    onOpenModelPicker: () -> Unit = {},
     onSelectGateway: (SavedGateway) -> Unit = {},
     onAddGateway: (String, String) -> Unit = { _, _ -> },
     onCheckUpdate: () -> Unit = {},
@@ -153,7 +157,21 @@ fun GatewayScreen(
         Spacer(Modifier.height(CompanionSpace.Lg))
 
         // Model & Provider Switching
-        Text(text = "model selection", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(text = "model selection", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
+            Text(
+                text = "[BROWSE ALL ▸]",
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                modifier = Modifier
+                    .testTag("gateway.model.all")
+                    .clickable { onOpenModelPicker() }
+                    .padding(CompanionSpace.Xs),
+            )
+        }
         Spacer(Modifier.height(CompanionSpace.Sm))
         if (modelCatalog != null && modelCatalog.models.isNotEmpty()) {
             MonoLine("current model", "${modelCatalog.currentProvider} / ${modelCatalog.currentModel}")
@@ -170,7 +188,7 @@ fun GatewayScreen(
                     .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
             ) {
-                for (opt in modelCatalog.models.take(15)) {
+                for (opt in modelCatalog.models) {
                     val selectedId = modelOverride.ifBlank { modelCatalog.currentModel }
                     val isSelected = opt.id == selectedId
                     Box(
@@ -178,7 +196,8 @@ fun GatewayScreen(
                             .background(if (isSelected) CompanionColor.SignalDim else CompanionColor.VoidElevated)
                             .border(1.dp, if (isSelected) CompanionColor.Signal else CompanionColor.Line)
                             .clickable { onSwitchModel(opt.id, opt.provider) }
-                            .padding(horizontal = CompanionSpace.Sm, vertical = CompanionSpace.Xs),
+                            .padding(horizontal = CompanionSpace.Sm, vertical = CompanionSpace.Xs)
+                            .testTag("gateway.model.${opt.id}"),
                     ) {
                         Text(
                             text = opt.id,
@@ -196,7 +215,24 @@ fun GatewayScreen(
                 modifier = Modifier.testTag("gateway.model.loading"),
             )
         } else {
-            Text(text = "NO MODEL CATALOG // idle", style = CompanionType.Mono)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = if (modelOverride.isNotBlank()) "current: $modelOverride" else "NO MODEL CATALOG // idle",
+                    style = CompanionType.Mono,
+                )
+                Text(
+                    text = "[ENTER CUSTOM MODEL]",
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                    modifier = Modifier
+                        .testTag("gateway.model.custom")
+                        .clickable { onOpenModelPicker() }
+                        .padding(CompanionSpace.Xs),
+                )
+            }
         }
 
         Spacer(Modifier.height(CompanionSpace.Lg))
@@ -293,16 +329,22 @@ fun GatewayScreen(
                             style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
                         )
                     }
-                    if (gw.isActive) {
-                        Text(
-                            text = "ACTIVE",
-                            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        HostHealthChip(
+                            origin = gw.origin,
+                            health = hostHealth[GatewayBook.key(gw.origin)] ?: HostHealth.UNKNOWN,
                         )
-                    } else {
-                        Text(
-                            text = "[SWITCH]",
-                            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
-                        )
+                        if (gw.isActive) {
+                            Text(
+                                text = "ACTIVE",
+                                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                            )
+                        } else {
+                            Text(
+                                text = "[SWITCH]",
+                                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+                            )
+                        }
                     }
                 }
                 Spacer(Modifier.height(CompanionSpace.Xs))
@@ -421,5 +463,22 @@ private fun MonoLine(label: String, value: String) {
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.padding(vertical = CompanionSpace.Xs),
+    )
+}
+
+@Composable
+private fun HostHealthChip(origin: String, health: HostHealth) {
+    val (label, color) = when (health) {
+        HostHealth.ONLINE -> "ONLINE" to CompanionColor.Signal
+        HostHealth.OFFLINE -> "OFFLINE" to CompanionColor.TextMute
+        HostHealth.GATED -> "GATED" to CompanionColor.Warn
+        HostHealth.UNKNOWN -> return
+    }
+    Text(
+        text = label,
+        style = CompanionType.MonoSmall.copy(color = color),
+        modifier = Modifier
+            .padding(end = CompanionSpace.Sm)
+            .testTag("gateway.health.${GatewayBook.chipId(origin)}"),
     )
 }

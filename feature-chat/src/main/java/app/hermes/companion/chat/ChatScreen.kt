@@ -8,25 +8,39 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
@@ -39,7 +53,10 @@ import app.hermes.companion.model.ChatAttachment
 import app.hermes.companion.model.ChatBlock
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
+import app.hermes.companion.model.ModelCatalog
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 @Composable
 fun ChatScreen(
@@ -61,8 +78,12 @@ fun ChatScreen(
     isListeningVoice: Boolean = false,
     onVoiceClick: () -> Unit = {},
     loading: Boolean = false,
+    historySource: String = "",
     onRetryHistory: () -> Unit = {},
     modelOverride: String = "",
+    modelCatalog: ModelCatalog? = null,
+    onSwitchModel: (String, String) -> Unit = { _, _ -> },
+    onOpenModelPicker: () -> Unit = {},
     pendingAttachments: List<ChatAttachment> = emptyList(),
     attachOpen: Boolean = false,
     onToggleAttach: () -> Unit = {},
@@ -73,13 +94,44 @@ fun ChatScreen(
     onRemoveAttachment: (String) -> Unit = {},
     onOpenMedia: (ChatBlock) -> Unit = {},
     onFetchMedia: suspend (String) -> ByteArray? = { null },
+    threadId: String? = null,
     modifier: Modifier = Modifier,
 ) {
-    val listState = rememberLazyListState()
-    LaunchedEffect(messages.lastOrNull()?.id, messages.lastOrNull()?.text) {
-        val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-        val nearBottom = last == null || last.index >= messages.lastIndex - 2
-        if (nearBottom && messages.isNotEmpty()) listState.scrollToItem(messages.lastIndex)
+    val listState = remember(threadId) { LazyListState() }
+    val scope = rememberCoroutineScope()
+    var landed by remember(threadId) { mutableStateOf(false) }
+    var prevFirstId by remember(threadId) { mutableStateOf<String?>(null) }
+    var prevLastId by remember(threadId) { mutableStateOf<String?>(null) }
+    var prevCount by remember(threadId) { mutableStateOf(0) }
+    val awayFromEnd by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex
+            listState.firstVisibleItemScrollOffset
+            listState.canScrollForward
+        }
+    }
+    LaunchedEffect(threadId, messages.firstOrNull()?.id, messages.lastOrNull()?.id, messages.size) {
+        val firstId = messages.firstOrNull()?.id
+        val lastId = messages.lastOrNull()?.id
+        val count = messages.size
+        val added = count - prevCount
+        val prepended = prevCount > 0 && added > 0 && lastId == prevLastId && firstId != prevFirstId
+        if (prepended && listState.canScrollForward) {
+            val idx = listState.firstVisibleItemIndex + added
+            val off = listState.firstVisibleItemScrollOffset
+            listState.scrollToItem(idx, off)
+        }
+        prevFirstId = firstId
+        prevLastId = lastId
+        prevCount = count
+    }
+    LaunchedEffect(threadId, messages.lastOrNull()?.id, messages.lastOrNull()?.text, messages.size) {
+        if (messages.isEmpty()) return@LaunchedEffect
+        snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 0 }
+        if (!landed || !listState.canScrollForward) {
+            listState.scrollToEnd()
+            landed = true
+        }
     }
     LaunchedEffect(listState, hasMoreOlder, loadingOlder) {
         snapshotFlow { listState.firstVisibleItemIndex }
@@ -98,7 +150,7 @@ fun ChatScreen(
         if (!loading && messages.isEmpty()) {
             FetchPane(
                 label = if (!error.isNullOrBlank()) "history failed" else "no messages",
-                hint = if (!error.isNullOrBlank()) error else "// idle",
+                hint = if (!error.isNullOrBlank()) error else if (historySource.isNotBlank()) "// $historySource" else "// idle",
                 scanning = false,
                 retryLabel = if (!error.isNullOrBlank()) "RETRY" else null,
                 onRetry = if (!error.isNullOrBlank()) onRetryHistory else null,
@@ -107,41 +159,29 @@ fun ChatScreen(
                     .testTag(if (!error.isNullOrBlank()) "chat.history.failed" else "chat.empty"),
             )
         } else {
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+        ) {
         LazyColumn(
             state = listState,
             modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md),
+                .fillMaxSize()
+                .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
+                .testTag("chat.list"),
             verticalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
         ) {
             if (loading) {
                 item(key = "history.loading") {
                     FetchRow(
-                        label = "loading transcript",
+                        label = if (historySource.isBlank()) "loading transcript" else "loading transcript · $historySource",
                         padded = false,
                         modifier = Modifier.testTag("chat.loading"),
                     )
                 }
                 if (messages.isEmpty()) {
                     item(key = "history.skeleton") { FetchSkeleton(lines = 4, padded = false) }
-                }
-            }
-            if (hasMoreOlder || loadingOlder) {
-                item(key = "history.older") {
-                    if (loadingOlder) {
-                        FetchRow(
-                            label = "loading older",
-                            padded = false,
-                            modifier = Modifier.testTag("chat.older"),
-                        )
-                    } else {
-                        Text(
-                            text = "older",
-                            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
-                            modifier = Modifier.testTag("chat.older"),
-                        )
-                    }
                 }
             }
             items(messages, key = { it.id }) { message ->
@@ -182,6 +222,32 @@ fun ChatScreen(
                     }
                 }
             }
+        }
+        ChatScrollTrack(
+            listState = listState,
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 2.dp, top = CompanionSpace.Md, bottom = CompanionSpace.Md),
+        )
+        if (awayFromEnd) {
+            Text(
+                text = "[END]",
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = CompanionSpace.Md, bottom = CompanionSpace.Md)
+                    .background(CompanionColor.VoidElevated)
+                    .border(1.dp, CompanionColor.Signal)
+                    .clickable {
+                        scope.launch {
+                            listState.scrollToEnd()
+                            landed = true
+                        }
+                    }
+                    .padding(horizontal = CompanionSpace.Sm, vertical = CompanionSpace.Xs)
+                    .testTag("chat.end"),
+            )
+        }
         }
         }
         if (!error.isNullOrBlank() && (loading || messages.isNotEmpty())) {
@@ -244,14 +310,66 @@ fun ChatScreen(
                 }
             }
         }
-        if (modelOverride.isNotBlank()) {
-            Text(
-                text = "model · $modelOverride",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+        val activeModel = modelOverride.ifBlank { modelCatalog?.currentModel.orEmpty() }
+        if (activeModel.isNotBlank()) {
+            Row(
                 modifier = Modifier
-                    .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
-                    .testTag("chat.model"),
-            )
+                    .fillMaxWidth()
+                    .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(
+                    modifier = Modifier
+                        .testTag("chat.model")
+                        .border(CompanionSpace.Hairline, CompanionColor.LineStrong)
+                        .background(CompanionColor.VoidElevated)
+                        .clickable { onOpenModelPicker() }
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = "model · $activeModel",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "▾",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                    )
+                }
+
+                // Quick alternative model chips (up to 2 options)
+                val quickOptions = modelCatalog?.models
+                    ?.filter { it.id != activeModel }
+                    ?.take(2)
+                    .orEmpty()
+
+                if (quickOptions.isNotEmpty()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        for (opt in quickOptions) {
+                            Box(
+                                modifier = Modifier
+                                    .border(CompanionSpace.Hairline, CompanionColor.Line)
+                                    .clickable { onSwitchModel(opt.id, opt.provider) }
+                                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                                    .testTag("chat.model.quick.${opt.id}"),
+                            ) {
+                                Text(
+                                    text = opt.id.substringAfterLast("/").take(14),
+                                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim, fontSize = 10.sp),
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
         Row(
             modifier = Modifier
@@ -394,28 +512,162 @@ private fun ToolRow(
     onFetchMedia: suspend (String) -> ByteArray?,
     onOpenMedia: (ChatBlock) -> Unit,
 ) {
-    val name = message.toolName ?: "tool"
+    var expanded by rememberSaveable(message.id) { mutableStateOf(false) }
+    val name = message.toolName?.ifBlank { null } ?: "tool"
     val media = message.blocks.filter { it.kind != app.hermes.companion.model.ChatBlockKind.TEXT }
+    val detail = message.toolDetail.orEmpty().trim()
+    val body = message.text.trim()
+    val summary = detail.ifBlank {
+        if (body.isNotBlank() && body != name) body.take(80).replace('\n', ' ') else "completed"
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .border(CompanionSpace.Hairline, CompanionColor.Line)
-            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .border(
+                CompanionSpace.Hairline,
+                if (expanded) CompanionColor.Signal else CompanionColor.Line,
+            )
+            .background(CompanionColor.VoidElevated)
+            .clickable { expanded = !expanded }
+            .padding(horizontal = 10.dp, vertical = 8.dp)
             .testTag("chat.tool"),
     ) {
-        if (media.isEmpty()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(
+                modifier = Modifier.weight(1f, fill = false),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = name,
+                    style = CompanionType.MonoSmall.copy(
+                        color = CompanionColor.Signal,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                )
+                Text(
+                    text = "·",
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+                )
+                Text(
+                    text = summary,
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
             Text(
-                text = "$name · ${message.toolDetail ?: message.text}",
-                style = CompanionType.Mono,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        } else {
-            Text(
-                text = name,
+                text = if (expanded) "▴" else "▾",
                 style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
             )
+        }
+
+        if (expanded) {
+            if (detail.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "INPUT / ARGS",
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontSize = 9.sp),
+                )
+                Spacer(Modifier.height(2.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(CompanionSpace.Hairline, CompanionColor.Line)
+                        .background(CompanionColor.Void)
+                        .padding(8.dp),
+                ) {
+                    Text(
+                        text = detail,
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Text),
+                    )
+                }
+            }
+
+            if (body.isNotBlank() && body != detail) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "OUTPUT",
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontSize = 9.sp),
+                )
+                Spacer(Modifier.height(2.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(CompanionSpace.Hairline, CompanionColor.Line)
+                        .background(CompanionColor.Void)
+                        .padding(8.dp),
+                ) {
+                    Text(
+                        text = body,
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                    )
+                }
+            }
+
+            if (media.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                MessageBlocks(message.copy(blocks = media), onFetchMedia, onOpenMedia)
+            }
+        } else if (media.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
             MessageBlocks(message.copy(blocks = media), onFetchMedia, onOpenMedia)
         }
+    }
+}
+
+private suspend fun LazyListState.scrollToEnd() {
+    val total = layoutInfo.totalItemsCount
+    if (total <= 0) return
+    val last = total - 1
+    scrollToItem(last)
+    withFrameNanos { }
+    val last2 = (layoutInfo.totalItemsCount - 1).coerceAtLeast(0)
+    val item = layoutInfo.visibleItemsInfo.lastOrNull() ?: return
+    val viewport = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
+    val extra = item.size - viewport
+    if (item.index >= last2 && extra > 0) {
+        scrollToItem(last2, extra)
+    }
+}
+
+@Composable
+private fun ChatScrollTrack(listState: LazyListState, modifier: Modifier = Modifier) {
+    val first = listState.firstVisibleItemIndex
+    val info = listState.layoutInfo
+    val total = info.totalItemsCount
+    val visible = info.visibleItemsInfo
+    if (total <= 1 || visible.isEmpty()) return
+    val viewportPx = (info.viewportEndOffset - info.viewportStartOffset).coerceAtLeast(1)
+    val shown = visible.size.coerceAtLeast(1)
+    val thumbPx = (viewportPx * (shown.toFloat() / total)).toInt().coerceIn(12, viewportPx)
+    val maxFirst = (total - shown).coerceAtLeast(1)
+    val y = ((viewportPx - thumbPx) * (first.toFloat() / maxFirst)).toInt().coerceIn(0, viewportPx - thumbPx)
+    val density = LocalDensity.current
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .width(2.dp)
+            .testTag("chat.scrollbar"),
+    ) {
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .fillMaxWidth()
+                .background(CompanionColor.Line),
+        )
+        Box(
+            Modifier
+                .offset { IntOffset(0, y) }
+                .height(with(density) { thumbPx.toDp() })
+                .fillMaxWidth()
+                .background(CompanionColor.Signal),
+        )
     }
 }

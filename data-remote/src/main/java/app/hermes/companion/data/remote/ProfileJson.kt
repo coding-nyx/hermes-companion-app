@@ -160,6 +160,7 @@ internal fun parseSessions(body: String): List<SessionRef> {
                 updatedAtEpochMs = epochMs,
                 unread = obj.bool("unread") || obj.int("unread_count") > 0 ||
                     obj["ended_at"] == null || obj["ended_at"] is JsonNull,
+                ended = sessionEnded(obj),
             )
         }
     }
@@ -174,6 +175,30 @@ internal fun parseMessages(body: String): List<ChatMessage> {
             ?: JsonArray(emptyList())
         else -> JsonArray(emptyList())
     }
+    val toolCallsMap = mutableMapOf<String, ToolCallMeta>()
+    arr.forEach { el ->
+        val obj = el as? JsonObject ?: return@forEach
+        val toolCalls = obj["tool_calls"]?.jsonArrayOrNull() ?: return@forEach
+        for (tc in toolCalls) {
+            val tcObj = tc as? JsonObject ?: continue
+            val callId = tcObj.str("id").ifBlank { tcObj.str("call_id") }
+            if (callId.isBlank()) continue
+            val fnObj = tcObj["function"] as? JsonObject
+            val name = fnObj.str("name").ifBlank { tcObj.str("name") }.ifBlank { tcObj.str("tool") }
+            val rawArgs = when (val args = fnObj?.get("arguments") ?: tcObj["arguments"] ?: tcObj["args"]) {
+                is JsonPrimitive -> args.contentOrNull.orEmpty()
+                is JsonObject -> args.toString()
+                else -> ""
+            }
+            val detail = extractToolArgsPreview(rawArgs)
+            toolCallsMap[callId] = ToolCallMeta(
+                id = callId,
+                name = name,
+                detail = detail.ifBlank { rawArgs.take(200) },
+                rawArgs = rawArgs,
+            )
+        }
+    }
     return arr.mapIndexedNotNull { index, el ->
         val obj = el as? JsonObject ?: return@mapIndexedNotNull null
         val role = when (obj.str("role").lowercase()) {
@@ -183,18 +208,53 @@ internal fun parseMessages(body: String): List<ChatMessage> {
         }
         val id = obj.str("row_id").ifBlank { obj.str("_row_id") }.ifBlank { obj.str("id") }
             .ifBlank { "m$index" }
-        val text = messageText(obj)
-        val toolName = obj.str("name").ifBlank { obj.str("tool") }.ifBlank { null }
-        val toolDetail = obj.str("detail").ifBlank { null }
-        val blocks = parseBlocks(obj, text, toolName, toolDetail)
-        ChatMessage(
-            id = id,
-            role = role,
-            text = text.ifBlank { ChatContent.flatten(blocks) },
-            toolName = toolName,
-            toolDetail = toolDetail,
-            blocks = blocks,
-        )
+        if (role == MessageRole.TOOL) {
+            val callId = obj.str("tool_call_id").ifBlank { obj.str("call_id") }
+            val meta = if (callId.isNotBlank()) toolCallsMap[callId] else null
+            val toolName = meta?.name?.ifBlank { null }
+                ?: obj.str("tool_name").ifBlank { obj.str("name") }.ifBlank { obj.str("tool") }.ifBlank { null }
+            val argsPreview = toolArgsPreview(obj)
+            val toolDetail = meta?.detail?.ifBlank { null }
+                ?: obj.str("detail")
+                    .ifBlank { obj.str("context") }
+                    .ifBlank { argsPreview }
+                    .ifBlank { null }
+            val rawText = messageText(obj).ifBlank {
+                obj.str("context").ifBlank { argsPreview }
+            }
+            val text = if (rawText.isNotBlank()) ChatContent.formatToolOutput(rawText) else (toolDetail ?: "")
+            val blocks = parseBlocks(obj, text, toolName, toolDetail)
+            ChatMessage(
+                id = id,
+                role = role,
+                text = text.ifBlank { ChatContent.flatten(blocks) },
+                toolName = toolName,
+                toolDetail = toolDetail,
+                blocks = blocks,
+            )
+        } else if (role == MessageRole.ASSISTANT) {
+            val text = messageText(obj)
+            val toolCalls = obj["tool_calls"]?.jsonArrayOrNull()
+            if (text.isBlank() && !toolCalls.isNullOrEmpty()) {
+                return@mapIndexedNotNull null
+            }
+            val blocks = parseBlocks(obj, text, null, null)
+            ChatMessage(
+                id = id,
+                role = role,
+                text = text.ifBlank { ChatContent.flatten(blocks) },
+                blocks = blocks,
+            )
+        } else {
+            val text = messageText(obj)
+            val blocks = parseBlocks(obj, text, null, null)
+            ChatMessage(
+                id = id,
+                role = role,
+                text = text.ifBlank { ChatContent.flatten(blocks) },
+                blocks = blocks,
+            )
+        }
     }
 }
 
@@ -258,6 +318,7 @@ internal fun parseSessionChange(payload: JsonObject, fallbackProfile: String): S
                 .ifBlank { id },
             updatedAtEpochMs = epochMs,
             unread = payload.bool("unread") || op.lowercase() == "upsert",
+            ended = sessionEnded(payload),
         ),
     )
 }
@@ -402,8 +463,56 @@ private fun partToBlock(obj: JsonObject): ChatBlock? {
     }
 }
 
+internal data class ToolCallMeta(
+    val id: String,
+    val name: String,
+    val detail: String,
+    val rawArgs: String = "",
+)
+
+internal val TOOL_ARG_KEYS = listOf(
+    "command", "cmd", "name", "file_path", "path", "query", "url", "code", "skill",
+)
+
+internal fun extractToolArgsPreview(raw: String): String {
+    if (raw.isBlank()) return ""
+    val trimmed = raw.trim()
+    val obj = runCatching { DashboardJson.parseToJsonElement(trimmed).jsonObject }.getOrNull()
+    if (obj != null) {
+        return toolArgsPreviewFromObject(obj)
+    }
+    return if (trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
+        trimmed.removeSurrounding("\"")
+    } else {
+        trimmed.take(200)
+    }
+}
+
+internal fun toolArgsPreviewFromObject(args: JsonObject): String {
+    for (key in TOOL_ARG_KEYS) {
+        val value = args.str(key)
+        if (value.isNotBlank()) return value
+    }
+    return args.entries.mapNotNull { (key, value) ->
+        val primitive = (value as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+        if (primitive.isBlank()) null else "$key=$primitive"
+    }.joinToString(" ").take(200)
+}
+
+private fun toolArgsPreview(obj: JsonObject): String {
+    val args = obj["args"] ?: obj["arguments"] ?: obj["input"]
+    return when (args) {
+        is JsonObject -> toolArgsPreviewFromObject(args)
+        is JsonPrimitive -> extractToolArgsPreview(args.contentOrNull.orEmpty())
+        else -> ""
+    }
+}
+
 private fun messageText(obj: JsonObject): String {
     val direct = obj.str("text")
+        .ifBlank { obj.str("output") }
+        .ifBlank { obj.str("result") }
+        .ifBlank { obj.str("stdout") }
     if (direct.isNotBlank()) return direct
     return when (val content = obj["content"] ?: obj["parts"]) {
         is JsonPrimitive -> content.contentOrNull.orEmpty()
@@ -429,6 +538,23 @@ private fun choiceList(el: JsonElement?): List<String> {
             else -> null
         }
     }
+}
+
+internal fun sessionEnded(obj: JsonObject): Boolean {
+    if (obj.bool("ended") || obj.bool("archived")) return true
+    if (obj.str("end_reason").isNotBlank()) return true
+    val endedAt = obj["ended_at"]
+    if (endedAt != null && endedAt !is JsonNull) {
+        val primitive = endedAt as? JsonPrimitive
+        val epoch = primitive?.longOrNull
+        if (epoch != null) return epoch > 0L
+        val text = primitive?.contentOrNull.orEmpty()
+        if (text.isNotBlank() && text != "0" && text != "false") return true
+        if (primitive == null) return true
+    }
+    val status = obj.str("status").ifBlank { obj.str("state") }.lowercase()
+    return status == "ended" || status == "closed" || status == "archived" ||
+        status == "complete" || status == "completed"
 }
 
 private fun JsonObject?.str(key: String): String {

@@ -54,10 +54,13 @@ fun DeviceScreen(
     arm: DeviceArm = DeviceArm.DISARMED,
     awakeOnVoice: Boolean = false,
     lockedAccess: Boolean = false,
+    biometricLock: Boolean = false,
     protectedCustom: List<String> = emptyList(),
     protectedDefaults: Int = 0,
     protectedError: String? = null,
     onPair: () -> Unit,
+    onRepair: () -> Unit = onPair,
+    onApprove: () -> Unit = {},
     onCancel: () -> Unit,
     onRevoke: () -> Unit,
     onArm: () -> Unit = {},
@@ -67,6 +70,7 @@ fun DeviceScreen(
     onEnableNotify: () -> Unit = {},
     onToggleAwakeOnVoice: () -> Unit = {},
     onToggleLockedAccess: () -> Unit = {},
+    onToggleBiometricLock: () -> Unit = {},
     onAddProtected: (String) -> Unit = {},
     onRemoveProtected: (String) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -139,7 +143,13 @@ fun DeviceScreen(
                     style = CompanionType.MonoSmall,
                 )
                 Spacer(Modifier.height(CompanionSpace.Lg))
-                Action("CANCEL", "device.cancel", onCancel)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Action("APPROVE", "device.approve", onApprove)
+                    Action("CANCEL", "device.cancel", onCancel)
+                }
             }
             PairingPhase.PAIRED -> {
                 Text(
@@ -259,6 +269,17 @@ fun DeviceScreen(
                         .clickable(onClick = onToggleLockedAccess)
                         .padding(vertical = CompanionSpace.Xs),
                 )
+                Spacer(Modifier.height(CompanionSpace.Sm))
+                Text(
+                    text = if (biometricLock) "BIOMETRIC LOCK  on" else "BIOMETRIC LOCK  off",
+                    style = CompanionType.Mono.copy(
+                        color = if (biometricLock) CompanionColor.Signal else CompanionColor.TextMute,
+                    ),
+                    modifier = Modifier
+                        .testTag("device.biometric.lock")
+                        .clickable(onClick = onToggleBiometricLock)
+                        .padding(vertical = CompanionSpace.Xs),
+                )
                 Spacer(Modifier.height(CompanionSpace.Lg))
                 ProtectedPackages(
                     custom = protectedCustom,
@@ -268,7 +289,15 @@ fun DeviceScreen(
                     onRemove = onRemoveProtected,
                 )
                 Spacer(Modifier.height(CompanionSpace.Lg))
-                Action("REVOKE", "device.revoke", onRevoke)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Md, Alignment.CenterHorizontally),
+                ) {
+                    if (!laneOpen) {
+                        Action("RE-PAIR", "device.repair", onRepair)
+                    }
+                    Action("REVOKE", "device.revoke", onRevoke)
+                }
             }
         }
         if (!error.isNullOrBlank()) {
@@ -296,14 +325,24 @@ private fun ProtectedPackages(
     val dismissKeyboard = rememberDismissKeyboard()
     Column(modifier = Modifier.fillMaxWidth().testTag("device.protected")) {
         Text(
-            text = "PROTECTED  $defaults built-in · ${custom.size} custom",
+            text = if (defaults > 0) {
+                "BLOCKLIST  $defaults built-in · ${custom.size} custom"
+            } else {
+                "BLOCKLIST  ${custom.size} blocked"
+            },
             style = CompanionType.Mono,
             modifier = Modifier.testTag("device.protected.count"),
         )
         Spacer(Modifier.height(CompanionSpace.Xs))
         Text(
-            text = "hands never touch these apps",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+            text = if (custom.isEmpty()) {
+                "blocklist empty · companion controls all apps"
+            } else {
+                "hands will not touch these blocked apps"
+            },
+            style = CompanionType.MonoSmall.copy(
+                color = if (custom.isEmpty()) CompanionColor.Signal else CompanionColor.TextMute,
+            ),
         )
         Spacer(Modifier.height(CompanionSpace.Sm))
         custom.forEach { pkg ->
@@ -328,13 +367,15 @@ private fun ProtectedPackages(
                 )
             }
         }
-        Spacer(Modifier.height(CompanionSpace.Sm))
+        if (custom.isNotEmpty()) {
+            Spacer(Modifier.height(CompanionSpace.Sm))
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             HairlineField(
                 value = draft,
                 onValueChange = { draft = it },
                 keyboardType = androidx.compose.ui.text.input.KeyboardType.Ascii,
-                placeholder = "com.bank.app",
+                placeholder = "com.bank.app or prefix.*",
                 onDone = {
                     if (draft.isNotBlank()) {
                         onAdd(draft)
@@ -354,7 +395,7 @@ private fun ProtectedPackages(
         }
         Spacer(Modifier.height(CompanionSpace.Xs))
         Text(
-            text = "com.bank.app  or  com.corp.*",
+            text = "enter package to block (e.g. com.bank.app or com.corp.*)",
             style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
         )
         if (!error.isNullOrBlank()) {

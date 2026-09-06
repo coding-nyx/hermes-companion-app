@@ -1,10 +1,13 @@
 package app.hermes.companion
 
+import app.hermes.companion.data.local.OperatorCredStore
 import app.hermes.companion.data.local.StickyStore
 import app.hermes.companion.data.local.TranscriptCache
 import app.hermes.companion.data.remote.DashboardClient
 import app.hermes.companion.data.remote.HostClientPool
+import app.hermes.companion.domain.GatewayBook
 import app.hermes.companion.domain.GatewayHudMap
+import app.hermes.companion.domain.HostHealthMap
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.WakePing
 import app.hermes.companion.domain.WakePolicy
@@ -13,12 +16,15 @@ import app.hermes.companion.model.ChatEvent
 import app.hermes.companion.model.HudState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Background sync (A7.4): ntfy wake stream, HUD status poll, operator WS watch with heartbeat,
@@ -29,6 +35,7 @@ class SyncManager(
     private val clients: HostClientPool,
     private val cache: TranscriptCache,
     private val sticky: StickyStore,
+    private val operatorCreds: OperatorCredStore,
     private val runtime: CompanionApp,
     private val chat: ChatSessionManager,
     private val _state: MutableStateFlow<CompanionState>,
@@ -43,6 +50,8 @@ class SyncManager(
         runtime.watchJob = null
         runtime.hudJob?.cancel()
         runtime.hudJob = null
+        runtime.fleetHealthJob?.cancel()
+        runtime.fleetHealthJob = null
         runtime.wakeJobs.values.forEach { it.cancel() }
         runtime.wakeJobs.clear()
     }
@@ -71,6 +80,46 @@ class SyncManager(
                 }
             }
         }
+    }
+
+    fun setFleetHealthForeground(on: Boolean) {
+        runtime.fleetHealthForeground = on
+        if (on) startFleetHealth()
+    }
+
+    /** Probe every saved host every 60s while the UI is foregrounded (A8.4). */
+    fun startFleetHealth() {
+        runtime.fleetHealthJob?.cancel()
+        runtime.fleetHealthJob = liveScope.launch {
+            while (isActive) {
+                while (isActive && !runtime.fleetHealthForeground) delay(250)
+                if (!isActive) break
+                probeFleet()
+                delay(FLEET_MS)
+            }
+        }
+    }
+
+    private suspend fun probeFleet() {
+        val origins = buildList {
+            operatorCreds.loadGateways().forEach { add(it.origin) }
+            _state.value.origin?.let { add(it) }
+        }.map { it.trim().trimEnd('/') }
+            .filter { it.isNotBlank() }
+            .distinctBy { GatewayBook.key(it) }
+        if (origins.isEmpty()) return
+        val results = coroutineScope {
+            origins.map { origin ->
+                async {
+                    val key = GatewayBook.key(origin)
+                    val status = withTimeoutOrNull(PROBE_MS) {
+                        runCatching { client(origin).probe(origin) }.getOrNull()
+                    }
+                    key to HostHealthMap.classify(status)
+                }
+            }.awaitAll()
+        }
+        _state.update { it.copy(hostHealth = it.hostHealth + results.toMap()) }
     }
 
     fun startHud(origin: String) {
@@ -213,5 +262,7 @@ class SyncManager(
     companion object {
         private const val PING_MS = 15_000L
         private const val HUD_MS = 15_000L
+        private const val FLEET_MS = 60_000L
+        private const val PROBE_MS = 3_000L
     }
 }

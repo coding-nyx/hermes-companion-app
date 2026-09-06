@@ -632,7 +632,7 @@ See [docs/WORK_ITEMS.md](WORK_ITEMS.md) for full acceptance criteria and depende
 |---|---|:---:|
 | A12.1 | Lock-screen activity presentation (`setShowWhenLocked`, `setTurnScreenOn`) | Planned |
 | A12.2 | Keyguard state machine & privacy shield (redact chat on locked screen) | Planned |
-| A12.3 | Biometric & PIN dismissal for high-privilege tool approvals | Planned |
+| A12.3 | Biometric & PIN dismissal for high-privilege tool approvals | Done |
 | A12.4 | Safe lock-screen device automation (wake & ambient control; fail-closed on PIN) | Planned |
 | A12.5 | Lock-screen ambient HUD & hardware volume chord emergency disarm | Planned |
 

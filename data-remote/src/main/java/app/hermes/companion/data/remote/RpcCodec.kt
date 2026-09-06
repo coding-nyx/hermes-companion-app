@@ -64,7 +64,10 @@ internal object RpcCodec {
         val type = event.type
         val text = payload.str("text").ifBlank { payload.str("delta") }.ifBlank { payload.str("content") }
         val name = payload.str("name").ifBlank { payload.str("tool") }.ifBlank { payload.str("tool_name") }
-        val detail = payload.str("detail").ifBlank { payload.str("command") }.ifBlank { payload.str("input") }
+        val rawArgs = payload?.get("args")?.toString() ?: payload?.get("arguments")?.toString().orEmpty()
+        val detail = payload.str("detail").ifBlank { payload.str("context") }
+            .ifBlank { payload.str("command") }.ifBlank { payload.str("input") }
+            .ifBlank { extractToolArgsPreview(rawArgs) }
             .ifBlank { text }
         return when {
             type == "tool.start" || type == "tool.started" || type.startsWith("tool.start") ->

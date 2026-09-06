@@ -10,6 +10,7 @@ ExecStart=@VENV@/bin/python -u -m relay
 WorkingDirectory=@HERMES_HOME@/plugins/hermes-companion
 Environment="HERMES_HOME=@HERMES_HOME@"
 Environment="HERMES_WORKSPACE=@HOME@"
+Environment="HERMES_COMPANION_STANDALONE=0"
 Restart=always
 RestartSec=5
 KillMode=mixed

@@ -44,7 +44,7 @@ class DeviceLanePolicyTest {
     }
 
     @Test
-    fun failClosedDisarmedAndProtected() {
+    fun failClosedDisarmedAndA11y() {
         assertEquals(
             "disarmed",
             DeviceLanePolicy.reject(DeviceArm.DISARMED, a11yBound = true, action = "device.snapshot"),
@@ -52,15 +52,6 @@ class DeviceLanePolicyTest {
         assertEquals(
             "a11y_unavailable",
             DeviceLanePolicy.reject(DeviceArm.ARMED, a11yBound = false, action = "device.snapshot"),
-        )
-        assertEquals(
-            "protected_package",
-            DeviceLanePolicy.reject(
-                DeviceArm.ARMED,
-                a11yBound = true,
-                action = "device.snapshot",
-                foregroundApp = "com.android.settings",
-            ),
         )
         assertEquals(
             "stale_ref",
@@ -81,46 +72,18 @@ class DeviceLanePolicyTest {
                 lastRefs = setOf("e1"),
             ),
         )
-        assertEquals(
-            "protected_package",
-            DeviceLanePolicy.reject(
-                DeviceArm.ARMED,
-                a11yBound = true,
-                action = "device.open_app",
-                foregroundApp = "com.example.fixture",
-                targetPackage = "com.android.settings",
-            ),
-        )
-        assertEquals(
-            "protected_package",
-            DeviceLanePolicy.reject(
-                DeviceArm.ARMED,
-                a11yBound = true,
-                action = "device.snapshot",
-                foregroundApp = "com.authy.authy",
-            ),
-        )
-        assertEquals(
-            "protected_package",
-            DeviceLanePolicy.reject(
-                DeviceArm.ARMED,
-                a11yBound = true,
-                action = "device.click",
-                foregroundApp = "com.onepassword.android",
-                ref = "e1",
-                lastRefs = setOf("e1"),
-            ),
-        )
     }
 
     @Test
-    fun expandedDenylistCoversVaultsWalletsAndPlatform() {
+    fun defaultAllowsAllAppsWhenBlocklistEmpty() {
         for (pkg in listOf(
+            "com.android.settings",
+            "com.authy.authy",
+            "com.onepassword.android",
             "com.x8bit.bitwarden",
             "com.kunzisoft.keepass.free",
             "com.beemdevelopment.aegis",
             "com.azure.authenticator",
-            "com.authy.authy",
             "com.android.vending",
             "com.google.android.permissioncontroller",
             "com.android.packageinstaller",
@@ -129,11 +92,13 @@ class DeviceLanePolicyTest {
             "com.phonepe.app",
             "com.chase.sig.android",
             "com.capitalone.mobile",
+            "com.example.fixture",
+            "org.telegram.messenger",
         )) {
-            assertTrue(pkg, DeviceLanePolicy.isProtected(pkg))
-            assertEquals(
+            // Nothing is protected by default
+            assertFalse(pkg, DeviceLanePolicy.isProtected(pkg))
+            assertNull(
                 pkg,
-                "protected_package",
                 DeviceLanePolicy.reject(
                     DeviceArm.ARMED,
                     a11yBound = true,
@@ -142,10 +107,16 @@ class DeviceLanePolicyTest {
                     targetPackage = pkg,
                 ),
             )
+            assertNull(
+                pkg,
+                DeviceLanePolicy.reject(
+                    DeviceArm.ARMED,
+                    a11yBound = true,
+                    action = "device.snapshot",
+                    foregroundApp = pkg,
+                ),
+            )
         }
-        assertFalse(DeviceLanePolicy.isProtected("com.example.fixture"))
-        assertFalse(DeviceLanePolicy.isProtected("org.telegram.messenger"))
-        assertFalse(DeviceLanePolicy.isProtected(""))
     }
 
     @Test

@@ -29,9 +29,17 @@ class BrokerTests(unittest.TestCase):
         result = broker.dispatch("device.snapshot")
         self.assertEqual(result["nodes"][0]["ref"], "e1")
 
-    def test_protected_package(self):
+    def test_default_allows_all_apps(self):
         broker = Broker(
-            device=MockDevice(armed=True, foreground_app="com.google.android.apps.authenticator2")
+            device=MockDevice(armed=True, foreground_app="com.android.settings")
+        )
+        result = broker.dispatch("device.snapshot")
+        self.assertEqual(result["nodes"][0]["ref"], "e1")
+
+    def test_protected_package_in_blocklist(self):
+        broker = Broker(
+            device=MockDevice(armed=True, foreground_app="com.google.android.apps.authenticator2"),
+            extra_protected=("com.google.android.apps.authenticator2",),
         )
         with self.assertRaises(BrokerError) as ctx:
             broker.dispatch("device.snapshot")
@@ -70,7 +78,10 @@ class BrokerTests(unittest.TestCase):
         self.assertNotIn("EXIF", json.dumps(shot))
 
     def test_open_protected_package(self):
-        broker = Broker(device=MockDevice(armed=True, foreground_app="com.example.fixture"))
+        broker = Broker(
+            device=MockDevice(armed=True, foreground_app="com.example.fixture"),
+            extra_protected=("com.android.settings",),
+        )
         with self.assertRaises(BrokerError) as ctx:
             broker.dispatch("device.open_app", {"package": "com.android.settings"})
         self.assertEqual(ctx.exception.code, "protected_package")
@@ -154,9 +165,8 @@ class BrokerTests(unittest.TestCase):
         self.assertTrue(resp["ok"])
         self.assertEqual(resp["result"]["clicked"], [500, 500])
 
-    def test_authenticator_and_password_managers_protected(self):
-        broker = Broker(device=MockDevice(armed=True))
-        for pkg in [
+    def test_authenticator_and_password_managers_protected_in_blocklist(self):
+        blocked = (
             "com.authy.authy",
             "com.azure.authenticator",
             "com.onepassword.android",
@@ -169,7 +179,9 @@ class BrokerTests(unittest.TestCase):
             "com.samsung.android.settings.deviceowner",
             "com.phonepe.app",
             "com.capitalone.mobile",
-        ]:
+        )
+        broker = Broker(device=MockDevice(armed=True), extra_protected=blocked)
+        for pkg in blocked:
             with self.assertRaises(BrokerError) as ctx:
                 broker.dispatch("device.open_app", {"package": pkg})
             self.assertEqual(ctx.exception.code, "protected_package")

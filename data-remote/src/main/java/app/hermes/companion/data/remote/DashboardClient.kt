@@ -199,6 +199,11 @@ class DashboardClient internal constructor(
     suspend fun pollPair(origin: String, code: String): PairingStatus =
         get(DashboardUrls.machine(origin, "/companion/device/pair/${code.trim()}")) { parsePairing(it) }
 
+    suspend fun approvePair(origin: String, code: String): PairingStatus {
+        post(DashboardUrls.machine(origin, "/companion/device/pair/${code.trim()}/approve"), "{}") { }
+        return pollPair(origin, code)
+    }
+
     suspend fun revokeDevice(origin: String, deviceId: String) {
         val payload = """{"device_id":${deviceId.json()}}"""
         post(DashboardUrls.machine(origin, "/companion/device/revoke"), payload) { }
@@ -277,18 +282,21 @@ class DashboardClient internal constructor(
         profileId: String,
         beforeId: String? = null,
         limit: Int = HistoryPaging.PAGE,
+        ended: Boolean = false,
     ): HistoryPage {
         val cap = HistoryPaging.cap(limit)
         val socket = rpc
         if (socket != null && socket.isOpen) {
-            if (beforeId.isNullOrBlank()) {
+            if (beforeId.isNullOrBlank() && !ended) {
                 runCatching { resumeSession(sessionId, profileId) }
             }
             val live = liveSessionId(sessionId)
             val rpcPage = runCatching { listMessagesRpc(socket, live, profileId, cap, beforeId) }.getOrNull()
-            if (rpcPage != null) return rpcPage
+            if (rpcPage != null && !(beforeId.isNullOrBlank() && rpcPage.messages.isEmpty())) {
+                return rpcPage.copy(source = "rpc")
+            }
         }
-        return listMessagesRest(origin, sessionId, profileId, cap, beforeId)
+        return listMessagesRest(origin, sessionId, profileId, cap, beforeId).copy(source = "rest")
     }
 
     suspend fun pendingApproval(origin: String, sessionId: String, profileId: String): ApprovalPrompt? {
@@ -591,6 +599,7 @@ class DashboardClient internal constructor(
     ): HistoryPage {
         val extra = buildMap {
             put("limit", limit.toString())
+            put("order", "latest")
             if (!beforeId.isNullOrBlank()) put("before", beforeId)
         }
         return get(
@@ -948,8 +957,12 @@ class DashboardClient internal constructor(
             }
             val obj = runCatching { sseJson.parseToJsonElement(data).jsonObject }.getOrNull()
             val text = obj.str("text").ifBlank { obj.str("delta") }
-            val name = obj.str("name").ifBlank { obj.str("tool") }
-            val detail = obj.str("detail").ifBlank { obj.str("command") }.ifBlank { text }
+            val name = obj.str("name").ifBlank { obj.str("tool") }.ifBlank { obj.str("tool_name") }
+            val rawArgs = obj?.get("args")?.toString() ?: obj?.get("arguments")?.toString().orEmpty()
+            val detail = obj.str("detail").ifBlank { obj.str("context") }
+                .ifBlank { obj.str("command") }.ifBlank { obj.str("input") }
+                .ifBlank { extractToolArgsPreview(rawArgs) }
+                .ifBlank { text }
             return when {
                 event.contains("tool.start") || event == "tool.started" ->
                     ChatEvent.ToolStarted(name.ifBlank { "tool" }, detail)

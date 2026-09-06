@@ -61,6 +61,11 @@ class StickyStore(context: Context) {
         get() = prefs.getBoolean(KEY_STAY, false)
         set(value) { prefs.edit().putBoolean(KEY_STAY, value).apply() }
 
+    /** Phone-wide: lock the operator UI behind biometric / device PIN (A12.3). */
+    var biometricLock: Boolean
+        get() = prefs.getBoolean(KEY_BIOMETRIC, false)
+        set(value) { prefs.edit().putBoolean(KEY_BIOMETRIC, value).apply() }
+
     /** User-added protected packages (exact ids or `prefix.*`). Phone-wide safety: merged with the built-in denylist. */
     var protectedPackages: Set<String>
         get() = prefs.getStringSet(KEY_PROTECTED, emptySet()).orEmpty().toSet()
@@ -73,5 +78,6 @@ class StickyStore(context: Context) {
         private const val KEY_PROFILE = "profile_id"
         private const val KEY_NTFY = "ntfy_topic"
         private const val KEY_STAY = "stay_connected"
+        private const val KEY_BIOMETRIC = "biometric_lock"
     }
 }
