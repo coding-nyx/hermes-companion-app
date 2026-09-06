@@ -100,12 +100,45 @@ def format_wake_message(package: str, title: str, text: str = "") -> str:
     return f"mobile notif: {pkg} · {tit}\n{hint}"
 
 
+def _resolve_hermes_bin() -> str | None:
+    override = os.environ.get("HERMES_BIN", "").strip()
+    if override and Path(override).exists():
+        return override
+    found = shutil.which("hermes")
+    if found:
+        return found
+    home = Path.home()
+    candidates = [
+        home / ".local/bin/hermes",
+        home / ".hermes/hermes-agent/venv/bin/hermes",
+        home / ".hermes/hermes-agent/.venv/bin/hermes",
+        Path("/home/nyx/.local/bin/hermes"),
+        Path("/home/nyx/.hermes/hermes-agent/venv/bin/hermes"),
+        Path("/home/nyx/.hermes/hermes-agent/.venv/bin/hermes"),
+    ]
+    for cand in candidates:
+        if cand.is_file() and os.access(cand, os.X_OK):
+            return str(cand)
+    return None
+
+
 def _hermes_argv(profile: str) -> list[str]:
-    hermes_bin = shutil.which("hermes")
+    hermes_bin = _resolve_hermes_bin()
     if hermes_bin:
         argv = [hermes_bin]
     else:
-        argv = [os.environ.get("PYTHON", "python3"), "-m", "hermes_cli.main"]
+        # Last resort — prefer the Hermes venv interpreter if present.
+        py = os.environ.get("HERMES_PYTHON", "").strip()
+        if not py:
+            for cand in (
+                Path.home() / ".hermes/hermes-agent/.venv/bin/python",
+                Path.home() / ".hermes/hermes-agent/venv/bin/python",
+                Path("/home/nyx/.hermes/hermes-agent/.venv/bin/python"),
+            ):
+                if cand.is_file():
+                    py = str(cand)
+                    break
+        argv = [py or os.environ.get("PYTHON", "python3"), "-m", "hermes_cli.main"]
     if profile and profile != "default":
         argv += ["-p", profile]
     return argv
