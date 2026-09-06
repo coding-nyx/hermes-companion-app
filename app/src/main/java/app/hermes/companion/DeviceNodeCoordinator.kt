@@ -13,6 +13,9 @@ import app.hermes.companion.data.remote.HostClientPool
 import app.hermes.companion.device.CompanionAccessibilityService
 import app.hermes.companion.device.HandsBridge
 import app.hermes.companion.device.HandsService
+import app.hermes.companion.device.NotifStreamBus
+import app.hermes.companion.device.NotifStreamEvent
+import app.hermes.companion.device.StopStreamReceiver
 import app.hermes.companion.domain.CompactTree
 import app.hermes.companion.domain.DeviceArming
 import app.hermes.companion.domain.DeviceAudit
@@ -59,6 +62,11 @@ data class DeviceNodeState(
     /** Hosts this phone is paired with (normalised origins) and the lanes currently open (A8.5). */
     val pairedHosts: List<String> = emptyList(),
     val openLanes: Set<String> = emptySet(),
+    val notifStreamEnabled: Boolean = false,
+    val notifStreamOrigin: String? = null,
+    val notifStreamProfile: String? = null,
+    val nlsBound: Boolean = false,
+    val notifLastAgeMs: Long? = null,
 )
 
 /**
@@ -80,6 +88,10 @@ class DeviceNodeCoordinator(
         DeviceNodeState(
             protectedCustom = sticky.protectedPackages.sorted(),
             pairedHosts = deviceCreds.loadAll().map { it.origin },
+            notifStreamEnabled = sticky.notifStreamEnabled,
+            notifStreamOrigin = sticky.notifStreamTargetOrigin(),
+            notifStreamProfile = sticky.notifStreamTargetOrigin()?.let { sticky.notifStreamProfileFor(it) },
+            nlsBound = NotifStreamBus.listenerBound,
         ),
     )
     val state: StateFlow<DeviceNodeState> = _state
@@ -98,10 +110,30 @@ class DeviceNodeCoordinator(
     private var lastNodes: List<SnapshotNode> = emptyList()
     private val rateHits = mutableListOf<Long>()
     private var auditRows: List<DeviceAuditRow> = emptyList()
+    private val pendingNotifs = ArrayDeque<NotifStreamEvent>()
+    private val pendingNotifCap = 32
+    private var lastNotifAtMs: Long? = null
 
     init {
         // Volume chord, notification tap (DisarmReceiver) and HandsService teardown all land here.
         HandsBridge.onDisarm = { disarm() }
+        syncNotifBusConfig()
+        StopStreamReceiver.onStopStream = { setNotifStreamEnabled(false) }
+        scope.launch {
+            NotifStreamBus.events.collect { ev ->
+                forwardNotif(ev)
+            }
+        }
+        scope.launch {
+            while (isActive) {
+                delay(2_000)
+                val bound = NotifStreamBus.listenerBound
+                if (bound != _state.value.nlsBound) {
+                    _state.update { it.copy(nlsBound = bound) }
+                    pushStreamStatus()
+                }
+            }
+        }
     }
 
     /** Every paired host keeps its lane, so Hermes on lab can still move the phone while hub is active. */
@@ -214,6 +246,7 @@ class DeviceNodeCoordinator(
         val next = (sticky.protectedPackages + pkg).toSortedSet()
         sticky.protectedPackages = next
         _state.update { it.copy(protectedCustom = next.toList(), protectedError = null) }
+        syncNotifBusConfig()
         refreshLaneRegistrations()
     }
 
@@ -223,6 +256,145 @@ class DeviceNodeCoordinator(
         _state.update { it.copy(protectedCustom = next.toList(), protectedError = null) }
         refreshLaneRegistrations()
     }
+
+
+    // ---- notification stream (A13.2) --------------------------------------------------------
+
+    fun setNotifStreamEnabled(enabled: Boolean) {
+        sticky.notifStreamEnabled = enabled
+        syncNotifBusConfig()
+        val origin = sticky.notifStreamTargetOrigin()
+        _state.update {
+            it.copy(
+                notifStreamEnabled = enabled,
+                notifStreamOrigin = origin,
+                notifStreamProfile = origin?.let { o -> sticky.notifStreamProfileFor(o) },
+                nlsBound = NotifStreamBus.listenerBound,
+            )
+        }
+        syncStayForStream()
+        refreshLaneRegistrations()
+        pushStreamStatus()
+        StayConnectedService.refresh(app)
+    }
+
+    fun setNotifStreamTarget(origin: String?, profileId: String?) {
+        val cleanOrigin = origin?.trim()?.takeIf { it.isNotBlank() }
+        sticky.notifStreamOrigin = cleanOrigin
+        val target = sticky.notifStreamTargetOrigin()
+        if (target != null && !profileId.isNullOrBlank()) {
+            sticky.setNotifStreamProfile(target, profileId)
+        }
+        _state.update {
+            it.copy(
+                notifStreamOrigin = target,
+                notifStreamProfile = target?.let { o -> sticky.notifStreamProfileFor(o) },
+            )
+        }
+        syncStayForStream()
+        refreshLaneRegistrations()
+        pushStreamStatus()
+        StayConnectedService.refresh(app)
+    }
+
+
+    private fun syncNotifBusConfig() {
+        NotifStreamBus.configure(
+            enabled = sticky.notifStreamEnabled,
+            protectedPackages = sticky.protectedPackages,
+            selfPackageName = app.packageName,
+        )
+    }
+
+    /** Keep an FGS alive while stream is on even if stay-connected is off. */
+    private fun syncStayForStream() {
+        val need = sticky.notifStreamEnabled || sticky.stayConnected
+        val intent = Intent(app, StayConnectedService::class.java)
+        if (need) {
+            runCatching { ContextCompat.startForegroundService(app, intent) }
+        } else if (!sticky.stayConnected) {
+            runCatching { app.stopService(intent) }
+        }
+    }
+
+    private fun laneCapabilities(): List<String> {
+        val base = DeviceLanePolicy.CAPABILITIES.toMutableList()
+        if (!sticky.notifStreamEnabled) {
+            base.remove("device.notifications")
+        } else if ("device.notifications" !in base) {
+            base.add("device.notifications")
+        }
+        return base
+    }
+
+    private fun forwardNotif(ev: NotifStreamEvent) {
+        if (!sticky.notifStreamEnabled) return
+        lastNotifAtMs = System.currentTimeMillis()
+        _state.update {
+            it.copy(notifLastAgeMs = 0L, nlsBound = NotifStreamBus.listenerBound)
+        }
+        val target = sticky.notifStreamTargetOrigin() ?: run {
+            bufferNotif(ev)
+            return
+        }
+        val cred = deviceCreds.load(target) ?: run {
+            bufferNotif(ev)
+            return
+        }
+        val profile = sticky.notifStreamProfileFor(target) ?: cred.profileId
+        val client = clients.existing(target)
+        if (client == null || !client.deviceLaneOpen()) {
+            bufferNotif(ev)
+            return
+        }
+        val notifJson = buildNotifJson(ev)
+        val ok = client.sendDeviceEvent(
+            event = "notification",
+            deviceId = cred.deviceId,
+            profile = profile,
+            tsMs = ev.postTimeMs,
+            notificationJson = notifJson,
+        )
+        if (!ok) bufferNotif(ev)
+        else flushPending(target, cred.deviceId, profile)
+    }
+
+    private fun bufferNotif(ev: NotifStreamEvent) {
+        while (pendingNotifs.size >= pendingNotifCap) pendingNotifs.removeFirst()
+        pendingNotifs.addLast(ev)
+    }
+
+    private fun flushPending(origin: String, deviceId: String, profile: String) {
+        val client = clients.existing(origin) ?: return
+        while (pendingNotifs.isNotEmpty() && client.deviceLaneOpen()) {
+            val ev = pendingNotifs.removeFirst()
+            val ok = client.sendDeviceEvent(
+                event = "notification",
+                deviceId = deviceId,
+                profile = profile,
+                tsMs = ev.postTimeMs,
+                notificationJson = buildNotifJson(ev),
+            )
+            if (!ok) {
+                pendingNotifs.addFirst(ev)
+                break
+            }
+        }
+    }
+
+    private fun buildNotifJson(ev: NotifStreamEvent): String =
+        """{"key":${jsonQuote(ev.key)},"package":${jsonQuote(ev.packageName)},"title":${jsonQuote(ev.title)},"text":${jsonQuote(ev.text)},"category":${jsonQuote(ev.category)},"ongoing":${ev.ongoing},"clearable":${ev.clearable}}"""
+
+    private fun pushStreamStatus() {
+        val target = sticky.notifStreamTargetOrigin() ?: return
+        val cred = deviceCreds.load(target) ?: return
+        val client = clients.existing(target) ?: return
+        if (!client.deviceLaneOpen()) return
+        val fields =
+            ""","notifications_stream":${sticky.notifStreamEnabled},"notifications_listener_bound":${NotifStreamBus.listenerBound}"""
+        client.sendDeviceStatus(cred.deviceId, fields)
+    }
+
 
     /** Friendly label for this phone on the bound host (A6.7). */
     fun renameDeviceLabel(name: String) {
@@ -418,7 +590,13 @@ class DeviceNodeCoordinator(
                         manufacturer = Build.MANUFACTURER.orEmpty(),
                         osVersion = "Android ${Build.VERSION.RELEASE}",
                         protectedPackages = sticky.protectedPackages,
+                        capabilities = laneCapabilities(),
                     )
+                    // After lane is up, push stream status + flush buffered notifs for this target.
+                    if (HostClientPool.key(laneOrigin) == HostClientPool.key(sticky.notifStreamTargetOrigin().orEmpty())) {
+                        pushStreamStatus()
+                        flushPending(laneOrigin, cred.deviceId, sticky.notifStreamProfileFor(laneOrigin) ?: cred.profileId)
+                    }
                     if (_state.value.deviceLabel.isBlank()) {
                         _state.update { it.copy(deviceLabel = label) }
                     }
@@ -467,6 +645,7 @@ class DeviceNodeCoordinator(
         }
         // The kill-switch notification names live lanes; keep it current while armed.
         if (_state.value.arm != DeviceArm.DISARMED) syncHands(armed = true)
+        if (sticky.notifStreamEnabled || sticky.stayConnected) StayConnectedService.refresh(app)
     }
 
     private fun stopLane(laneOrigin: String) {

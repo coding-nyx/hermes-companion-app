@@ -327,6 +327,30 @@ class Operator:
             self._save()
         return {"ok": True, "decision": decision}
 
+    def inject_context(self, sid: str, profile: str, text: str, role: str = "user") -> dict:
+        """Append a note into a session without generating an assistant reply (notif inject)."""
+        body = (text or "").strip()
+        if not body:
+            raise OperatorError("text_required", 400)
+        with self.lock:
+            sess = self._session(sid)
+            if sess is None:
+                raise OperatorError("unknown_session", 404)
+            if not profile or sess["profile"] != profile:
+                raise OperatorError("profile_mismatch", 403)
+            rid = self._row()
+            row = {"id": str(rid), "row_id": rid, "role": role if role in ("user", "assistant", "system") else "user", "content": body}
+            self.data["messages"].setdefault(sid, []).append(row)
+            sess["updated_at"] = _now_ms()
+            self._save()
+        return {"ok": True, "session_id": sid, "message": row}
+
+    def active_session_id(self, profile: str) -> str | None:
+        rows = self.list_sessions(profile)
+        if not rows:
+            return None
+        return str(rows[0].get("id") or "") or None
+
     def submit(self, sid: str, profile: str, text: str, model: str = "", parts: list | None = None) -> dict:
         if not text.strip() and not parts:
             raise OperatorError("text_required", 400)

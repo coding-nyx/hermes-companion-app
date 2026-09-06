@@ -41,7 +41,7 @@ Host CLI (outside chat): `hermes companion list`, `hermes companion approve CODE
 8. Snapshot again after each gesture if the UI changed.
 9. **`mobile_disarm`** when the task is done, or immediately if the user says stop / that's enough / take your hands off.
 
-**Allowed while disarmed:** `mobile_status`, `mobile_devices`, `mobile_select_device`, `mobile_arm`, `mobile_disarm`.
+**Allowed while disarmed:** `mobile_status`, `mobile_devices`, `mobile_select_device`, `mobile_arm`, `mobile_disarm`, `mobile_notifications`, `mobile_notifications_inject`.
 
 **Require armed:** snapshot, click, type, swipe, scroll, press, open_app, screenshot, wait (and any other control). Control ops refuse with `disarmed` + hint to call `mobile_arm` first — they do not auto-arm.
 
@@ -53,6 +53,13 @@ Host CLI (outside chat): `hermes companion list`, `hermes companion approve CODE
 | `mobile_disarm` | Instant kill switch. Same path as the notification DISARM and double volume-down. | Always allowed. |
 
 The user can still disarm on the phone at any time. After they disarm, gestures fail closed (`disarmed`) until `mobile_arm` succeeds again.
+
+## Phone notification stream
+
+- Phone Device tab: enable **NLS** (system Notification access) + **STREAM**, pick target gateway+profile.
+- Events land in the host relay ring (denylist: protected packages + Companion’s own notifs). **No auto-Telegram.**
+- **`mobile_notifications`** — read recent events (allowed while disarmed).
+- **`mobile_notifications_inject`** — explicit only: post your summary into the active session. Dedupes by `notification_key`. Do not inject every shade event.
 
 ## Multi-device
 

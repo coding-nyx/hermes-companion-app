@@ -25,6 +25,7 @@ ALLOWLIST = frozenset(
         "device.screenshot",
         "device.arm",
         "device.disarm",
+        "device.notifications",
     }
 )
 

@@ -308,6 +308,75 @@ class RelayTests(unittest.TestCase):
             relay.shutdown()
             relay.server_close()
 
+    def test_notification_event_ring(self):
+        state = RelayState()
+        state.on_frame(
+            json.dumps(
+                {
+                    "type": "mobile.controller.event",
+                    "event": "notification",
+                    "device_id": "dev_n1",
+                    "profile": "coder",
+                    "ts_ms": 1_700_000_000_000,
+                    "notification": {
+                        "key": "abc",
+                        "package": "com.telegram.messenger",
+                        "title": "hi",
+                        "text": "there",
+                        "category": "msg",
+                        "ongoing": False,
+                        "clearable": True,
+                    },
+                }
+            ),
+            device_id="dev_n1",
+        )
+        rows = state.list_notifications("dev_n1", limit=10)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["notification"]["package"], "com.telegram.messenger")
+        self.assertTrue(state.live_meta["dev_n1"].get("notifications_stream"))
+
+    def test_notification_status_meta(self):
+        state = RelayState()
+        state.on_frame(
+            json.dumps(
+                {
+                    "type": "mobile.controller.status",
+                    "device_id": "dev_n2",
+                    "notifications_stream": True,
+                    "notifications_listener_bound": True,
+                }
+            )
+        )
+        self.assertTrue(state.live_meta["dev_n2"]["notifications_stream"])
+        self.assertTrue(state.live_meta["dev_n2"]["notifications_listener_bound"])
+
+    def test_notifications_http_get(self):
+        state = RelayState()
+        state.push_notification(
+            "dev_http",
+            {
+                "device_id": "dev_http",
+                "ts_ms": 100,
+                "notification": {"key": "k1", "package": "com.example", "title": "t", "text": "x"},
+            },
+        )
+        relay = make_server("127.0.0.1:0", "http://127.0.0.1:9", state)
+        threading.Thread(target=relay.serve_forever, daemon=True).start()
+        try:
+            host, port = relay.server_address
+            with urllib.request.urlopen(
+                f"http://{host}:{port}/companion/device/notifications?device_id=dev_http&limit=5",
+                timeout=5,
+            ) as resp:
+                payload = json.loads(resp.read().decode())
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["count"], 1)
+            self.assertEqual(payload["notifications"][0]["notification"]["package"], "com.example")
+        finally:
+            relay.shutdown()
+            relay.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()

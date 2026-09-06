@@ -66,6 +66,29 @@ class StickyStore(context: Context) {
         get() = prefs.getBoolean(KEY_BIOMETRIC, false)
         set(value) { prefs.edit().putBoolean(KEY_BIOMETRIC, value).apply() }
 
+    /** Phone-wide: stream shade notifications to a chosen gateway+profile (A13.2). */
+    var notifStreamEnabled: Boolean
+        get() = prefs.getBoolean(KEY_NOTIF_STREAM, false)
+        set(value) { prefs.edit().putBoolean(KEY_NOTIF_STREAM, value).apply() }
+
+    /** Target origin for the stream; blank → fall back to [lastGoodOrigin] / [origin]. */
+    var notifStreamOrigin: String?
+        get() = prefs.getString(KEY_NOTIF_STREAM_ORIGIN, null)?.takeIf { it.isNotBlank() }
+        set(value) { prefs.edit().putString(KEY_NOTIF_STREAM_ORIGIN, value?.trim()?.ifBlank { null }).apply() }
+
+    fun notifStreamProfileFor(origin: String): String? =
+        prefs.getString(KEY_NOTIF_STREAM_PROFILE + "." + HostKeys.of(origin), null) ?: profileFor(origin)
+
+    fun setNotifStreamProfile(origin: String, id: String?) {
+        prefs.edit()
+            .putString(KEY_NOTIF_STREAM_PROFILE + "." + HostKeys.of(origin), id?.trim()?.ifBlank { null })
+            .apply()
+    }
+
+    /** Resolved stream sink: configured origin or sticky last-good / origin. */
+    fun notifStreamTargetOrigin(): String? =
+        notifStreamOrigin ?: lastGoodOrigin ?: origin
+
     /** User-added protected packages (exact ids or `prefix.*`). Phone-wide safety: merged with the built-in denylist. */
     var protectedPackages: Set<String>
         get() = prefs.getStringSet(KEY_PROTECTED, emptySet()).orEmpty().toSet()
@@ -79,5 +102,8 @@ class StickyStore(context: Context) {
         private const val KEY_NTFY = "ntfy_topic"
         private const val KEY_STAY = "stay_connected"
         private const val KEY_BIOMETRIC = "biometric_lock"
+        private const val KEY_NOTIF_STREAM = "notif_stream_enabled"
+        private const val KEY_NOTIF_STREAM_ORIGIN = "notif_stream_origin"
+        private const val KEY_NOTIF_STREAM_PROFILE = "notif_stream_profile"
     }
 }
