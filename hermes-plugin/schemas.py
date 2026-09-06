@@ -186,6 +186,7 @@ NOTIFICATIONS = {
             "device": {"type": "string", "description": "Device id or friendly name. Optional when exactly one device is connected or a default is set."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
             "since_ms": {"type": "integer", "description": "Only events with ts_ms greater than this."},
+            "profile": {"type": "string", "description": "Optional sink profile filter (e.g. ash)."},
         },
     },
 }

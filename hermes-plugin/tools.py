@@ -261,8 +261,19 @@ def make_handlers(broker: Broker):
                     device_id = ids[0]
             limit = args.get("limit", 20)
             since = args.get("since_ms")
-            rows = state.list_notifications(device_id=device_id, limit=limit, since_ms=since)
-            return _dump({"ok": True, "device_id": device_id, "notifications": rows, "count": len(rows)})
+            profile = str(args.get("profile") or "").strip() or None
+            rows = state.list_notifications(
+                device_id=device_id, limit=limit, since_ms=since, profile=profile
+            )
+            return _dump(
+                {
+                    "ok": True,
+                    "device_id": device_id,
+                    "profile": profile,
+                    "notifications": rows,
+                    "count": len(rows),
+                }
+            )
         except BrokerError as exc:
             return _err(exc)
 

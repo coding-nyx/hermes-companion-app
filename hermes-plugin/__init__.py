@@ -41,7 +41,9 @@ def _prompt(_info=None) -> str:
         with state.lock:
             stream_on = any(bool(m.get("notifications_stream")) for m in getattr(state, "live_meta", {}).values())
     stream_hint = (
-        " Phone notification stream is ON. Call mobile_notifications to read recent shade events. "
+        " Phone notification stream is ON. Host may wake this profile with a short "
+        "'mobile notif: pkg · title' nudge when shade events arrive — that is not an inject. "
+        "Call mobile_notifications to read recent shade events. "
         "Only call mobile_notifications_inject when the user would want a summary in the active chat; "
         "never dump every shade event; never auto-inject."
         if stream_on

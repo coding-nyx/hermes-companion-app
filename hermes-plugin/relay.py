@@ -283,9 +283,26 @@ class RelayState:
             meta = self.live_meta.setdefault(device_id, {})
             meta["notifications_stream"] = True
             meta["last_notification_ts"] = event.get("ts_ms") or event.get("ts")
+        # Wake the sink profile so the agent sees shade events without a human ping.
+        # Never auto-calls mobile_notifications_inject (agent decides).
+        try:
+            try:
+                from .agent_wake import maybe_wake_for_notification
+            except ImportError:
+                from agent_wake import maybe_wake_for_notification
+            maybe_wake_for_notification(event)
+        except Exception:
+            pass
 
-    def list_notifications(self, device_id: str | None = None, limit: int = 50, since_ms: int | None = None) -> list[dict]:
+    def list_notifications(
+        self,
+        device_id: str | None = None,
+        limit: int = 50,
+        since_ms: int | None = None,
+        profile: str | None = None,
+    ) -> list[dict]:
         limit = max(1, min(int(limit or 50), 100))
+        profile_filter = (profile or "").strip() or None
         with self.lock:
             if device_id:
                 rows = list(self.notif_rings.get(device_id, []))
@@ -297,6 +314,8 @@ class RelayState:
                         item.setdefault("device_id", did)
                         rows.append(item)
                 rows.sort(key=lambda r: int(r.get("ts_ms") or 0))
+        if profile_filter:
+            rows = [r for r in rows if str(r.get("profile") or "") == profile_filter]
         if since_ms is not None:
             try:
                 since = int(since_ms)
@@ -667,14 +686,19 @@ class CompanionHandler(BaseHTTPRequestHandler):
             if path == "/companion/device/notifications" and self.command == "GET":
                 qs = parse_qs(urlparse(self.path).query)
                 device_id = (qs.get("device_id") or [""])[0].strip() or None
+                profile = (qs.get("profile") or [""])[0].strip() or None
                 try:
                     limit = int((qs.get("limit") or ["50"])[0])
                 except ValueError:
                     limit = 50
                 since_raw = (qs.get("since") or qs.get("since_ms") or [None])[0]
                 since_ms = int(since_raw) if since_raw not in (None, "") else None
-                rows = self.state.list_notifications(device_id=device_id, limit=limit, since_ms=since_ms)
-                return self._json({"ok": True, "notifications": rows, "count": len(rows)})
+                rows = self.state.list_notifications(
+                    device_id=device_id, limit=limit, since_ms=since_ms, profile=profile
+                )
+                return self._json(
+                    {"ok": True, "notifications": rows, "count": len(rows), "profile": profile}
+                )
             if path == "/companion/device/lanes" and self.command == "GET":
                 with self.state.lock:
                     ids = list(self.state.lanes)

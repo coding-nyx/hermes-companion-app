@@ -57,9 +57,10 @@ The user can still disarm on the phone at any time. After they disarm, gestures 
 ## Phone notification stream
 
 - Phone Device tab: enable **NLS** (system Notification access) + **STREAM**, pick target gateway+profile.
-- Events land in the host relay ring (denylist: protected packages + Companion’s own notifs). **No auto-Telegram.**
-- **`mobile_notifications`** — read recent events (allowed while disarmed).
-- **`mobile_notifications_inject`** — explicit only: post your summary into the active session. Dedupes by `notification_key`. Do not inject every shade event.
+- Events land in the host relay ring (denylist: protected packages + Companion’s own notifs). **No auto-Telegram dump.**
+- When a notification is accepted for your profile, the relay **wakes/nudges** this agent with a short `mobile notif: pkg · title` hint (configurable; default on). That wake is **not** an inject.
+- **`mobile_notifications`** — read recent events (allowed while disarmed; optional `profile=` filter).
+- **`mobile_notifications_inject`** — explicit only: post your summary into the active session. Dedupes by `notification_key`. Do not inject every shade event. **Never auto-called.**
 
 ## Multi-device
 
