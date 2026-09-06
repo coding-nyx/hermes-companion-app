@@ -335,7 +335,7 @@ Expands power-user and multimodal features.
   - Plugin media store: hashed blobs, 25 MB cap, mime allowlist; standalone seeds a tiny PNG so S22 can show an image without upload.
 - **Verified**: `ChatContentTest`, `DashboardClientTest.streamTurnPostsImageParts`, plugin media tests. S22 picker/send/screenshot pass pending this APK install.
 
-#### A13.2 · Notification Listener Service 🔲 PENDING
+#### A13.2 · Notification Listener Service ✅ P0+P1 (see `docs/superpowers/plans/2026-09-06-live-notification-stream.md`)
 - **Deliverable**: Opt-in `NotificationListenerService`. Forwards selected incoming Android notifications to Hermes agent memory or wake bus.
 - **Acceptance Criteria**: Agent can monitor SMS, messaging, or system alerts when explicitly enabled by user.
 - **Estimate**: 3 days | **Dependencies**: None
@@ -709,7 +709,7 @@ Addresses host-side multi-device routing for the "Hands" control plane. While th
 | A12.3 | Biometric Dismissal | 2d | ✅ |
 | A12.4 | Safe Lock Automation | 2d | 🔲 |
 | A12.5 | Ambient HUD & Hardware Chord | 1d | 🔲 |
-| A13.2 | Notification Listener Service | 3d | 🔲 |
+| A13.2 | Notification Listener Service | 3d | ✅ P0+P1 |
 | A13.3 | Slash Command Autocomplete | 1.5d | 🔲 |
 | A13.4 | Tool Inspection Drawer | 2d | 🔲 |
 | A13.5 | Full-Text Search (FTS) | 2d | 🔲 |

@@ -150,9 +150,9 @@ class MainActivity : FragmentActivity() {
                     state.lastWake?.let { WakeNotifier.show(this@MainActivity, it) }
                 }
 
-                LaunchedEffect(state.stayConnected) {
+                LaunchedEffect(state.stayConnected, state.notifStreamEnabled) {
                     val stay = Intent(app, StayConnectedService::class.java)
-                    if (state.stayConnected) {
+                    if (state.stayConnected || state.notifStreamEnabled) {
                         runCatching { ContextCompat.startForegroundService(app, stay) }
                     } else {
                         app.stopService(stay)
@@ -296,6 +296,12 @@ class MainActivity : FragmentActivity() {
                             ),
                         )
                     },
+                    onEnableNls = {
+                        startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                    },
+                    onToggleNotifStream = vm::toggleNotifStream,
+                    onPickStreamOrigin = vm::setNotifStreamOrigin,
+                    onPickStreamProfile = vm::setNotifStreamProfile,
                     onEnableNotify = {
                         if (Build.VERSION.SDK_INT >= 33) {
                             pendingPermissionAction = {

@@ -87,6 +87,30 @@ internal class DeviceSocket(private val http: OkHttpClient) {
         return socket.send(payload)
     }
 
+    /** Phone → host event / status frame (notification stream, live meta). */
+    fun sendRaw(json: String): Boolean {
+        val socket = ws ?: return false
+        if (json.isBlank()) return false
+        return socket.send(json)
+    }
+
+    fun sendEvent(
+        event: String,
+        deviceId: String,
+        profile: String,
+        tsMs: Long,
+        notificationJson: String,
+    ): Boolean {
+        val payload =
+            """{"type":"mobile.controller.event","event":${q(event)},"device_id":${q(deviceId)},"profile":${q(profile)},"ts_ms":$tsMs,"notification":$notificationJson}"""
+        return sendRaw(payload)
+    }
+
+    fun sendStatus(deviceId: String, fieldsJson: String): Boolean {
+        val payload = """{"type":"mobile.controller.status","device_id":${q(deviceId)}$fieldsJson}"""
+        return sendRaw(payload)
+    }
+
     fun close() {
         opened.set(false)
         val socket = ws

@@ -414,6 +414,19 @@ class CompanionViewModel(
 
     fun addProtectedPackage(raw: String) = deviceNode.addProtectedPackage(raw)
 
+    fun toggleNotifStream() {
+        deviceNode.setNotifStreamEnabled(!_state.value.notifStreamEnabled)
+    }
+
+    fun setNotifStreamOrigin(origin: String) {
+        deviceNode.setNotifStreamTarget(origin, _state.value.notifStreamProfile)
+    }
+
+    fun setNotifStreamProfile(profileId: String) {
+        deviceNode.setNotifStreamTarget(_state.value.notifStreamOrigin, profileId)
+    }
+
+
     fun removeProtectedPackage(pkg: String) = deviceNode.removeProtectedPackage(pkg)
 
     // ---- voice stream: VoiceStreamEngine ----

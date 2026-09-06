@@ -45,6 +45,9 @@ device.press
 device.open_app
 device.apps
 device.wait
+device.arm
+device.disarm
+device.notifications
 ```
 
 Anything else is stripped at register and denied at command time.
@@ -81,6 +84,47 @@ or `{ "ok": false, "error": { "code": "disarmed", "message": "device is DISARMED
 Cancel: `mobile.controller.cancel` with the `command_id`. Late results are ignored.
 
 Detach: `mobile.controller.detach` on the authenticated socket. Socket close without detach is a recoverable disconnect; pending work keeps its original deadline.
+
+
+## Notification stream (phone → host)
+
+Capability `device.notifications` is optional: include it on register only while the phone has the Notification Listener bound and live stream armed. Ticket may omit it when the stream is off.
+
+Phone → Hermes event frame (not a command result):
+
+```json
+{
+  "type": "mobile.controller.event",
+  "event": "notification",
+  "device_id": "dev_…",
+  "profile": "default",
+  "ts_ms": 1757160000000,
+  "notification": {
+    "key": "sha256-or-sbn-key",
+    "package": "com.telegram.messenger",
+    "title": "…",
+    "text": "…",
+    "category": "msg",
+    "ongoing": false,
+    "clearable": true
+  }
+}
+```
+
+Filter is denylist-only: built-in protected packages ∪ custom denylist ∪ Companion's own package/channels. Never auto-inject into chat/Telegram; the agent reads via `mobile_notifications` and may explicitly call `mobile_notifications_inject`.
+
+Status meta (reuse `mobile.controller.status`):
+
+```json
+{
+  "type": "mobile.controller.status",
+  "device_id": "dev_…",
+  "notifications_stream": true,
+  "notifications_listener_bound": true
+}
+```
+
+Relay keeps an in-memory ring (~100 events / device). Operator debug: `GET /companion/device/notifications?device_id=&limit=`.
 
 ## Snapshot
 

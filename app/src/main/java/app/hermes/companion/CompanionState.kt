@@ -103,6 +103,11 @@ data class CompanionState(
     val voiceStreamState: VoiceStreamState = VoiceStreamState.IDLE,
     val protectedCustom: List<String> = emptyList(),
     val protectedError: String? = null,
+    val nlsBound: Boolean = false,
+    val notifStreamEnabled: Boolean = false,
+    val notifStreamOrigin: String? = null,
+    val notifStreamProfile: String? = null,
+    val pairedHosts: List<String> = emptyList(),
     val pendingDeepLink: DeepLinkRequest? = null,
     val pendingDelete: SessionRef? = null,
     /** Optional per-turn model on session.create / prompt.submit (A9.3). */
@@ -133,4 +138,9 @@ internal fun CompanionState.mirror(node: DeviceNodeState): CompanionState = copy
     arm = node.arm,
     protectedCustom = node.protectedCustom,
     protectedError = node.protectedError,
+    nlsBound = node.nlsBound,
+    notifStreamEnabled = node.notifStreamEnabled,
+    notifStreamOrigin = node.notifStreamOrigin,
+    notifStreamProfile = node.notifStreamProfile,
+    pairedHosts = node.pairedHosts,
 )

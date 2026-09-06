@@ -217,11 +217,13 @@ class DashboardClient internal constructor(
         manufacturer: String = "",
         osVersion: String = "",
         protectedPackages: Collection<String> = emptyList(),
+        capabilities: List<String> = DeviceLanePolicy.CAPABILITIES,
     ): DeviceTicket {
         val payload = DeviceLanePolicy.registerJson(
             deviceId = cred.deviceId,
             profileId = cred.profileId,
             credential = cred.credential,
+            capabilities = capabilities,
             deviceName = deviceName,
             model = model,
             manufacturer = manufacturer,
@@ -244,6 +246,7 @@ class DashboardClient internal constructor(
         manufacturer: String = "",
         osVersion: String = "",
         protectedPackages: Collection<String> = emptyList(),
+        capabilities: List<String> = DeviceLanePolicy.CAPABILITIES,
     ) {
         deviceLock.withLock {
             deviceWs?.close()
@@ -254,6 +257,7 @@ class DashboardClient internal constructor(
                 manufacturer = manufacturer,
                 osVersion = osVersion,
                 protectedPackages = protectedPackages,
+                capabilities = capabilities,
             )
             if (ticket.ticket.isBlank()) throw DashboardException("device_ticket", "empty device ticket")
             val socket = DeviceSocket(wsHttp)
@@ -282,6 +286,19 @@ class DashboardClient internal constructor(
     }.flowOn(Dispatchers.IO)
 
     fun replyDevice(result: DeviceResult): Boolean = deviceWs?.send(result) == true
+
+    fun sendDeviceEvent(
+        event: String,
+        deviceId: String,
+        profile: String,
+        tsMs: Long,
+        notificationJson: String,
+    ): Boolean = deviceWs?.sendEvent(event, deviceId, profile, tsMs, notificationJson) == true
+
+    fun sendDeviceStatus(deviceId: String, fieldsJson: String): Boolean =
+        deviceWs?.sendStatus(deviceId, fieldsJson) == true
+
+    fun sendDeviceRaw(json: String): Boolean = deviceWs?.sendRaw(json) == true
 
     fun wakeEvents(sseUrl: String): Flow<String> = NtfyClient(wsHttp).events(sseUrl)
 

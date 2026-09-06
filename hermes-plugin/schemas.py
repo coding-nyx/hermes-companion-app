@@ -176,3 +176,32 @@ SCREENSHOT = {
             "device": {"type": "string", "description": "Device id or friendly name."},"max_edge": {"type": "integer", "minimum": 64, "maximum": 1080}},
     },
 }
+
+NOTIFICATIONS = {
+    "name": "mobile_notifications",
+    "description": "Read recent phone notification stream events (package, title, text). Read-only; does not post to chat. Stream must be enabled on the phone.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "device": {"type": "string", "description": "Device id or friendly name. Optional when exactly one device is connected or a default is set."},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+            "since_ms": {"type": "integer", "description": "Only events with ts_ms greater than this."},
+        },
+    },
+}
+
+NOTIFICATIONS_INJECT = {
+    "name": "mobile_notifications_inject",
+    "description": "Explicitly inject a summarized phone-notification note into the active session/thread for this profile. Never auto-called; only when you decide the user would want it in chat. Dedupes by notification_key.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "description": "Agent-authored summary to post into the active session."},
+            "session_id": {"type": "string", "description": "Optional session id; defaults to most recent session for the device profile."},
+            "notification_key": {"type": "string", "description": "Optional key from mobile_notifications to dedupe."},
+            "device": {"type": "string", "description": "Device id or friendly name."},
+            "profile": {"type": "string", "description": "Profile id override; defaults to the device's bound profile."},
+        },
+        "required": ["text"],
+    },
+}

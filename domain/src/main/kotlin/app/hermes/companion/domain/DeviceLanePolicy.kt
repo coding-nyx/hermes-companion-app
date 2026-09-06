@@ -25,6 +25,7 @@ object DeviceLanePolicy {
         "device.screenshot",
         "device.arm",
         "device.disarm",
+        "device.notifications",
     )
 
     /**

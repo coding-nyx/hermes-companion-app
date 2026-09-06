@@ -60,6 +60,12 @@ fun DeviceScreen(
     protectedCustom: List<String> = emptyList(),
     protectedDefaults: Int = 0,
     protectedError: String? = null,
+    nlsBound: Boolean = false,
+    notifStreamEnabled: Boolean = false,
+    notifStreamOrigin: String? = null,
+    notifStreamProfile: String? = null,
+    pairedHosts: List<String> = emptyList(),
+    profilesForStream: List<String> = emptyList(),
     onPair: () -> Unit,
     onRepair: () -> Unit = onPair,
     onApprove: () -> Unit = {},
@@ -70,9 +76,13 @@ fun DeviceScreen(
     onEnableA11y: () -> Unit = {},
     onEnableOverlay: () -> Unit = {},
     onEnableNotify: () -> Unit = {},
+    onEnableNls: () -> Unit = {},
     onToggleAwakeOnVoice: () -> Unit = {},
     onToggleLockedAccess: () -> Unit = {},
     onToggleBiometricLock: () -> Unit = {},
+    onToggleNotifStream: () -> Unit = {},
+    onPickStreamOrigin: (String) -> Unit = {},
+    onPickStreamProfile: (String) -> Unit = {},
     onAddProtected: (String) -> Unit = {},
     onRemoveProtected: (String) -> Unit = {},
     onRenameDevice: (String) -> Unit = {},
@@ -314,6 +324,90 @@ fun DeviceScreen(
                         .clickable(onClick = onToggleBiometricLock)
                         .padding(vertical = CompanionSpace.Xs),
                 )
+                Spacer(Modifier.height(CompanionSpace.Lg))
+
+                Text(
+                    text = if (nlsBound) "NLS      on" else "NLS      off",
+                    style = CompanionType.Mono.copy(
+                        color = if (nlsBound) CompanionColor.Signal else CompanionColor.Warn,
+                    ),
+                    modifier = Modifier.testTag("device.nls"),
+                )
+                Text(
+                    text = if (notifStreamEnabled) "STREAM   on" else "STREAM   off",
+                    style = CompanionType.Mono.copy(
+                        color = if (notifStreamEnabled) CompanionColor.Signal else CompanionColor.TextMute,
+                    ),
+                    modifier = Modifier
+                        .testTag("device.stream")
+                        .clickable(onClick = onToggleNotifStream)
+                        .padding(vertical = CompanionSpace.Xs),
+                )
+                if (notifStreamEnabled) {
+                    val sinkHost = notifStreamOrigin.orEmpty().ifBlank { "(sticky host)" }
+                    val sinkProfile = notifStreamProfile.orEmpty().ifBlank { "(sticky profile)" }
+                    Text(
+                        text = "sink → $sinkHost · $sinkProfile",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("device.stream.sink"),
+                    )
+                    if (pairedHosts.isNotEmpty()) {
+                        Spacer(Modifier.height(CompanionSpace.Xs))
+                        Text(text = "target gateway", style = CompanionType.MonoSmall)
+                        pairedHosts.forEach { host ->
+                            val selected = notifStreamOrigin != null && host == notifStreamOrigin
+                            Text(
+                                text = if (selected) "● $host" else "○ $host",
+                                style = CompanionType.MonoSmall.copy(
+                                    color = if (selected) CompanionColor.Signal else CompanionColor.TextMute,
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onPickStreamOrigin(host) }
+                                    .padding(vertical = CompanionSpace.Xs)
+                                    .testTag("device.stream.origin"),
+                            )
+                        }
+                    }
+                    if (profilesForStream.isNotEmpty()) {
+                        Text(text = "target profile", style = CompanionType.MonoSmall)
+                        profilesForStream.forEach { pid ->
+                            val selected = pid == notifStreamProfile
+                            Text(
+                                text = if (selected) "● $pid" else "○ $pid",
+                                style = CompanionType.MonoSmall.copy(
+                                    color = if (selected) CompanionColor.Signal else CompanionColor.TextMute,
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onPickStreamProfile(pid) }
+                                    .padding(vertical = CompanionSpace.Xs)
+                                    .testTag("device.stream.profile"),
+                            )
+                        }
+                    }
+                    Text(
+                        text = "exposes non-blocked shade content to the chosen host",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                        modifier = Modifier.testTag("device.stream.warn"),
+                    )
+                }
+                Spacer(Modifier.height(CompanionSpace.Sm))
+                if (!nlsBound) {
+                    Action("ENABLE NLS", "device.nls.enable", onEnableNls)
+                    Spacer(Modifier.height(CompanionSpace.Xs))
+                    Text(
+                        text = "Settings → Notification access → Hermes Companion",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                        modifier = Modifier.testTag("device.nls.hint"),
+                    )
+                    Spacer(Modifier.height(CompanionSpace.Sm))
+                }
+
                 Spacer(Modifier.height(CompanionSpace.Lg))
                 ProtectedPackages(
                     custom = protectedCustom,

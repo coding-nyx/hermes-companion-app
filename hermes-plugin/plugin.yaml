@@ -22,3 +22,5 @@ provides_tools:
   - mobile_apps
   - mobile_wait
   - mobile_screenshot
+  - mobile_notifications
+  - mobile_notifications_inject

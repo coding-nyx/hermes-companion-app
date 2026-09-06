@@ -193,6 +193,10 @@ class RelayState:
         self.seq = 0
         self.pending: dict[str, threading.Event] = {}
         self.results: dict[str, dict] = {}
+        # Per-device notification ring (A13.2). Newest last; drop oldest beyond cap.
+        self.notif_rings: dict[str, list[dict]] = {}
+        self.notif_ring_cap = 100
+        self.injected_notif_keys: set[str] = set()
 
     def send_command(self, device_id: str, action: str, arguments: dict | None = None) -> str:
         event = threading.Event()
@@ -254,6 +258,10 @@ class RelayState:
                 meta["a11y_bound"] = bool(fields["a11y_bound"])
             if "overlay" in fields:
                 meta["overlay"] = bool(fields["overlay"])
+            if "notifications_stream" in fields:
+                meta["notifications_stream"] = bool(fields["notifications_stream"])
+            if "notifications_listener_bound" in fields:
+                meta["notifications_listener_bound"] = bool(fields["notifications_listener_bound"])
             if now is not None:
                 meta["last_seen"] = now
         # Pairing store last_seen feeds GET /companion/device/lanes for offline-ish age.
@@ -261,6 +269,59 @@ class RelayState:
             self.pairing.note_seen(device_id, persist=False)
         except Exception:
             pass
+
+
+    def push_notification(self, device_id: str, event: dict) -> None:
+        if not device_id or not isinstance(event, dict):
+            return
+        with self.lock:
+            ring = self.notif_rings.setdefault(device_id, [])
+            ring.append(event)
+            overflow = len(ring) - self.notif_ring_cap
+            if overflow > 0:
+                del ring[0:overflow]
+            meta = self.live_meta.setdefault(device_id, {})
+            meta["notifications_stream"] = True
+            meta["last_notification_ts"] = event.get("ts_ms") or event.get("ts")
+
+    def list_notifications(self, device_id: str | None = None, limit: int = 50, since_ms: int | None = None) -> list[dict]:
+        limit = max(1, min(int(limit or 50), 100))
+        with self.lock:
+            if device_id:
+                rows = list(self.notif_rings.get(device_id, []))
+            else:
+                rows = []
+                for did, ring in self.notif_rings.items():
+                    for row in ring:
+                        item = dict(row)
+                        item.setdefault("device_id", did)
+                        rows.append(item)
+                rows.sort(key=lambda r: int(r.get("ts_ms") or 0))
+        if since_ms is not None:
+            try:
+                since = int(since_ms)
+            except (TypeError, ValueError):
+                since = 0
+            rows = [r for r in rows if int(r.get("ts_ms") or 0) > since]
+        return rows[-limit:]
+
+    def mark_injected(self, key: str) -> bool:
+        if not key:
+            return False
+        with self.lock:
+            if key in self.injected_notif_keys:
+                return False
+            self.injected_notif_keys.add(key)
+            if len(self.injected_notif_keys) > 500:
+                # Drop arbitrary old keys — set has no order; rebuild from recent rings.
+                recent = set()
+                for ring in self.notif_rings.values():
+                    for row in ring[-50:]:
+                        k = (row.get("notification") or {}).get("key") if isinstance(row.get("notification"), dict) else row.get("key")
+                        if k:
+                            recent.add(str(k))
+                self.injected_notif_keys = recent | {key}
+            return True
 
     def on_frame(self, raw: str, device_id: str | None = None) -> None:
         if not raw:
@@ -276,6 +337,26 @@ class RelayState:
         if kind == "mobile.controller.status":
             if lane_id:
                 self._apply_live_meta(lane_id, payload)
+            return
+        if kind == "mobile.controller.event":
+            if lane_id and str(payload.get("event") or "") == "notification":
+                notif = payload.get("notification") if isinstance(payload.get("notification"), dict) else {}
+                row = {
+                    "device_id": lane_id,
+                    "profile": str(payload.get("profile") or ""),
+                    "ts_ms": int(payload.get("ts_ms") or 0),
+                    "event": "notification",
+                    "notification": {
+                        "key": str(notif.get("key") or ""),
+                        "package": str(notif.get("package") or ""),
+                        "title": str(notif.get("title") or "")[:240],
+                        "text": str(notif.get("text") or "")[:480],
+                        "category": str(notif.get("category") or ""),
+                        "ongoing": bool(notif.get("ongoing")),
+                        "clearable": bool(notif.get("clearable", True)),
+                    },
+                }
+                self.push_notification(lane_id, row)
             return
         if kind != "mobile.controller.result":
             return
@@ -583,6 +664,17 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "device_id": device.device_id, "name": device.name})
             if path == "/companion/device/list" and self.command == "GET":
                 return self._json({"devices": self.state.pairing.public_list()})
+            if path == "/companion/device/notifications" and self.command == "GET":
+                qs = parse_qs(urlparse(self.path).query)
+                device_id = (qs.get("device_id") or [""])[0].strip() or None
+                try:
+                    limit = int((qs.get("limit") or ["50"])[0])
+                except ValueError:
+                    limit = 50
+                since_raw = (qs.get("since") or qs.get("since_ms") or [None])[0]
+                since_ms = int(since_raw) if since_raw not in (None, "") else None
+                rows = self.state.list_notifications(device_id=device_id, limit=limit, since_ms=since_ms)
+                return self._json({"ok": True, "notifications": rows, "count": len(rows)})
             if path == "/companion/device/lanes" and self.command == "GET":
                 with self.state.lock:
                     ids = list(self.state.lanes)

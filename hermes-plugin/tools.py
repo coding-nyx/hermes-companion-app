@@ -236,8 +236,91 @@ def make_handlers(broker: Broker):
         except BrokerError as extra:
             return _err(extra)
 
+
+    def mobile_notifications(params, **kwargs):
+        del kwargs
+        try:
+            state = _relay_state
+            if state is None:
+                raise BrokerError("no_device", "relay unavailable")
+            pairing = _pairing_store
+            args = dict(params or {})
+            device_id = None
+            hint = args.get("device")
+            if hint and pairing is not None:
+                try:
+                    device_id = pairing.resolve(str(hint)).device_id
+                except Exception:
+                    device_id = str(hint)
+            elif pairing is not None and pairing.default_device_id:
+                device_id = pairing.default_device_id
+            elif state is not None:
+                with state.lock:
+                    ids = list(state.lanes) or list(getattr(state, "notif_rings", {}))
+                if len(ids) == 1:
+                    device_id = ids[0]
+            limit = args.get("limit", 20)
+            since = args.get("since_ms")
+            rows = state.list_notifications(device_id=device_id, limit=limit, since_ms=since)
+            return _dump({"ok": True, "device_id": device_id, "notifications": rows, "count": len(rows)})
+        except BrokerError as exc:
+            return _err(exc)
+
+    def mobile_notifications_inject(params, **kwargs):
+        del kwargs
+        try:
+            state = _relay_state
+            if state is None:
+                raise BrokerError("no_device", "relay unavailable")
+            pairing = _pairing_store
+            args = dict(params or {})
+            text = str(args.get("text") or "").strip()
+            if not text:
+                raise BrokerError("text_required", "text required")
+            key = str(args.get("notification_key") or "").strip()
+            if key and not state.mark_injected(key):
+                return _dump({"ok": False, "error": {"code": "already_injected", "message": "notification_key already injected"}})
+            profile = str(args.get("profile") or "").strip()
+            device_id = None
+            hint = args.get("device")
+            if pairing is not None:
+                try:
+                    if hint:
+                        device = pairing.resolve(str(hint))
+                    elif pairing.default_device_id:
+                        device = pairing.devices.get(pairing.default_device_id)
+                    else:
+                        device = None
+                    if device is not None:
+                        device_id = device.device_id
+                        if not profile:
+                            profile = getattr(device, "profile", "") or ""
+                except Exception as exc:
+                    return _err(BrokerError("unknown_device", str(exc)))
+            if not profile:
+                raise BrokerError("no_session", "profile required for inject")
+            sid = str(args.get("session_id") or "").strip()
+            op = getattr(state, "operator", None)
+            if op is None:
+                raise BrokerError("no_session", "operator unavailable")
+            if not sid:
+                sid = op.active_session_id(profile) or ""
+            if not sid:
+                raise BrokerError("no_session", "no active session for profile")
+            note = text if text.startswith("[phone notification]") else f"[phone notification] {text}"
+            try:
+                result = op.inject_context(sid, profile, note, role="user")
+            except Exception as exc:
+                code = getattr(exc, "error", None) or getattr(exc, "args", ["inject_failed"])[0]
+                raise BrokerError(str(code), str(exc)) from exc
+            return _dump({"ok": True, "session_id": sid, "device_id": device_id, "profile": profile, "result": result})
+        except BrokerError as exc:
+            return _err(exc)
+
     return {
         "mobile_status": mobile_status,
+        "mobile_notifications": mobile_notifications,
+        "mobile_notifications_inject": mobile_notifications_inject,
         "mobile_devices": mobile_devices,
         "mobile_select_device": mobile_select_device,
         "mobile_arm": mobile_arm,

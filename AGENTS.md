@@ -19,3 +19,9 @@ Agents must call `mobile_arm` before snapshot/gestures (and before long reasonin
 
 - App: assemble debug APK; sideload to the operator phone.
 - Plugin: `hermes-plugin/install.sh` (or rsync) into each host's `~/.hermes/plugins/hermes-companion`, then restart the gateway / companion relay so skill + prompt reload.
+
+## Notification stream (A13.2)
+
+- Phone streams shade notifications (denylist) to a configurable gateway+profile; agent reads via `mobile_notifications` and may explicitly `mobile_notifications_inject`.
+- Skill + `_prompt()` document the workflow; never auto-inject into Telegram/chat.
+- Deploy plugin to **lab** and **raj** together with app changes that touch stream protocol/tools.

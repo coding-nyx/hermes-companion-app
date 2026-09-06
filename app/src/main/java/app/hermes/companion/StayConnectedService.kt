@@ -8,13 +8,14 @@ import android.app.Service
 import android.content.Intent
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import app.hermes.companion.device.StopStreamReceiver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-/** Keeps the process alive so operator WS / ntfy can wake the phone. */
+/** Keeps the process alive so operator WS / ntfy / notification stream can wake the phone. */
 class StayConnectedService : Service() {
     private var keepJob: Job? = null
 
@@ -32,7 +33,6 @@ class StayConnectedService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_REFRESH) {
-            // Active host changed: re-post with the new host name (A8.5). Only while we are running.
             if (keepJob?.isActive == true) startForeground(ID, notice())
             return START_STICKY
         }
@@ -57,19 +57,33 @@ class StayConnectedService : Service() {
         val app = application as CompanionApp
         keepJob?.cancel()
         keepJob = app.appScope.launch(Dispatchers.IO) {
-            while (isActive && app.sticky.stayConnected) {
+            while (isActive && (app.sticky.stayConnected || app.sticky.notifStreamEnabled)) {
                 delay(KEEP_MS)
-                val origin = app.sticky.lastGoodOrigin ?: app.sticky.origin
+                val origin = app.sticky.notifStreamTargetOrigin()
+                    ?: app.sticky.lastGoodOrigin
+                    ?: app.sticky.origin
                 if (!origin.isNullOrBlank()) runCatching { app.clients.existing(origin)?.ping() }
+                // Refresh subtitle (stream on/off · profile) periodically.
+                startForeground(ID, notice())
+            }
+            if (!app.sticky.stayConnected && !app.sticky.notifStreamEnabled) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
             }
         }
     }
 
     private fun notice(): Notification {
         val app = application as CompanionApp
-        val origin = app.sticky.lastGoodOrigin ?: app.sticky.origin
+        val streamOn = app.sticky.notifStreamEnabled
+        val streamOrigin = app.sticky.notifStreamTargetOrigin()
+        val origin = streamOrigin ?: app.sticky.lastGoodOrigin ?: app.sticky.origin
         val hostName = app.hostName(origin)
-        val profile = origin?.let { app.sticky.profileFor(it) }.orEmpty()
+        val profile = when {
+            streamOn && origin != null -> app.sticky.notifStreamProfileFor(origin).orEmpty()
+            origin != null -> app.sticky.profileFor(origin).orEmpty()
+            else -> ""
+        }
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -79,14 +93,29 @@ class StayConnectedService : Service() {
                 .putExtra(MainActivity.EXTRA_NONCE, app.launchNonce),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        return NotificationCompat.Builder(this, CHANNEL)
+        val stopStream = PendingIntent.getBroadcast(
+            this,
+            2,
+            StopStreamReceiver.intent(this),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val title = if (hostName.isBlank()) "HERMES CONNECTED" else "HERMES CONNECTED · $hostName"
+        val subtitle = buildList {
+            if (streamOn) add("stream → ${profile.ifBlank { "default" }}")
+            else add("stream off")
+            origin?.takeIf { it.isNotBlank() }?.let { add(it) }
+        }.joinToString(" · ").ifBlank { "stay connected" }
+        val builder = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
-            .setContentTitle(if (hostName.isBlank()) "HERMES CONNECTED" else "HERMES CONNECTED · $hostName")
-            .setContentText(listOfNotNull(origin, profile.ifBlank { null }).joinToString(" · ").ifBlank { "stay connected" })
+            .setContentTitle(title)
+            .setContentText(subtitle)
             .setOngoing(true)
             .setContentIntent(open)
             .setCategory(Notification.CATEGORY_SERVICE)
-            .build()
+        if (streamOn) {
+            builder.addAction(0, "STOP STREAM", stopStream)
+        }
+        return builder.build()
     }
 
     companion object {
@@ -96,7 +125,7 @@ class StayConnectedService : Service() {
         /** Re-post the notification with the current active host; no-op if the service is not running. */
         fun refresh(context: android.content.Context) {
             val app = context.applicationContext as CompanionApp
-            if (!app.sticky.stayConnected) return
+            if (!app.sticky.stayConnected && !app.sticky.notifStreamEnabled) return
             runCatching { context.startService(Intent(context, StayConnectedService::class.java).setAction(ACTION_REFRESH)) }
         }
 
