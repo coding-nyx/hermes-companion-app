@@ -64,7 +64,9 @@ import app.hermes.companion.model.DeviceArm
 import app.hermes.companion.model.HudState
 import app.hermes.companion.model.GatewayChoice
 import app.hermes.companion.model.SavedGateway
+import app.hermes.companion.model.RoomRef
 import app.hermes.companion.model.SessionRef
+import app.hermes.companion.rooms.RoomCreateSheet
 import app.hermes.companion.profiles.ProfilesScreen
 import app.hermes.companion.reminders.RemindersScreen
 import app.hermes.companion.review.CodeReviewScreen
@@ -89,6 +91,12 @@ fun CompanionShell(
     onConfirmDelete: () -> Unit = {},
     onCancelDelete: () -> Unit = {},
     onCloseChat: () -> Unit,
+    onOpenRoom: (RoomRef) -> Unit = {},
+    onNewRoom: () -> Unit = {},
+    onCreateRoom: (title: String, participants: List<String>, maxRounds: Int) -> Unit = { _, _, _ -> },
+    onDismissRoomCreate: () -> Unit = {},
+    onDeleteRoom: (RoomRef) -> Unit = {},
+    onMention: (String) -> Unit = {},
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onInterrupt: () -> Unit,
@@ -168,7 +176,7 @@ fun CompanionShell(
         return
     }
 
-    val inChat = state.openSessionId != null
+    val inChat = state.openSessionId != null || state.inRoom
     val imeVisible = WindowInsets.isImeVisible
     BackHandler(enabled = inChat && !imeVisible, onBack = onCloseChat)
 
@@ -224,6 +232,13 @@ fun CompanionShell(
                     onSwitchModel(model, provider)
                 },
                 onDismiss = { showModelSheet = false },
+            )
+        }
+        if (state.roomCreateOpen) {
+            RoomCreateSheet(
+                profiles = state.profiles,
+                onCreate = onCreateRoom,
+                onDismiss = onDismissRoomCreate,
             )
         }
         if (showSettingsSheet) {
@@ -289,7 +304,10 @@ fun CompanionShell(
                 onRemoveAttachment = onRemoveAttachment,
                 onOpenMedia = onOpenMedia,
                 onFetchMedia = onFetchMedia,
-                threadId = state.openSessionId,
+                threadId = state.openRoomId ?: state.openSessionId,
+                participants = state.openRoom?.participants.orEmpty(),
+                pendingSpeaker = state.roomSpeaking,
+                onMention = onMention,
                 modifier = body,
             )
         } else {
@@ -300,6 +318,11 @@ fun CompanionShell(
                     error = state.error,
                     activeProfileId = state.activeProfileId,
                     pendingDelete = state.pendingDelete,
+                    rooms = state.rooms,
+                    roomsError = state.roomsError,
+                    onOpenRoom = onOpenRoom,
+                    onNewRoom = onNewRoom,
+                    onDeleteRoom = onDeleteRoom,
                     onOpen = onOpenSession,
                     onNew = onNewThread,
                     onRetry = onRetrySessions,
@@ -551,7 +574,8 @@ private fun Header(
         val hostPrefix = if (inChat || state.hostName.isBlank()) "" else "${state.hostName} · "
         Text(
             text = hostPrefix + when {
-                inChat -> state.openSession?.title ?: "chat"
+                inChat -> state.openRoom?.let { r -> "${r.title} · " + r.participants.joinToString(" ") { it.glyph } }
+                    ?: state.openSession?.title ?: "chat"
                 state.tab == MainTab.THREADS -> "threads"
                 state.tab == MainTab.CONSOLE -> "console"
                 state.tab == MainTab.REVIEW -> "code review"

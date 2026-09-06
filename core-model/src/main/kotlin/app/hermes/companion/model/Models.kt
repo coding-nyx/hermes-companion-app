@@ -88,6 +88,30 @@ data class ChatMessage(
     val blocks: List<ChatBlock> = emptyList(),
     /** Tool row whose `tool.start` has arrived but no `tool.complete` yet. Transient; never cached. */
     val toolRunning: Boolean = false,
+    /** Room turns: the profile that spoke. Null means the single agent of a normal thread. */
+    val speaker: String? = null,
+    /** Room turn where the agent replied PASS (rendered muted, no text). */
+    val passed: Boolean = false,
+)
+
+/** One profile taking part in a room. */
+@Serializable
+data class RoomParticipant(val profile: String, val glyph: String)
+
+/** A host-side group chat between the operator and several profiles (P21). */
+@Serializable
+data class RoomRef(
+    val id: String,
+    val title: String,
+    val participants: List<RoomParticipant> = emptyList(),
+    val maxRounds: Int = 2,
+    val seq: Int = 0,
+    val messageCount: Int = 0,
+    val busy: Boolean = false,
+    /** Profile currently taking a turn, when [busy]. */
+    val speaking: String? = null,
+    val updatedAtEpochMs: Long = 0L,
+    val lastText: String = "",
 )
 
 @Serializable
@@ -135,13 +159,22 @@ data class SessionChange(
 )
 
 sealed class ChatEvent {
-    data class AssistantDelta(val text: String) : ChatEvent()
-    data class ToolStarted(val name: String, val detail: String) : ChatEvent()
-    data class ToolCompleted(val name: String, val detail: String, val durationMs: Long = 0) : ChatEvent()
+    /** [speaker] is set only for room turns (the profile talking). */
+    data class AssistantDelta(val text: String, val speaker: String? = null) : ChatEvent()
+    data class ToolStarted(val name: String, val detail: String, val speaker: String? = null) : ChatEvent()
+    data class ToolCompleted(val name: String, val detail: String, val durationMs: Long = 0, val speaker: String? = null) : ChatEvent()
     data class Approval(val prompt: ApprovalPrompt) : ChatEvent()
     data class PromptExpired(val requestId: String) : ChatEvent()
     data class Rewound(val userRowIds: List<Long?>) : ChatEvent()
     data object Completed : ChatEvent()
+
+    // Room-only events (P21).
+    /** A participant is about to speak; [turnId] keys that participant's streaming segment. */
+    data class TurnStarted(val speaker: String, val turnId: String, val round: Int) : ChatEvent()
+    /** A participant finished; the segment is closed. [passed] = replied PASS. */
+    data class TurnEnded(val speaker: String, val turnId: String, val seq: Int, val passed: Boolean, val error: String) : ChatEvent()
+    /** Another client posted as the operator (echo); dedupe by [seq]. */
+    data class RoomPost(val seq: Int, val text: String) : ChatEvent()
 }
 
 sealed class BusFrame {

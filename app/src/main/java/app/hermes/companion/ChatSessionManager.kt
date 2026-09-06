@@ -710,6 +710,8 @@ internal fun applyEvent(state: CompanionState, event: ChatEvent, assistantId: St
                 },
             )
         }
+        // Room-only events are reduced by RoomSessionManager; a single-agent thread never sees them.
+        is ChatEvent.TurnStarted, is ChatEvent.TurnEnded, is ChatEvent.RoomPost -> state
     }
 
 internal fun finishStream(state: CompanionState, assistantId: String): CompanionState =

@@ -26,6 +26,7 @@ import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.DeviceArm
 import app.hermes.companion.model.GatewayChoice
 import app.hermes.companion.model.SavedGateway
+import app.hermes.companion.model.RoomRef
 import app.hermes.companion.model.SessionRef
 import app.hermes.companion.voice.VoiceStreamEngine
 import app.hermes.companion.voice.WakeWordService
@@ -74,6 +75,7 @@ class CompanionViewModel(
     private var connectJob: Job? = null
     private var probeJob: Job? = null
     private val chat = ChatSessionManager(clients, cache, outbox, _state, viewModelScope)
+    private val rooms = RoomSessionManager(clients, _state, viewModelScope)
     private val voiceStream = VoiceStreamEngine(
         context = runtime,
         scope = viewModelScope,
@@ -160,6 +162,8 @@ class CompanionViewModel(
                     )
                 }
                 sync.startWatch(origin, profileId)
+                rooms.refreshRooms()
+            rooms.refreshRooms()
             }
             val session = _state.value.sessions.find { it.id == sessionId }
                 ?: SessionRef(
@@ -454,8 +458,20 @@ class CompanionViewModel(
     fun openSession(session: SessionRef) = chat.openSession(session)
     fun closeChat() {
         voiceStream.stopStream()
-        chat.closeChat()
+        if (_state.value.inRoom) rooms.closeRoom() else chat.closeChat()
     }
+
+    // ---- Agent rooms (P21) ----
+    fun refreshRooms() = rooms.refreshRooms()
+    fun openRoom(room: RoomRef) {
+        voiceStream.stopStream()
+        if (_state.value.openSessionId != null) chat.closeChat()
+        rooms.openRoom(room)
+    }
+    fun toggleRoomCreate(open: Boolean) = rooms.toggleCreateSheet(open)
+    fun createRoom(title: String, participants: List<String>, maxRounds: Int) = rooms.createRoom(title, participants, maxRounds)
+    fun deleteRoom(room: RoomRef) = rooms.deleteRoom(room)
+    fun mentionRoom(glyph: String) = rooms.mention(glyph)
     fun loadOlder() = chat.loadOlder()
     fun respondApproval(decision: String) = chat.respondApproval(decision)
     fun newThread() = chat.newThread()
@@ -464,8 +480,8 @@ class CompanionViewModel(
     fun cancelDelete() = chat.cancelDelete()
     fun beginRewind(message: ChatMessage) = chat.beginRewind(message)
     fun cancelRewind() = chat.cancelRewind()
-    fun send() = chat.send()
-    fun interrupt() = chat.interrupt()
+    fun send() = if (_state.value.inRoom) rooms.post() else chat.send()
+    fun interrupt() = if (_state.value.inRoom) rooms.interrupt() else chat.interrupt()
 
     fun toggleAttach() {
         _state.update { it.copy(attachOpen = !it.attachOpen) }
@@ -567,6 +583,8 @@ class CompanionViewModel(
             _state.update { it.copy(loading = true, error = null, originInput = origin, hostName = runtime.hostName(origin)) }
             var gatedHost = _state.value.authRequired
             val api = client(origin)
+            // Paired phones authenticate plugin routes (rooms, host tools) with the device credential.
+            deviceCreds.load(origin)?.let { api.companionAuth = "${it.deviceId}:${it.credential}" }
             val savedOperator = operatorCreds.load(origin)
             try {
                 val status = api.probe(origin)
@@ -717,6 +735,7 @@ class CompanionViewModel(
                 )
             }
             sync.startWatch(origin, profileId)
+            rooms.refreshRooms()
             try {
                 val sessions = SessionLists.normalize(
                     cache.readSessions(origin, profileId) {
@@ -737,6 +756,7 @@ class CompanionViewModel(
     fun reloadSessions() {
         val origin = _state.value.origin ?: return
         val profileId = _state.value.activeProfileId ?: return
+        rooms.refreshRooms()
         viewModelScope.launch {
             _state.update { it.copy(sessionsLoading = true, error = null) }
             try {
