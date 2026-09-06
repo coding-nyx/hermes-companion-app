@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 import subprocess
 import tempfile
 import threading
@@ -122,13 +123,13 @@ def _resolve_hermes_bin() -> str | None:
     return None
 
 
+
 def _hermes_argv(profile: str) -> list[str]:
     hermes_bin = _resolve_hermes_bin()
     if hermes_bin:
         argv = [hermes_bin]
     else:
-        # Last resort — prefer the Hermes venv interpreter if present.
-        py = os.environ.get("HERMES_PYTHON", "").strip()
+        py = os.environ.get("HERMES_PYTHON", "").strip() or os.environ.get("PYTHON", "").strip()
         if not py:
             for cand in (
                 Path.home() / ".hermes/hermes-agent/.venv/bin/python",
@@ -138,11 +139,13 @@ def _hermes_argv(profile: str) -> list[str]:
                 if cand.is_file():
                     py = str(cand)
                     break
-        argv = [py or os.environ.get("PYTHON", "python3"), "-m", "hermes_cli.main"]
+        if not py:
+            import sys
+            py = sys.executable or "python3"
+        argv = [py, "-m", "hermes_cli.main"]
     if profile and profile != "default":
         argv += ["-p", profile]
     return argv
-
 
 def _read_telegram_home_chat(profile_home: Path) -> str | None:
     path = profile_home / "channel_directory.json"
@@ -310,6 +313,7 @@ def _wake_telegram(profile: str, message: str, profile_home: Path) -> None:
         return
     deliver = f"telegram:{chat_id}"
     name = f"companion-notif-wake-{int(time.time())}"
+    # cron create: schedule + optional positional prompt; no --accept-hooks on this subcommand.
     argv_create = _hermes_argv(profile) + [
         "cron",
         "create",
@@ -320,7 +324,6 @@ def _wake_telegram(profile: str, message: str, profile_home: Path) -> None:
         name,
         "--deliver",
         deliver,
-        "--accept-hooks",
         message,
     ]
     env = os.environ.copy()
@@ -341,7 +344,7 @@ def _wake_telegram(profile: str, message: str, profile_home: Path) -> None:
                 _wake_cli(profile, message, profile_home)
                 return
             # Prefer immediate tick so we don't wait for the scheduler interval.
-            tick = _hermes_argv(profile) + ["cron", "tick", "--accept-hooks"]
+            tick = _hermes_argv(profile) + ["cron", "tick"]
             subprocess.run(tick, capture_output=True, text=True, timeout=30, env=env)
             logger.info("agent wake telegram cron created+ticked profile=%s deliver=%s", profile, deliver)
         except Exception as exc:
