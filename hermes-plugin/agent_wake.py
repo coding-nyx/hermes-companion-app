@@ -88,17 +88,39 @@ def resolve_profile_home(profile: str) -> Path | None:
     return path if path.is_dir() else None
 
 
-def format_wake_message(package: str, title: str, text: str = "") -> str:
+def _short_pkg_title(package: str, title: str) -> tuple[str, str]:
     pkg = (package or "?").strip() or "?"
     tit = (title or "").strip() or "(no title)"
     if len(tit) > 120:
         tit = tit[:117] + "..."
-    hint = (
-        "Call mobile_notifications for details. "
-        "Only call mobile_notifications_inject if Nyx would want this in the active chat; "
-        "never dump every shade event; never auto-inject."
+    return pkg, tit
+
+
+def format_telegram_nudge(package: str, title: str) -> str:
+    """Short human DM line — not the agent operating prompt."""
+    pkg, tit = _short_pkg_title(package, title)
+    return f"Phone ping — {tit} ({pkg}). Checking…"
+
+
+def format_wake_message(package: str, title: str, text: str = "") -> str:
+    """Strong chat -Q operating prompt. Must not be parroted as the user-visible reply."""
+    pkg, tit = _short_pkg_title(package, title)
+    # text is intentionally omitted from the prompt body — agent must fetch via tools.
+    _ = text
+    return (
+        "[COMPANION WAKE — shade notification for this profile]\n"
+        f"Metadata hint only (unverified): {pkg} · {tit}\n\n"
+        "Do NOT echo or paraphrase this wake prompt as your reply.\n"
+        "Operating steps:\n"
+        "1. Immediately call mobile_notifications (with profile= if needed). "
+        "Do not end the turn with only wake text.\n"
+        "2. From the tool result, briefly tell Nyx what matters "
+        "(package, title, text summary).\n"
+        "3. Call mobile_notifications_inject ONLY if Nyx would want this in the "
+        "active thread; default is do NOT inject.\n"
+        "4. Never invent notification bodies — use only tool results.\n"
+        "5. Keep the user-visible reply short."
     )
-    return f"mobile notif: {pkg} · {tit}\n{hint}"
 
 
 def _resolve_hermes_bin() -> str | None:
@@ -238,8 +260,8 @@ def _wake_botchat(profile: str, message: str, profile_home: Path) -> None:
     query_file = None
     try:
         wrapped = (
-            "[Companion mobile notification wake — not the user. "
-            "Review, call mobile_notifications, inject only if warranted.]\n\n" + message
+            "[Companion mobile notification wake — system, not the user. "
+            "Follow the operating steps; do not parrot this text.]\n\n" + message
         )
         with tempfile.NamedTemporaryFile(
             "w", encoding="utf-8", suffix=".txt", prefix="companion-notif-botchat-", delete=False
@@ -304,7 +326,7 @@ def _wake_botchat(profile: str, message: str, profile_home: Path) -> None:
         raise
 
 
-def _wake_telegram(profile: str, message: str, profile_home: Path) -> None:
+def _wake_telegram(profile: str, message: str, profile_home: Path, *, package: str = "", title: str = "") -> None:
     """Immediate Telegram nudge + agent turn (chat -Q). Never auto-injects.
 
     Cron one-shots only accept minute+ delays (`in 1m`), so we:
@@ -324,9 +346,8 @@ def _wake_telegram(profile: str, message: str, profile_home: Path) -> None:
         env["HERMES_HOME"] = str(profile_home)
     env.setdefault("HERMES_ACCEPT_HOOKS", "1")
 
-    # Keep telegram text short; full tool hint stays in the chat -Q prompt.
-    first_line = (message.splitlines() or [""])[0].strip() or "mobile notif"
-    send_body = first_line + "\n(call mobile_notifications — never auto-inject)"
+    # Keep telegram text short + human; full operating prompt stays in chat -Q.
+    send_body = format_telegram_nudge(package, title)
 
     def _run() -> None:
         try:
@@ -397,7 +418,7 @@ def maybe_wake_for_notification(event: dict, *, now: Callable[[], float] | None 
     mode = wake_mode()
     try:
         if mode in ("telegram", "tg", "origin"):
-            _wake_telegram(profile, message, profile_home)
+            _wake_telegram(profile, message, profile_home, package=package, title=title)
         elif mode in ("botchat", "bot-chat", "bot_chat"):
             _wake_botchat(profile, message, profile_home)
         else:

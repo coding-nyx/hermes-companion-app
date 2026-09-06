@@ -14,6 +14,7 @@ from unittest import mock
 
 from agent_wake import (
     _reset_wake_state_for_tests,
+    format_telegram_nudge,
     format_wake_message,
     maybe_wake_for_notification,
     wake_enabled,
@@ -33,9 +34,21 @@ class AgentWakeUnitTests(unittest.TestCase):
 
     def test_format_wake_message(self):
         msg = format_wake_message("com.example.app", "Hello")
-        self.assertIn("mobile notif: com.example.app · Hello", msg)
+        self.assertIn("com.example.app · Hello", msg)
         self.assertIn("mobile_notifications", msg)
-        self.assertIn("never auto-inject", msg.lower())
+        self.assertIn("Do NOT echo", msg)
+        self.assertIn("Immediately call mobile_notifications", msg)
+        self.assertIn("Never invent notification bodies", msg)
+        self.assertIn("default is do NOT inject", msg)
+        # Must not look like a parrot-able one-liner alone
+        self.assertNotEqual(msg.strip(), "mobile notif: com.example.app · Hello")
+
+    def test_format_telegram_nudge(self):
+        nudge = format_telegram_nudge("com.example.app", "Hello")
+        self.assertIn("Hello", nudge)
+        self.assertIn("com.example.app", nudge)
+        self.assertNotIn("never auto-inject", nudge.lower())
+        self.assertNotIn("OPERATING", nudge)
 
     def test_wake_disabled(self):
         os.environ["HERMES_COMPANION_NOTIF_WAKE"] = "0"
@@ -97,6 +110,7 @@ class AgentWakeUnitTests(unittest.TestCase):
                 self.assertTrue(maybe_wake_for_notification(ev, now=lambda: 1070.0))
             self.assertEqual(len(calls), 2)
             self.assertIn("com.android.shell · Smoke", calls[0][1])
+            self.assertIn("Immediately call mobile_notifications", calls[0][1])
 
 
 class RelayWakeIntegrationTests(unittest.TestCase):
