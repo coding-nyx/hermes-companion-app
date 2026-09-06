@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.sp
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
@@ -43,6 +44,7 @@ fun DeviceScreen(
     phase: PairingPhase,
     code: String,
     deviceId: String?,
+    deviceLabel: String = "",
     deviceProfileId: String?,
     error: String?,
     laneOpen: Boolean = false,
@@ -73,6 +75,7 @@ fun DeviceScreen(
     onToggleBiometricLock: () -> Unit = {},
     onAddProtected: (String) -> Unit = {},
     onRemoveProtected: (String) -> Unit = {},
+    onRenameDevice: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(
@@ -160,6 +163,37 @@ fun DeviceScreen(
                 Spacer(Modifier.height(CompanionSpace.Md))
                 if (!deviceId.isNullOrBlank()) {
                     Text(text = deviceId, style = CompanionType.Mono, modifier = Modifier.testTag("device.id"))
+                }
+                var labelDraft by rememberSaveable(deviceId, deviceLabel) { mutableStateOf(deviceLabel) }
+                val dismissKeyboard = rememberDismissKeyboard()
+                Spacer(Modifier.height(CompanionSpace.Sm))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
+                ) {
+                    HairlineField(
+                        value = labelDraft,
+                        onValueChange = { labelDraft = it },
+                        modifier = Modifier.weight(1f).testTag("device.label"),
+                        keyboardType = KeyboardType.Text,
+                        placeholder = "friendly name",
+                        onDone = {
+                            onRenameDevice(labelDraft)
+                            dismissKeyboard()
+                        },
+                    )
+                    Text(
+                        text = "SAVE",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                        modifier = Modifier
+                            .clickable {
+                                onRenameDevice(labelDraft)
+                                dismissKeyboard()
+                            }
+                            .padding(CompanionSpace.Sm)
+                            .testTag("device.label.save"),
+                    )
                 }
                 if (!deviceProfileId.isNullOrBlank()) {
                     Text(text = deviceProfileId, style = CompanionType.MonoSmall)

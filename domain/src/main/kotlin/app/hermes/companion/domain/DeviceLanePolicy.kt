@@ -28,12 +28,44 @@ object DeviceLanePolicy {
     )
 
     /**
-     * Blocklist of packages where Hermes Companion hands are restricted.
-     * Empty by default so Hermes Companion controls everything on the device.
-     * Everything is allowed by default; only packages explicitly added by the operator
-     * to the blocklist will restrict control.
+     * Minimal fail-closed denylist (exact id or `prefix.*`). Custom rules merge via [isProtected].
+     * Kept small on purpose — Settings / permission controller / installer / keychain plus
+     * common authenticators and password managers. Full banking list stays out of tree.
      */
-    val PROTECTED_PACKAGES: Set<String> = emptySet()
+    val PROTECTED_PACKAGES = setOf(
+        // platform surfaces that grant power
+        "com.android.settings",
+        "com.android.systemui",
+        "com.android.packageinstaller",
+        "com.google.android.packageinstaller",
+        "com.android.permissioncontroller",
+        "com.google.android.permissioncontroller",
+        "com.android.keychain",
+        "com.android.certinstaller",
+        "com.samsung.android.settings.*",
+        // authenticators
+        "com.google.android.apps.authenticator2",
+        "com.authy.authy",
+        "com.azure.authenticator",
+        "com.duosecurity.duomobile",
+        "com.beemdevelopment.aegis",
+        "org.fedorahosted.freeotp",
+        "com.yubico.yubioath",
+        "com.okta.android.auth",
+        // password managers
+        "com.onepassword.android",
+        "com.agilebits.onepassword",
+        "com.lastpass.lpandroid",
+        "com.bitwarden.mobile",
+        "com.x8bit.bitwarden",
+        "com.kunzisoft.keepass.free",
+        "com.kunzisoft.keepass.libre",
+        "keepass2android.*",
+        "com.dashlane",
+        "proton.android.pass",
+        "com.samsung.android.samsungpass",
+        "com.samsung.android.authfw",
+    )
 
     private val PACKAGE_RE = Regex("^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z0-9_]+)+$")
 
@@ -86,9 +118,29 @@ object DeviceLanePolicy {
         return "$base/companion/device/ws"
     }
 
-    fun registerJson(deviceId: String, profileId: String, credential: String, capabilities: List<String> = CAPABILITIES): String {
+    fun registerJson(
+        deviceId: String,
+        profileId: String,
+        credential: String,
+        capabilities: List<String> = CAPABILITIES,
+        deviceName: String = "",
+        model: String = "",
+        manufacturer: String = "",
+        osVersion: String = "",
+        protectedPackages: Collection<String> = emptyList(),
+    ): String {
         val caps = filterCapabilities(capabilities).joinToString(",") { "\"$it\"" }
-        return """{"protocol_version":$PROTOCOL_VERSION,"device_id":${q(deviceId)},"profile":${q(profileId)},"credential":${q(credential)},"capabilities":[$caps]}"""
+        val protected = protectedPackages.map { it.trim().lowercase() }.filter { it.isNotBlank() }
+            .distinct().joinToString(",") { q(it) }
+        return buildString {
+            append("""{"protocol_version":$PROTOCOL_VERSION,"device_id":${q(deviceId)},"profile":${q(profileId)},"credential":${q(credential)},"capabilities":[$caps]""")
+            if (deviceName.isNotBlank()) append(""","device_name":${q(deviceName)}""")
+            if (model.isNotBlank()) append(""","model":${q(model)}""")
+            if (manufacturer.isNotBlank()) append(""","manufacturer":${q(manufacturer)}""")
+            if (osVersion.isNotBlank()) append(""","os_version":${q(osVersion)}""")
+            if (protected.isNotEmpty()) append(""","protected_packages":[$protected]""")
+            append("}")
+        }
     }
 
     fun reject(

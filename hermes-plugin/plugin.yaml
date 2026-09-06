@@ -7,6 +7,8 @@ platforms:
   - linux
   - macos
 provides_tools:
+  - mobile_devices
+  - mobile_select_device
   - mobile_status
   - mobile_arm
   - mobile_disarm

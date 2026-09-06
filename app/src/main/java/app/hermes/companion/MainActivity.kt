@@ -74,6 +74,8 @@ class MainActivity : FragmentActivity() {
                 val reconnect by reconnectNonce.collectAsStateWithLifecycle()
                 val overlay = remember { LiveOverlay(app) }
                 val voiceManager = remember { VoiceInputManager(this@MainActivity) }
+                // Activity-result pickers briefly ON_STOP the activity; skip biometric lock while outstanding.
+                var pickerOutstanding by remember { mutableStateOf(false) }
                 DisposableEffect(Unit) {
                     onDispose {
                         overlay.hide()
@@ -98,12 +100,12 @@ class MainActivity : FragmentActivity() {
                 }
 
                 val lifecycleOwner = LocalLifecycleOwner.current
-                DisposableEffect(lifecycleOwner) {
+                DisposableEffect(lifecycleOwner, pickerOutstanding) {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_START) vm.setFleetHealthForeground(true)
                         if (event == Lifecycle.Event.ON_STOP) {
                             vm.setFleetHealthForeground(false)
-                            vm.lockIfEnabled()
+                            if (!pickerOutstanding) vm.lockIfEnabled()
                         }
                         if (event == Lifecycle.Event.ON_RESUME) {
                             val enabled = Settings.Secure.getString(
@@ -168,6 +170,7 @@ class MainActivity : FragmentActivity() {
                 val photoPicker = rememberLauncherForActivityResult(
                     ActivityResultContracts.PickVisualMedia(),
                 ) { uri ->
+                    pickerOutstanding = false
                     uri?.let {
                         vm.queueAttachment(
                             it,
@@ -179,6 +182,7 @@ class MainActivity : FragmentActivity() {
                 val videoPicker = rememberLauncherForActivityResult(
                     ActivityResultContracts.PickVisualMedia(),
                 ) { uri ->
+                    pickerOutstanding = false
                     uri?.let {
                         vm.queueAttachment(
                             it,
@@ -190,6 +194,7 @@ class MainActivity : FragmentActivity() {
                 val filePicker = rememberLauncherForActivityResult(
                     ActivityResultContracts.OpenDocument(),
                 ) { uri ->
+                    pickerOutstanding = false
                     uri?.let {
                         runCatching {
                             contentResolver.takePersistableUriPermission(
@@ -208,6 +213,7 @@ class MainActivity : FragmentActivity() {
                 val takePicture = rememberLauncherForActivityResult(
                     ActivityResultContracts.TakePicture(),
                 ) { ok ->
+                    pickerOutstanding = false
                     if (ok) cameraUri?.let { vm.queueAttachment(it, "image/jpeg", "camera.jpg") }
                 }
                 val launchCamera: () -> Unit = {
@@ -219,7 +225,7 @@ class MainActivity : FragmentActivity() {
                 val cameraPerm = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission(),
                 ) { granted ->
-                    if (granted) launchCamera()
+                    if (granted) launchCamera() else pickerOutstanding = false
                 }
 
                 val gate = remember { BiometricGate(this@MainActivity) }
@@ -308,6 +314,7 @@ class MainActivity : FragmentActivity() {
                     onNtfyTopicChange = vm::onNtfyTopicChange,
                     onSaveNtfy = vm::saveNtfy,
                     onToggleStay = vm::toggleStayConnected,
+                    onDisconnect = vm::disconnect,
                     onToggleAwakeOnVoice = vm::toggleAwakeOnVoice,
                     onToggleLockedAccess = vm::toggleLockedAccess,
                     onToggleBiometricLock = {
@@ -318,6 +325,7 @@ class MainActivity : FragmentActivity() {
                             onFail = { msg -> if (msg.isNotBlank()) vm.noteError(msg) },
                         )
                     },
+                    onRenameDevice = vm::renameDeviceLabel,
                     onAddProtected = vm::addProtectedPackage,
                     onRemoveProtected = { pkg ->
                         gate.authenticate(
@@ -383,11 +391,13 @@ class MainActivity : FragmentActivity() {
                     },
                     onToggleAttach = vm::toggleAttach,
                     onPickPhoto = {
+                        pickerOutstanding = true
                         photoPicker.launch(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
                         )
                     },
                     onPickCamera = {
+                        pickerOutstanding = true
                         if (ContextCompat.checkSelfPermission(
                                 this@MainActivity,
                                 Manifest.permission.CAMERA,
@@ -399,11 +409,15 @@ class MainActivity : FragmentActivity() {
                         }
                     },
                     onPickVideo = {
+                        pickerOutstanding = true
                         videoPicker.launch(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly),
                         )
                     },
-                    onPickFile = { filePicker.launch(arrayOf("*/*")) },
+                    onPickFile = {
+                        pickerOutstanding = true
+                        filePicker.launch(arrayOf("*/*"))
+                    },
                     onRemoveAttachment = vm::removeAttachment,
                     onOpenMedia = { openMedia(it) },
                     onFetchMedia = vm::fetchMedia,

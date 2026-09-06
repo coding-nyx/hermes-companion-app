@@ -1,5 +1,7 @@
 package app.hermes.companion
 
+import android.os.Build
+
 import android.content.Intent
 import android.util.Base64
 import androidx.core.content.ContextCompat
@@ -45,6 +47,7 @@ data class DeviceNodeState(
     val pairingPhase: PairingPhase = PairingPhase.IDLE,
     val pairingCode: String = "",
     val deviceId: String? = null,
+    val deviceLabel: String = "",
     val deviceProfileId: String? = null,
     val laneOpen: Boolean = false,
     val a11yBound: Boolean = false,
@@ -104,6 +107,17 @@ class DeviceNodeCoordinator(
     /** Every paired host keeps its lane, so Hermes on lab can still move the phone while hub is active. */
     fun startAllLanes() {
         deviceCreds.loadAll().forEach { startLane(it.origin) }
+    }
+
+    /** Bounce open lanes so register re-sends metadata / custom denylist. */
+    private fun refreshLaneRegistrations() {
+        val open = _state.value.openLanes.toList()
+        val byKey = deviceCreds.loadAll().associateBy { HostClientPool.key(it.origin) }
+        for (key in open) {
+            val cred = byKey[key] ?: continue
+            stopLane(cred.origin)
+            startLane(cred.origin)
+        }
     }
 
     // ---- operator lifecycle -------------------------------------------------------------
@@ -200,12 +214,34 @@ class DeviceNodeCoordinator(
         val next = (sticky.protectedPackages + pkg).toSortedSet()
         sticky.protectedPackages = next
         _state.update { it.copy(protectedCustom = next.toList(), protectedError = null) }
+        refreshLaneRegistrations()
     }
 
     fun removeProtectedPackage(pkg: String) {
         val next = (sticky.protectedPackages - pkg).toSortedSet()
         sticky.protectedPackages = next
         _state.update { it.copy(protectedCustom = next.toList(), protectedError = null) }
+        refreshLaneRegistrations()
+    }
+
+    /** Friendly label for this phone on the bound host (A6.7). */
+    fun renameDeviceLabel(name: String) {
+        val origin = origin ?: return
+        val id = _state.value.deviceId ?: return
+        val clean = name.trim()
+        if (clean.isBlank()) {
+            _state.update { it.copy(protectedError = "name required") }
+            return
+        }
+        scope.launch {
+            runCatching { client(origin).renameDevice(origin, id, clean) }
+                .onSuccess {
+                    _state.update { it.copy(deviceLabel = clean, protectedError = null) }
+                }
+                .onFailure { e ->
+                    _errors.tryEmit(e.message ?: "rename failed")
+                }
+        }
     }
 
     // ---- pairing ------------------------------------------------------------------------------
@@ -368,7 +404,24 @@ class DeviceNodeCoordinator(
             var backoff = 1_000L
             while (isActive) {
                 try {
-                    client(laneOrigin).openDeviceLane(laneOrigin, cred)
+                    val label = android.provider.Settings.Global.getString(
+                        app.contentResolver,
+                        "device_name",
+                    ).orEmpty().ifBlank {
+                        Build.MODEL.orEmpty().ifBlank { "Android" }
+                    }
+                    client(laneOrigin).openDeviceLane(
+                        laneOrigin,
+                        cred,
+                        deviceName = _state.value.deviceLabel.ifBlank { label },
+                        model = Build.MODEL.orEmpty(),
+                        manufacturer = Build.MANUFACTURER.orEmpty(),
+                        osVersion = "Android ${Build.VERSION.RELEASE}",
+                        protectedPackages = sticky.protectedPackages,
+                    )
+                    if (_state.value.deviceLabel.isBlank()) {
+                        _state.update { it.copy(deviceLabel = label) }
+                    }
                     markLane(key, open = true)
                     backoff = 1_000L
                     client(laneOrigin).deviceCommands().collect { handleCommand(laneOrigin, it) }

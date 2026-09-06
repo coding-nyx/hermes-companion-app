@@ -109,11 +109,13 @@ fun CompanionShell(
     onNtfyTopicChange: (String) -> Unit = {},
     onSaveNtfy: () -> Unit = {},
     onToggleStay: () -> Unit = {},
+    onDisconnect: () -> Unit = {},
     onToggleAwakeOnVoice: () -> Unit = {},
     onToggleLockedAccess: () -> Unit = {},
     onToggleBiometricLock: () -> Unit = {},
     onAddProtected: (String) -> Unit = {},
     onRemoveProtected: (String) -> Unit = {},
+    onRenameDevice: (String) -> Unit = {},
     onConfirmDeepLink: () -> Unit = {},
     onDismissDeepLink: () -> Unit = {},
     onExecuteTerminal: (String) -> Unit = {},
@@ -235,7 +237,7 @@ fun CompanionShell(
                 onToggleStay = onToggleStay,
                 onNtfyTopicChange = onNtfyTopicChange,
                 onSaveNtfy = onSaveNtfy,
-                onDisconnect = {},
+                onDisconnect = onDisconnect,
                 onDismiss = { showSettingsSheet = false },
             )
         }
@@ -359,6 +361,7 @@ fun CompanionShell(
                     phase = state.pairingPhase,
                     code = state.pairingCode,
                     deviceId = state.deviceId,
+                    deviceLabel = state.deviceLabel,
                     deviceProfileId = state.deviceProfileId,
                     error = state.error,
                     laneOpen = state.deviceLane,
@@ -389,6 +392,7 @@ fun CompanionShell(
                     protectedError = state.protectedError,
                     onAddProtected = onAddProtected,
                     onRemoveProtected = onRemoveProtected,
+                    onRenameDevice = onRenameDevice,
                     modifier = body,
                 )
             }

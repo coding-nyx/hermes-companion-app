@@ -7,12 +7,14 @@ from pathlib import Path
 
 from broker import Broker
 from pairing import PairingStore, default_store_path
-from schemas import APPS, ARM, CLICK, DISARM, OPEN, PRESS, SCREENSHOT, SCROLL, SNAPSHOT, STATUS, SWIPE, TYPE, WAIT
-from tools import TOOLSET, armed_hint, make_handlers
+from schemas import APPS, ARM, CLICK, DEVICES, DISARM, OPEN, PRESS, SCREENSHOT, SCROLL, SELECT_DEVICE, SNAPSHOT, STATUS, SWIPE, TYPE, WAIT
+from tools import TOOLSET, armed_hint, bind_stores, make_handlers
 
 pairing_store = PairingStore(path=default_store_path())
 broker = Broker()
+broker.extra_protected_fn = pairing_store.all_extra_protected
 HANDLERS = make_handlers(broker)
+bind_stores(pairing_store)
 
 _SKILL = Path(__file__).resolve().parent / "skills" / "hermes-companion" / "SKILL.md"
 
@@ -24,8 +26,8 @@ def _prompt(_info=None) -> str:
         "Android companion plugin is loaded. Pair from the phone Device tab, then `hermes companion approve CODE`."
     )
     return (
-        "Companion tools: mobile_status, mobile_arm, mobile_disarm, mobile_snapshot, "
-        "mobile_click, mobile_type, mobile_swipe, mobile_scroll, mobile_press, "
+        "Companion tools: mobile_devices, mobile_select_device, mobile_status, mobile_arm, mobile_disarm, "
+        "mobile_snapshot, mobile_click, mobile_type, mobile_swipe, mobile_scroll, mobile_press, "
         "mobile_open_app, mobile_apps, mobile_wait, mobile_screenshot. "
         f"{hint} Never use banking/authenticator/Settings. Fail closed: "
         "no_device, disarmed, a11y_unavailable, protected_package."
@@ -33,7 +35,7 @@ def _prompt(_info=None) -> str:
 
 
 def register(ctx):
-    for schema in (STATUS, ARM, DISARM, SNAPSHOT, CLICK, TYPE, PRESS, SWIPE, SCROLL, OPEN, APPS, WAIT, SCREENSHOT):
+    for schema in (DEVICES, SELECT_DEVICE, STATUS, ARM, DISARM, SNAPSHOT, CLICK, TYPE, PRESS, SWIPE, SCROLL, OPEN, APPS, WAIT, SCREENSHOT):
         ctx.register_tool(
             name=schema["name"],
             toolset=TOOLSET,
@@ -52,7 +54,7 @@ def register(ctx):
             help="Pair and manage the Android Hermes Companion",
             setup_fn=setup,
             handler_fn=handle,
-            description="approve/list/revoke/lanes for the paired phone",
+            description="approve/list/revoke/lanes/default/rename for paired phones",
         )
     if hasattr(ctx, "register_command"):
         ctx.register_command("companion", lambda raw: HANDLERS["mobile_status"]({}), description="Android companion status")
@@ -62,6 +64,7 @@ def register(ctx):
             from live import attach_inprocess
 
             start_background(state=RelayState(pairing=pairing_store))
+            bind_stores(pairing_store, CompanionHandler.state)
             attach_inprocess(broker, CompanionHandler.state)
         except OSError:
             from live import attach_http

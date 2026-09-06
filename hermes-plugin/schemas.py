@@ -3,7 +3,30 @@
 STATUS = {
     "name": "mobile_status",
     "description": "Paired Android device: armed, foreground app, a11y, overlay. Fails if unpaired.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "device": {"type": "string", "description": "Device id or friendly name. Optional when exactly one device is connected or a default is set."},
+        },
+    },
+}
+
+DEVICES = {
+    "name": "mobile_devices",
+    "description": "List paired/connected Android companions with name, model, armed, foreground app, is_default, lane.",
     "parameters": {"type": "object", "properties": {}},
+}
+
+SELECT_DEVICE = {
+    "name": "mobile_select_device",
+    "description": "Set the default target device for subsequent mobile_* calls that omit device.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "device": {"type": "string", "description": "Device id or friendly name."},
+        },
+        "required": ["device"],
+    },
 }
 
 SNAPSHOT = {
@@ -12,6 +35,7 @@ SNAPSHOT = {
     "parameters": {
         "type": "object",
         "properties": {
+            "device": {"type": "string", "description": "Device id or friendly name. Optional when exactly one device is connected or a default is set."},
             "include_system_ui": {"type": "boolean", "default": False},
         },
     },
@@ -23,6 +47,7 @@ CLICK = {
     "parameters": {
         "type": "object",
         "properties": {
+            "device": {"type": "string", "description": "Device id or friendly name. Optional when exactly one device is connected or a default is set."},
             "ref": {"type": "string"},
             "x": {"type": "number"},
             "y": {"type": "number"},
@@ -35,7 +60,8 @@ TYPE = {
     "description": "Type into the focused field. Never log the text.",
     "parameters": {
         "type": "object",
-        "properties": {"text": {"type": "string"}},
+        "properties": {
+            "device": {"type": "string", "description": "Device id or friendly name."},"text": {"type": "string"}},
         "required": ["text"],
     },
 }
@@ -46,6 +72,7 @@ PRESS = {
     "parameters": {
         "type": "object",
         "properties": {
+            "device": {"type": "string", "description": "Device id or friendly name. Optional when exactly one device is connected or a default is set."},
             "key": {"type": "string", "enum": ["back", "home", "recents"]},
         },
         "required": ["key"],
@@ -58,6 +85,7 @@ SWIPE = {
     "parameters": {
         "type": "object",
         "properties": {
+            "device": {"type": "string", "description": "Device id or friendly name. Optional when exactly one device is connected or a default is set."},
             "x1": {"type": "number"},
             "y1": {"type": "number"},
             "x2": {"type": "number"},
@@ -76,6 +104,7 @@ SCROLL = {
     "parameters": {
         "type": "object",
         "properties": {
+            "device": {"type": "string", "description": "Device id or friendly name. Optional when exactly one device is connected or a default is set."},
             "direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
             "ref": {"type": "string"},
         },
@@ -88,7 +117,8 @@ OPEN = {
     "description": "Launch a package from a prior mobile_apps list. Blocked on protected packages.",
     "parameters": {
         "type": "object",
-        "properties": {"package": {"type": "string"}},
+        "properties": {
+            "device": {"type": "string", "description": "Device id or friendly name."},"package": {"type": "string"}},
         "required": ["package"],
     },
 }
@@ -96,7 +126,12 @@ OPEN = {
 APPS = {
     "name": "mobile_apps",
     "description": "Launchable packages on the paired device.",
-    "parameters": {"type": "object", "properties": {}},
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "device": {"type": "string", "description": "Device id or friendly name."},
+        },
+    },
 }
 
 WAIT = {
@@ -104,7 +139,8 @@ WAIT = {
     "description": "Pause up to 5 seconds while ARMED.",
     "parameters": {
         "type": "object",
-        "properties": {"ms": {"type": "integer", "minimum": 0, "maximum": 5000}},
+        "properties": {
+            "device": {"type": "string", "description": "Device id or friendly name."},"ms": {"type": "integer", "minimum": 0, "maximum": 5000}},
         "required": ["ms"],
     },
 }
@@ -112,13 +148,23 @@ WAIT = {
 ARM = {
     "name": "mobile_arm",
     "description": "Arm the paired Android companion so mobile_* gestures run. Fails if accessibility is off. Phone still fail-closes without a11y.",
-    "parameters": {"type": "object", "properties": {}},
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "device": {"type": "string", "description": "Device id or friendly name."},
+        },
+    },
 }
 
 DISARM = {
     "name": "mobile_disarm",
     "description": "Disarm the paired Android companion immediately. Same kill switch as the phone DISARM control and volume-down chord.",
-    "parameters": {"type": "object", "properties": {}},
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "device": {"type": "string", "description": "Device id or friendly name."},
+        },
+    },
 }
 
 SCREENSHOT = {
@@ -126,6 +172,7 @@ SCREENSHOT = {
     "description": "PNG screenshot, max edge 1080, no EXIF. Prefer mobile_snapshot.",
     "parameters": {
         "type": "object",
-        "properties": {"max_edge": {"type": "integer", "minimum": 64, "maximum": 1080}},
+        "properties": {
+            "device": {"type": "string", "description": "Device id or friendly name."},"max_edge": {"type": "integer", "minimum": 64, "maximum": 1080}},
     },
 }

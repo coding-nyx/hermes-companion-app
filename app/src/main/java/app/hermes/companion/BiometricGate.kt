@@ -21,7 +21,10 @@ class BiometricGate(private val activity: FragmentActivity) {
         onSuccess: () -> Unit,
         onFail: (String) -> Unit = {},
     ) {
-        if (busy) return
+        if (busy) {
+            onFail("biometric busy")
+            return
+        }
         if (!canAuthenticate()) {
             onFail("set a device PIN or biometric first")
             return

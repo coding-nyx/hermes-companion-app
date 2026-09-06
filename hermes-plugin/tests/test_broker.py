@@ -29,9 +29,17 @@ class BrokerTests(unittest.TestCase):
         result = broker.dispatch("device.snapshot")
         self.assertEqual(result["nodes"][0]["ref"], "e1")
 
-    def test_default_allows_all_apps(self):
+    def test_builtin_protects_settings(self):
         broker = Broker(
             device=MockDevice(armed=True, foreground_app="com.android.settings")
+        )
+        with self.assertRaises(BrokerError) as ctx:
+            broker.dispatch("device.snapshot")
+        self.assertEqual(ctx.exception.code, "protected_package")
+
+    def test_default_allows_unlisted_apps(self):
+        broker = Broker(
+            device=MockDevice(armed=True, foreground_app="org.telegram.messenger")
         )
         result = broker.dispatch("device.snapshot")
         self.assertEqual(result["nodes"][0]["ref"], "e1")

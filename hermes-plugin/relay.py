@@ -176,6 +176,8 @@ class RelayState:
         self.operator = operator or Operator()
         self.media = media or MediaStore()
         self.lanes: dict[str, object] = {}
+        # Per-device armed / foreground hints from phone status frames.
+        self.live_meta: dict[str, dict] = {}
         self.lock = threading.Lock()
         self.seq = 0
         self.pending: dict[str, threading.Event] = {}
@@ -228,7 +230,20 @@ class RelayState:
             return
         if not isinstance(payload, dict):
             return
-        if payload.get("type") != "mobile.controller.result":
+        kind = payload.get("type")
+        if kind == "mobile.controller.status":
+            device_id = str(payload.get("device_id") or "")
+            if device_id:
+                with self.lock:
+                    meta = self.live_meta.setdefault(device_id, {})
+                    if "armed" in payload:
+                        meta["armed"] = bool(payload["armed"])
+                    if "foreground_app" in payload:
+                        meta["foreground_app"] = str(payload.get("foreground_app") or "")
+                    if "a11y_bound" in payload:
+                        meta["a11y_bound"] = bool(payload["a11y_bound"])
+            return
+        if kind != "mobile.controller.result":
             return
         command_id = str(payload.get("command_id") or "")
         if not command_id:
@@ -490,6 +505,22 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 device = self.state.pairing.devices.get(device_id)
                 if device is None or device.credential != credential:
                     return self._json({"error": "unauthorized"}, 401)
+                extras = body.get("protected_packages")
+                if not isinstance(extras, list):
+                    extras = body.get("extra_protected")
+                if not isinstance(extras, list):
+                    extras = None
+                try:
+                    self.state.pairing.touch(
+                        device_id,
+                        name=body.get("device_name") or body.get("name"),
+                        model=body.get("model"),
+                        manufacturer=body.get("manufacturer"),
+                        os_version=body.get("os_version"),
+                        extra_protected=extras,
+                    )
+                except PairingError:
+                    pass
                 caps = [c for c in (body.get("capabilities") or []) if c in ALLOWLIST]
                 issued = self.state.tickets.mint(device_id, profile or device.profile, caps)
                 return self._json({"ticket": issued.ticket, "device_id": device_id, "ttl_ms": 30_000})
@@ -497,12 +528,25 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 body = self._read_json()
                 self.state.pairing.revoke(str(body.get("device_id") or ""))
                 return self._json({"ok": True})
+            if path == "/companion/device/default" and self.command == "POST":
+                body = self._read_json()
+                hint = str(body.get("device_id") or body.get("device") or "")
+                device = self.state.pairing.set_default(hint)
+                return self._json({"ok": True, "device_id": device.device_id, "name": self.state.pairing.display_name(device)})
+            if path == "/companion/device/rename" and self.command == "POST":
+                body = self._read_json()
+                device = self.state.pairing.rename(
+                    str(body.get("device_id") or ""),
+                    str(body.get("name") or body.get("device_name") or ""),
+                )
+                return self._json({"ok": True, "device_id": device.device_id, "name": device.name})
             if path == "/companion/device/list" and self.command == "GET":
                 return self._json({"devices": self.state.pairing.public_list()})
             if path == "/companion/device/lanes" and self.command == "GET":
                 with self.state.lock:
                     ids = list(self.state.lanes)
-                return self._json({"devices": ids})
+                    meta = {k: dict(v) for k, v in self.state.live_meta.items()}
+                return self._json({"devices": self.state.pairing.lane_descriptors(ids, meta)})
             if path == "/companion/device/command" and self.command == "POST":
                 body = self._read_json()
                 command_id = self.state.send_command(
@@ -613,6 +657,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
             with self.state.lock:
                 if self.state.lanes.get(issued.device_id) is self.wfile:
                     self.state.lanes.pop(issued.device_id, None)
+                    self.state.live_meta.pop(issued.device_id, None)
         self.close_connection = True
         return None
 
