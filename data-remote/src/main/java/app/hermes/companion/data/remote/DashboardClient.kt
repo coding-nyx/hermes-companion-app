@@ -300,14 +300,26 @@ class DashboardClient internal constructor(
     suspend fun listProfiles(origin: String): List<ProfileRef> =
         get(DashboardUrls.machine(origin, "/api/profiles")) { parseProfiles(it) }
 
-    /** Catch-up. Always scoped. Client still filters by profileId. */
+    /**
+     * Catch-up. Always scoped. Client still filters by profileId.
+     *
+     * Empty/null RPC → REST (mirrors [pageMessages] A18.8). Non-empty RPC that is
+     * shorter than REST → prefer REST: lab proxy `session.list` can return a short
+     * page while REST still has the full sticky-profile set.
+     */
     suspend fun listSessions(origin: String, profileId: String): List<SessionRef> {
         val socket = rpc
         if (socket != null && socket.isOpen) {
             val rpcRows = runCatching { listSessionsRpc(socket, profileId) }.getOrNull()
-            if (rpcRows != null) return rpcRows
+            if (rpcRows != null && rpcRows.isNotEmpty()) {
+                val restRows = runCatching { listSessionsRest(origin, profileId) }.getOrNull()
+                if (restRows != null && restRows.size > rpcRows.size) {
+                    return restRows.distinctBy { it.id }
+                }
+                return rpcRows.distinctBy { it.id }
+            }
         }
-        return listSessionsRest(origin, profileId)
+        return listSessionsRest(origin, profileId).distinctBy { it.id }
     }
 
     suspend fun listMessages(origin: String, sessionId: String, profileId: String): List<ChatMessage> =

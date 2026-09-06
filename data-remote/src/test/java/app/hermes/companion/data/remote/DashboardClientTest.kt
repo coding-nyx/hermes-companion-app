@@ -978,6 +978,109 @@ class DashboardClientTest {
         }
     }
 
+
+    @Test
+    fun emptyRpcSessionsFallsBackToRest() = runBlocking {
+        MockWebServer().use { server ->
+            val methods = java.util.concurrent.CopyOnWriteArrayList<String>()
+            server.enqueue(
+                MockResponse().withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onOpen(webSocket: WebSocket, response: Response) {
+                            webSocket.send(
+                                """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"change_events":false,"heartbeat":false,"instance_id":"sess-empty"}}}""",
+                            )
+                        }
+
+                        override fun onMessage(webSocket: WebSocket, text: String) {
+                            val obj = Json.parseToJsonElement(text).jsonObject
+                            val id = obj["id"]!!.jsonPrimitive.content
+                            val method = obj["method"]!!.jsonPrimitive.content
+                            methods += method
+                            when (method) {
+                                "session.list" -> webSocket.send(
+                                    """{"jsonrpc":"2.0","id":"$id","result":{"sessions":[]}}""",
+                                )
+                            }
+                        }
+                    },
+                ),
+            )
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"sessions":[
+                      {"id":"s-rest-1","profile":"default","title":"from-rest"},
+                      {"id":"s-rest-2","profile":"default","title":"also-rest"}
+                    ]}""",
+                ),
+            )
+            val http = server.toOkHttp()
+            val client = DashboardClient(http)
+            val origin = server.url("/").toString().trimEnd('/')
+            client.wsHello(origin, "default")
+            server.takeRequest()
+            val sessions = client.listSessions(origin, "default")
+            assertEquals(listOf("s-rest-1", "s-rest-2"), sessions.map { it.id })
+            assertTrue(methods.contains("session.list"))
+            val rest = server.takeRequest()
+            assertTrue(rest.path.orEmpty().contains("/api/sessions"))
+            assertTrue(rest.path.orEmpty().contains("profile=default"))
+            client.closeRpc()
+            http.dispatcher.executorService.shutdown()
+            http.connectionPool.evictAll()
+        }
+    }
+
+    @Test
+    fun shortRpcSessionsPrefersRicherRest() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse().withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onOpen(webSocket: WebSocket, response: Response) {
+                            webSocket.send(
+                                """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"change_events":false,"heartbeat":false,"instance_id":"sess-short"}}}""",
+                            )
+                        }
+
+                        override fun onMessage(webSocket: WebSocket, text: String) {
+                            val obj = Json.parseToJsonElement(text).jsonObject
+                            val id = obj["id"]!!.jsonPrimitive.content
+                            val method = obj["method"]!!.jsonPrimitive.content
+                            if (method == "session.list") {
+                                webSocket.send(
+                                    """{"jsonrpc":"2.0","id":"$id","result":{"sessions":[
+                                      {"id":"only-rpc","profile":"coder","title":"short"}
+                                    ]}}""",
+                                )
+                            }
+                        }
+                    },
+                ),
+            )
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"sessions":[
+                      {"id":"only-rpc","profile":"coder","title":"short"},
+                      {"id":"extra-rest","profile":"coder","title":"richer"},
+                      {"id":"third","profile":"coder","title":"also"}
+                    ]}""",
+                ),
+            )
+            val http = server.toOkHttp()
+            val client = DashboardClient(http)
+            val origin = server.url("/").toString().trimEnd('/')
+            client.wsHello(origin, "coder")
+            server.takeRequest()
+            val sessions = client.listSessions(origin, "coder")
+            assertEquals(3, sessions.size)
+            assertTrue(sessions.any { it.id == "extra-rest" })
+            client.closeRpc()
+            http.dispatcher.executorService.shutdown()
+            http.connectionPool.evictAll()
+        }
+    }
+
     private fun MockWebServer.toOkHttp() = okhttp3.OkHttpClient.Builder()
         .build()
 }

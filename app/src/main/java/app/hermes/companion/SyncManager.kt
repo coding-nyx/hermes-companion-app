@@ -9,6 +9,7 @@ import app.hermes.companion.domain.GatewayBook
 import app.hermes.companion.domain.GatewayHudMap
 import app.hermes.companion.domain.HostHealthMap
 import app.hermes.companion.domain.ProfileScope
+import app.hermes.companion.domain.SessionLists
 import app.hermes.companion.domain.WakePing
 import app.hermes.companion.domain.WakePolicy
 import app.hermes.companion.model.BusFrame
@@ -158,7 +159,7 @@ class SyncManager(
                             cache.readSessions(origin, profileId) { client(origin).listSessions(origin, profileId) }
                         }.onSuccess { rows ->
                             _state.update { st ->
-                                if (st.activeProfileId == profileId) st.copy(sessions = rows) else st
+                                if (st.activeProfileId == profileId) st.copy(sessions = SessionLists.normalize(rows)) else st
                             }
                         }
                     }
@@ -211,7 +212,7 @@ class SyncManager(
                     cache.readSessions(origin, profileId) { client(origin).listSessions(origin, profileId) }
                 }.onSuccess { rows ->
                     _state.update { st ->
-                        if (st.activeProfileId == profileId) st.copy(sessions = rows) else st
+                        if (st.activeProfileId == profileId) st.copy(sessions = SessionLists.normalize(rows)) else st
                     }
                 }
             }
@@ -220,7 +221,9 @@ class SyncManager(
                 _state.update { st ->
                     if (st.activeProfileId != profileId) st
                     else {
-                        val next = ProfileScope.applyChange(st.sessions, frame.change, profileId)
+                        val next = SessionLists.normalize(
+                            ProfileScope.applyChange(st.sessions, frame.change, profileId),
+                        )
                         val open = st.openSessionId
                         st.copy(
                             sessions = if (open == null) next else next.map { row ->

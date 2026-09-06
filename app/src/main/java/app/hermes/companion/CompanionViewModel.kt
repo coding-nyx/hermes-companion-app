@@ -18,6 +18,7 @@ import app.hermes.companion.domain.GatewayBook
 import app.hermes.companion.domain.GatewayHudMap
 import app.hermes.companion.domain.OriginPolicy
 import app.hermes.companion.domain.ProfileScope
+import app.hermes.companion.domain.SessionLists
 import app.hermes.companion.domain.WakePing
 import app.hermes.companion.model.ChatAttachment
 import app.hermes.companion.model.ChatBlockKind
@@ -154,7 +155,7 @@ class CompanionViewModel(
                 _state.update {
                     it.copy(
                         activeProfileId = profileId,
-                        sessions = sessions,
+                        sessions = SessionLists.normalize(sessions),
                         tab = MainTab.THREADS,
                     )
                 }
@@ -617,7 +618,7 @@ class CompanionViewModel(
                             profiles = profiles,
                             activeProfileId = active.id,
                             modelOverride = active.model,
-                            sessions = cached,
+                            sessions = SessionLists.normalize(cached),
                             tab = MainTab.THREADS,
                             gatewayHello = hello,
                             status = status,
@@ -625,9 +626,11 @@ class CompanionViewModel(
                         )
                     }
                 }
-                val sessions = cache.readSessions(origin, active.id) {
-                    api.listSessions(origin, active.id)
-                }
+                val sessions = SessionLists.normalize(
+                    cache.readSessions(origin, active.id) {
+                        api.listSessions(origin, active.id)
+                    },
+                )
                 _state.update {
                     it.copy(
                         loading = false,
@@ -683,7 +686,9 @@ class CompanionViewModel(
         chat.cancelTurn()
         voiceStream.stopStream()
         viewModelScope.launch {
-            val cached = runCatching { cache.sessions(origin, profileId) }.getOrDefault(emptyList())
+            val cached = SessionLists.normalize(
+                runCatching { cache.sessions(origin, profileId) }.getOrDefault(emptyList()),
+            )
             _state.update {
                 it.copy(
                     activeProfileId = profileId,
@@ -700,9 +705,33 @@ class CompanionViewModel(
             }
             sync.startWatch(origin, profileId)
             try {
-                val sessions = cache.readSessions(origin, profileId) {
-                    client(origin).listSessions(origin, profileId)
+                val sessions = SessionLists.normalize(
+                    cache.readSessions(origin, profileId) {
+                        client(origin).listSessions(origin, profileId)
+                    },
+                )
+                _state.update { state ->
+                    if (state.activeProfileId != profileId) state
+                    else state.copy(sessions = sessions, sessionsLoading = false, error = null)
                 }
+            } catch (t: Throwable) {
+                _state.update { it.copy(sessionsLoading = false, error = t.toMonoError()) }
+            }
+        }
+    }
+
+    /** Re-fetch the sticky profile's session rail (threads RETRY). */
+    fun reloadSessions() {
+        val origin = _state.value.origin ?: return
+        val profileId = _state.value.activeProfileId ?: return
+        viewModelScope.launch {
+            _state.update { it.copy(sessionsLoading = true, error = null) }
+            try {
+                val sessions = SessionLists.normalize(
+                    cache.readSessions(origin, profileId) {
+                        client(origin).listSessions(origin, profileId)
+                    },
+                )
                 _state.update { state ->
                     if (state.activeProfileId != profileId) state
                     else state.copy(sessions = sessions, sessionsLoading = false, error = null)
