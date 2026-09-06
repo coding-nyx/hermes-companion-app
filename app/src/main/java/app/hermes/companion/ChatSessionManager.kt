@@ -13,6 +13,7 @@ import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.RewindPolicy
 import app.hermes.companion.domain.RewindSubmit
 import app.hermes.companion.domain.SendFate
+import app.hermes.companion.domain.SessionLists
 import app.hermes.companion.model.ChatAttachment
 import app.hermes.companion.model.ChatEvent
 import app.hermes.companion.model.ChatMessage
@@ -206,7 +207,7 @@ class ChatSessionManager(
             try {
                 val created = client(origin).createSession(origin, profile, model = turnModel())
                 runCatching { cache.upsertSession(origin, created) }
-                _state.update { it.copy(sessions = listOf(created) + it.sessions, error = null) }
+                _state.update { it.copy(sessions = SessionLists.prepend(created, it.sessions), error = null) }
                 openSession(created)
             } catch (t: Throwable) {
                 _state.update { it.copy(error = t.toMonoError()) }
@@ -450,7 +451,7 @@ class ChatSessionManager(
                 val restored = runCatching { client(origin).listSessions(origin, profile) }
                     .getOrDefault(previous)
                 runCatching { cache.replaceSessions(origin, profile, restored) }
-                _state.update { it.copy(sessions = restored, error = t.toMonoError()) }
+                _state.update { it.copy(sessions = SessionLists.normalize(restored), error = t.toMonoError()) }
             }
         }
     }

@@ -73,7 +73,7 @@ object ProfileScope {
         return if (idx >= 0) {
             sessions.toMutableList().also { it[idx] = change.session }
         } else {
-            listOf(change.session) + sessions
+            SessionLists.prepend(change.session, sessions)
         }
     }
 }

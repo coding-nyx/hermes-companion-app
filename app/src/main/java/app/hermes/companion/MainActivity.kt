@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.fragment.app.FragmentActivity
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
@@ -46,8 +47,20 @@ import app.hermes.companion.voice.WakeWordService
 class MainActivity : FragmentActivity() {
     private val reconnectNonce = MutableStateFlow(0)
 
+    /** Shared RequestPermission launcher — Activity-scoped to avoid Compose requestCode overflow. */
+    private var pendingPermissionAction: (() -> Unit)? = null
+    private var pendingPermissionDeny: (() -> Unit)? = null
+    private lateinit var permissionLauncher: ActivityResultLauncher<String>
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        permissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission(),
+        ) { granted ->
+            if (granted) pendingPermissionAction?.invoke() else pendingPermissionDeny?.invoke()
+            pendingPermissionAction = null
+            pendingPermissionDeny = null
+        }
         enableEdgeToEdge()
 
         // Enable display wake and show when locked for privileged companion access
@@ -81,22 +94,6 @@ class MainActivity : FragmentActivity() {
                         overlay.hide()
                         voiceManager.stopListening()
                     }
-                }
-
-                val notifyLauncher = rememberLauncherForActivityResult(
-                    ActivityResultContracts.RequestPermission(),
-                ) { granted ->
-                    vm.setNotifyGranted(granted || notifyAllowed())
-                }
-
-                var pendingAudioAction by remember { mutableStateOf<(() -> Unit)?>(null) }
-                val audioLauncher = rememberLauncherForActivityResult(
-                    ActivityResultContracts.RequestPermission(),
-                ) { granted ->
-                    if (granted) {
-                        pendingAudioAction?.invoke()
-                    }
-                    pendingAudioAction = null
                 }
 
                 val lifecycleOwner = LocalLifecycleOwner.current
@@ -222,12 +219,6 @@ class MainActivity : FragmentActivity() {
                     cameraUri = uri
                     takePicture.launch(uri)
                 }
-                val cameraPerm = rememberLauncherForActivityResult(
-                    ActivityResultContracts.RequestPermission(),
-                ) { granted ->
-                    if (granted) launchCamera() else pickerOutstanding = false
-                }
-
                 val gate = remember { BiometricGate(this@MainActivity) }
                 DisposableEffect(state.appLocked) {
                     if (state.appLocked) {
@@ -260,6 +251,7 @@ class MainActivity : FragmentActivity() {
                     onTab = vm::selectTab,
                     onOpenSession = vm::openSession,
                     onNewThread = vm::newThread,
+                    onRetrySessions = vm::reloadSessions,
                     onRequestDelete = vm::requestDelete,
                     onConfirmDelete = vm::confirmDelete,
                     onCancelDelete = vm::cancelDelete,
@@ -306,7 +298,13 @@ class MainActivity : FragmentActivity() {
                     },
                     onEnableNotify = {
                         if (Build.VERSION.SDK_INT >= 33) {
-                            notifyLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            pendingPermissionAction = {
+                                vm.setNotifyGranted(notifyAllowed())
+                            }
+                            pendingPermissionDeny = {
+                                vm.setNotifyGranted(notifyAllowed())
+                            }
+                            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                         } else {
                             vm.setNotifyGranted(true)
                         }
@@ -370,8 +368,9 @@ class MainActivity : FragmentActivity() {
                         ) {
                             action()
                         } else {
-                            pendingAudioAction = action
-                            audioLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            pendingPermissionAction = action
+                            pendingPermissionDeny = null
+                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     },
                     onToggleVoiceStream = {
@@ -385,8 +384,9 @@ class MainActivity : FragmentActivity() {
                         ) {
                             action()
                         } else {
-                            pendingAudioAction = action
-                            audioLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            pendingPermissionAction = action
+                            pendingPermissionDeny = null
+                            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     },
                     onToggleAttach = vm::toggleAttach,
@@ -405,7 +405,9 @@ class MainActivity : FragmentActivity() {
                         ) {
                             launchCamera()
                         } else {
-                            cameraPerm.launch(Manifest.permission.CAMERA)
+                            pendingPermissionAction = { launchCamera() }
+                            pendingPermissionDeny = { pickerOutstanding = false }
+                            permissionLauncher.launch(Manifest.permission.CAMERA)
                         }
                     },
                     onPickVideo = {
