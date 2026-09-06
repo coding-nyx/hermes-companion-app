@@ -32,6 +32,7 @@
 | **P18** | Threads & Chat Polish (keyboard, history bug, loading, rich text, bottom bar, delete, gateway picker) | A18.1 – A18.8 | ✅ **100%** | P1 | v0.3.0 |
 | **P20** | Dashboard-Independent Operator Lane (plugin serves the operator API) | A20.1 – A20.3 | ✅ **100%** (A20.1–A20.3 done 2026-09-05; standalone default ON) | P2 | v0.9.0 |
 | **P19** | OpenClaw Gateway Support (second host kind) | A19.1 – A19.4 | 🔲 **Planned (last)** | P2 | v1.0.0 |
+| **P21** | Agent Rooms — multi-profile group chat (plan: `docs/superpowers/plans/2026-09-07-agent-group-chat.md`) | A21.1 – A21.6 | 🔲 **Planned (2026-09-07)** | P1 | v0.3.0 |
 
 ---
 
@@ -598,6 +599,21 @@ Second host kind. OpenClaw (the open-source personal assistant gateway) runs the
 - **Deliverable**: Register the phone as an OpenClaw node and map its node commands onto the existing `device.*` executor behind the same arm state, idle disarm, denylist and audit (`DeviceNodeCoordinator` gains a lane adapter). Host-side: an OpenClaw skill equivalent to the bundled `hermes-companion` skill.
 - **Acceptance Criteria**: Arm/disarm, `protected_package` and rate limiting behave identically regardless of host kind; no second accessibility service.
 - **Estimate**: 3 days | **Dependencies**: A19.3, A6.x ✅
+
+---
+
+## 15b. Phase P21 — Agent Rooms: Group Chat Between Agents (P1) ✨ NEW (2026-09-07)
+
+Operator opens a **room** with two or more Hermes profiles; each agent keeps its own identity, memory, tools and model. Room state lives in the plugin (host); each participant gets a backing session in its own profile; turns are mention-first then round-robin with a hard round cap and `PASS`. Phone renders a room as a thread with speaker-labelled agent rows (glyph + rail style, one accent). Full design: `docs/superpowers/plans/2026-09-07-agent-group-chat.md`.
+
+### Work Items
+
+#### A21.1 · Host: room store, controller, upstream WS client, `/companion/*` auth gate 🔲 PENDING (~3d)
+#### A21.2 · Agent-side skill + prompt hint for rooms 🔲 PENDING (~0.5d)
+#### A21.3 · Phone: `RoomRef`, `ChatMessage.speaker`, room client, reducer 🔲 PENDING (~1.5d)
+#### A21.4 · Phone: ROOMS rail, create sheet, speaker rows, mention chips, INTERRUPT ALL 🔲 PENDING (~2.5d)
+#### A21.5 · CLI `hermes companion room …` + docs 🔲 PENDING (~0.5d)
+#### A21.6 · Hands in rooms (controller election) 🔲 LATER (P2)
 
 ---
 
