@@ -29,44 +29,10 @@ object DeviceLanePolicy {
     )
 
     /**
-     * Minimal fail-closed denylist (exact id or `prefix.*`). Custom rules merge via [isProtected].
-     * Kept small on purpose — Settings / permission controller / installer / keychain plus
-     * common authenticators and password managers. Full banking list stays out of tree.
+     * Built-in denylist is empty by design. Protection is user-managed via [isProtected]
+     * `extra` (StickyStore custom rules synced to the host). Exact id or `prefix.*`.
      */
-    val PROTECTED_PACKAGES = setOf(
-        // platform surfaces that grant power
-        "com.android.settings",
-        "com.android.systemui",
-        "com.android.packageinstaller",
-        "com.google.android.packageinstaller",
-        "com.android.permissioncontroller",
-        "com.google.android.permissioncontroller",
-        "com.android.keychain",
-        "com.android.certinstaller",
-        "com.samsung.android.settings.*",
-        // authenticators
-        "com.google.android.apps.authenticator2",
-        "com.authy.authy",
-        "com.azure.authenticator",
-        "com.duosecurity.duomobile",
-        "com.beemdevelopment.aegis",
-        "org.fedorahosted.freeotp",
-        "com.yubico.yubioath",
-        "com.okta.android.auth",
-        // password managers
-        "com.onepassword.android",
-        "com.agilebits.onepassword",
-        "com.lastpass.lpandroid",
-        "com.bitwarden.mobile",
-        "com.x8bit.bitwarden",
-        "com.kunzisoft.keepass.free",
-        "com.kunzisoft.keepass.libre",
-        "keepass2android.*",
-        "com.dashlane",
-        "proton.android.pass",
-        "com.samsung.android.samsungpass",
-        "com.samsung.android.authfw",
-    )
+    val PROTECTED_PACKAGES: Set<String> = emptySet()
 
     private val PACKAGE_RE = Regex("^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z0-9_]+)+$")
 

@@ -30,45 +30,13 @@ ALLOWLIST = frozenset(
 
 META = frozenset({"device.arm", "device.disarm"})
 
-# Fail-closed denylist, mirrored from domain/DeviceLanePolicy.kt (keep both in sync).
-# Minimal built-in set: Settings / permission / installer / keychain + authenticators / password managers.
-PROTECTED_PACKAGES: frozenset[str] = frozenset(
-    {
-        "com.android.settings",
-        "com.android.systemui",
-        "com.android.packageinstaller",
-        "com.google.android.packageinstaller",
-        "com.android.permissioncontroller",
-        "com.google.android.permissioncontroller",
-        "com.android.keychain",
-        "com.android.certinstaller",
-        "com.samsung.android.settings.*",
-        "com.google.android.apps.authenticator2",
-        "com.authy.authy",
-        "com.azure.authenticator",
-        "com.duosecurity.duomobile",
-        "com.beemdevelopment.aegis",
-        "org.fedorahosted.freeotp",
-        "com.yubico.yubioath",
-        "com.okta.android.auth",
-        "com.onepassword.android",
-        "com.agilebits.onepassword",
-        "com.lastpass.lpandroid",
-        "com.bitwarden.mobile",
-        "com.x8bit.bitwarden",
-        "com.kunzisoft.keepass.free",
-        "com.kunzisoft.keepass.libre",
-        "keepass2android.*",
-        "com.dashlane",
-        "proton.android.pass",
-        "com.samsung.android.samsungpass",
-        "com.samsung.android.authfw",
-    }
-)
+# Denylist mirrored from domain/DeviceLanePolicy.kt (keep both in sync).
+# Built-in set is empty; protection comes from phone-synced custom rules (extra).
+PROTECTED_PACKAGES: frozenset[str] = frozenset()
 
 
 def is_protected(package: str, extra=()) -> bool:
-    """True when ``package`` matches a built-in or caller-supplied denylist rule."""
+    """True when ``package`` matches a built-in (empty) or caller-supplied denylist rule."""
     pkg = (package or "").strip().lower()
     if not pkg:
         return False

@@ -89,7 +89,7 @@ class StickyStore(context: Context) {
     fun notifStreamTargetOrigin(): String? =
         notifStreamOrigin ?: lastGoodOrigin ?: origin
 
-    /** User-added protected packages (exact ids or `prefix.*`). Phone-wide safety: merged with the built-in denylist. */
+    /** User-added protected packages (exact ids or `prefix.*`). Phone-wide safety denylist (built-in list is empty). */
     var protectedPackages: Set<String>
         get() = prefs.getStringSet(KEY_PROTECTED, emptySet()).orEmpty().toSet()
         set(value) { prefs.edit().putStringSet(KEY_PROTECTED, value.toSet()).apply() }

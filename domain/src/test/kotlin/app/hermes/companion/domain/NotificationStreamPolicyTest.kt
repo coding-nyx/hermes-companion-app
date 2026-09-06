@@ -16,9 +16,25 @@ class NotificationStreamPolicyTest {
     }
 
     @Test
-    fun blocksBuiltInProtected() {
-        assertFalse(NotificationStreamPolicy.shouldForward("com.bitwarden.mobile"))
-        assertFalse(NotificationStreamPolicy.shouldForward("com.android.settings"))
+    fun doesNotBlockFormerBuiltInsWithoutCustom() {
+        assertTrue(NotificationStreamPolicy.shouldForward("com.bitwarden.mobile"))
+        assertTrue(NotificationStreamPolicy.shouldForward("com.android.settings"))
+    }
+
+    @Test
+    fun blocksCustomProtectedPackages() {
+        assertFalse(
+            NotificationStreamPolicy.shouldForward(
+                packageName = "com.bitwarden.mobile",
+                extraProtected = setOf("com.bitwarden.mobile"),
+            ),
+        )
+        assertFalse(
+            NotificationStreamPolicy.shouldForward(
+                packageName = "com.android.settings",
+                extraProtected = setOf("com.android.settings"),
+            ),
+        )
     }
 
     @Test
