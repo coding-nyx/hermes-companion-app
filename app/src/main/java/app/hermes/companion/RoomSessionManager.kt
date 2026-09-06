@@ -235,12 +235,12 @@ class RoomSessionManager(
         }
         is ChatEvent.AssistantDelta, is ChatEvent.ToolStarted, is ChatEvent.ToolCompleted -> {
             val turn = currentTurn ?: "a-orphan-${state.messages.size}".also { currentTurn = it }
-            val speaker = when (event) {
+            val speaker = (when (event) {
                 is ChatEvent.AssistantDelta -> event.speaker
                 is ChatEvent.ToolStarted -> event.speaker
                 is ChatEvent.ToolCompleted -> event.speaker
                 else -> null
-            }
+            } ?: state.roomSpeaking)
             val next = applyEvent(state.copy(streaming = true), event, turn)
             // applyEvent does not know about speakers; stamp the rows this turn created.
             next.copy(messages = next.messages.map { m ->
@@ -251,18 +251,20 @@ class RoomSessionManager(
             val turn = "a-${event.turnId}"
             val done = finishStream(state, turn)
             val hasSegment = done.messages.any { it.id.startsWith(turn) }
+            val speaker = event.speaker.ifBlank { null } ?: state.roomSpeaking
             val messages = when {
                 event.passed -> done.messages.filterNot { it.id.startsWith(turn) } + ChatMessage(
-                    id = "rm-${event.seq}", role = MessageRole.ASSISTANT, text = "", speaker = event.speaker, passed = true,
+                    id = "rm-${event.seq}", role = MessageRole.ASSISTANT, text = "", speaker = speaker, passed = true,
                 )
                 // No text arrived: keep the turn visible either way (host error, or an empty reply).
                 !hasSegment -> done.messages + ChatMessage(
-                    id = "rm-${event.seq}", role = MessageRole.ASSISTANT, text = "", speaker = event.speaker,
+                    id = "rm-${event.seq}", role = MessageRole.ASSISTANT, text = "", speaker = speaker,
                     toolDetail = event.error.ifBlank { "empty_reply" },
                 )
                 else -> done.messages.map { m ->
                     if (m.id.startsWith(turn)) m.copy(
                         id = if (m.id == turn) "rm-${event.seq}" else m.id,
+                        speaker = m.speaker ?: speaker,
                         toolDetail = if (event.error.isNotBlank() && m.role == MessageRole.ASSISTANT) event.error else m.toolDetail,
                     ) else m
                 }

@@ -124,4 +124,17 @@ class RoomReducerTest {
         assertEquals(1, st.messages.size)
         assertEquals("rm-7", st.messages[0].id)
     }
+
+    @Test
+    fun turnStartedSpeakerUsedWhenDeltaSpeakerNull() {
+        val st = run(
+            ChatEvent.TurnStarted("coder", "t1", 1),
+            ChatEvent.AssistantDelta("hi", null), // delta speaker was null
+            ChatEvent.TurnEnded("coder", "t1", 2, false, ""),
+            ChatEvent.Completed,
+        )
+        val row = st.messages.single()
+        assertEquals("coder", row.speaker)
+        assertEquals("hi", row.text)
+    }
 }

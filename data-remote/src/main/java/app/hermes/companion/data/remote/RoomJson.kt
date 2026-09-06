@@ -59,7 +59,7 @@ internal object RoomJson {
     fun message(obj: JsonObject?): ChatMessage? {
         val seq = obj.int("seq", -1)
         if (seq < 0) return null
-        val speaker = obj.str("speaker")
+        val speaker = obj.str("speaker").ifBlank { obj.str("profile") }
         val text = obj.str("text")
         val passed = obj.bool("passed")
         val error = obj.str("error")

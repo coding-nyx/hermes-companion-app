@@ -92,8 +92,8 @@ class ChatScreenRenderTest {
             ChatMessage(id = "a-t4", role = MessageRole.ASSISTANT, text = "Journal shows two restarts at 02:14 and 02:31 —", speaker = "ops", streaming = true),
         )
         mount(rows, streaming = true, participants = room, pendingSpeaker = "ops")
-        rule.onNodeWithText("COD").assertIsDisplayed()
-        rule.onNodeWithText("OPS").assertIsDisplayed()
+        rule.onNodeWithText("coder").assertIsDisplayed()
+        rule.onNodeWithText("ops").assertIsDisplayed()
         rule.onNodeWithTag("chat.passed").assertIsDisplayed()
         rule.onNodeWithText("passed").assertIsDisplayed()
         rule.onNodeWithTag("chat.cursor").assertIsDisplayed()
@@ -111,7 +111,7 @@ class ChatScreenRenderTest {
         mount(rows, streaming = true, participants = room, pendingSpeaker = "coder")
         rule.onNodeWithTag("chat.pending").assertIsDisplayed()
         rule.onNodeWithText("thinking").assertIsDisplayed()
-        rule.onNodeWithText("COD").assertIsDisplayed()
+        rule.onNodeWithText("coder").assertIsDisplayed()
         snap("06-room-thinking")
     }
 

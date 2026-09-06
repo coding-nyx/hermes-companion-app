@@ -309,6 +309,7 @@ fun CompanionShell(
                 participants = state.openRoom?.participants.orEmpty(),
                 pendingSpeaker = state.roomSpeaking,
                 onMention = onMention,
+                profiles = state.profiles,
                 modifier = body,
             )
         } else {

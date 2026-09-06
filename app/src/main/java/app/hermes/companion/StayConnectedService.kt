@@ -53,6 +53,16 @@ class StayConnectedService : Service() {
         super.onDestroy()
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val app = application as? CompanionApp
+        if (app != null && (app.sticky.stayConnected || app.sticky.notifStreamEnabled)) {
+            val stay = Intent(applicationContext, StayConnectedService::class.java)
+            runCatching { androidx.core.content.ContextCompat.startForegroundService(applicationContext, stay) }
+        } else {
+            super.onTaskRemoved(rootIntent)
+        }
+    }
+
     private fun keepOperator() {
         val app = application as CompanionApp
         keepJob?.cancel()
@@ -62,7 +72,7 @@ class StayConnectedService : Service() {
                 val origin = app.sticky.notifStreamTargetOrigin()
                     ?: app.sticky.lastGoodOrigin
                     ?: app.sticky.origin
-                if (!origin.isNullOrBlank()) runCatching { app.clients.existing(origin)?.ping() }
+                if (!origin.isNullOrBlank()) runCatching { app.clients.forOrigin(origin).ping() }
                 // Refresh subtitle (stream on/off · profile) periodically.
                 startForeground(ID, notice())
             }

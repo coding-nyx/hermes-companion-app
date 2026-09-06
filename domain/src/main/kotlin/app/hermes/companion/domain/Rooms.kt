@@ -15,6 +15,39 @@ object Rooms {
         return (if (p.length >= 3) p.substring(0, 3) else p.ifBlank { "???" }).uppercase()
     }
 
+    /**
+     * Resolves the user-facing agent name for a room speaker.
+     * Prefers a matching profile displayName (or profile id), falls back to the speaker id.
+     */
+    fun displayName(
+        speaker: String?,
+        participants: List<RoomParticipant> = emptyList(),
+        profiles: List<app.hermes.companion.model.ProfileRef> = emptyList(),
+    ): String {
+        if (speaker == null || speaker == OPERATOR) return "YOU"
+        val p = speaker.trim()
+        val prof = profiles.firstOrNull { it.id.equals(p, ignoreCase = true) }
+        if (prof != null && prof.displayName.isNotBlank()) return prof.displayName
+        val participant = participants.firstOrNull { it.profile.equals(p, ignoreCase = true) }
+        if (participant != null && participant.profile.isNotBlank()) return participant.profile
+        return p
+    }
+
+    /**
+     * Header label for an assistant row or pending row.
+     * In room mode (or when speaker is known), displays the agent name (never "HERMES").
+     */
+    fun speakerLabel(
+        speaker: String?,
+        participants: List<RoomParticipant> = emptyList(),
+        profiles: List<app.hermes.companion.model.ProfileRef> = emptyList(),
+    ): String = when {
+        speaker != null -> displayName(speaker, participants, profiles)
+        participants.size == 1 -> displayName(participants[0].profile, participants, profiles)
+        participants.isNotEmpty() -> "AGENT"
+        else -> "HERMES"
+    }
+
     fun isBackingSession(title: String): Boolean = title.trim().startsWith(BACKING_TITLE_PREFIX)
 
     /** Index of [speaker] among [participants]; drives the rail style (solid/dashed/dotted). */

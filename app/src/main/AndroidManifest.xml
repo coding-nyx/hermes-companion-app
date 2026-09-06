@@ -59,6 +59,7 @@
         <service
             android:name=".StayConnectedService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="dataSync" />
         <service
             android:name=".voice.WakeWordService"

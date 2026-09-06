@@ -61,6 +61,7 @@ import app.hermes.companion.model.ChatAttachment
 import app.hermes.companion.model.ChatBlock
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
+import app.hermes.companion.model.ProfileRef
 import app.hermes.companion.model.RoomParticipant
 import app.hermes.companion.domain.Rooms
 import app.hermes.companion.model.ModelCatalog
@@ -110,6 +111,7 @@ fun ChatScreen(
     /** Profile taking a turn right now (room mode); labels the pending row. */
     pendingSpeaker: String? = null,
     onMention: (String) -> Unit = {},
+    profiles: List<ProfileRef> = emptyList(),
     modifier: Modifier = Modifier,
 ) {
     val roomMode = participants.isNotEmpty()
@@ -229,7 +231,7 @@ fun ChatScreen(
                     MessageRole.TOOL -> Box(Modifier.padding(start = AgentRailInset)) {
                         ToolRow(message, onFetchMedia, onOpenMedia)
                     }
-                    MessageRole.ASSISTANT -> AssistantRow(message, onFetchMedia, onOpenMedia, participants)
+                    MessageRole.ASSISTANT -> AssistantRow(message, onFetchMedia, onOpenMedia, participants, profiles)
                 }
             }
             val last = messages.lastOrNull()
@@ -246,6 +248,9 @@ fun ChatScreen(
                         },
                         speaker = who,
                         railIndex = Rooms.speakerIndex(who, participants),
+                        roomMode = roomMode,
+                        participants = participants,
+                        profiles = profiles,
                     )
                 }
             }
@@ -587,8 +592,9 @@ private fun AssistantRow(
     onFetchMedia: suspend (String) -> ByteArray?,
     onOpenMedia: (ChatBlock) -> Unit,
     participants: List<RoomParticipant> = emptyList(),
+    profiles: List<ProfileRef> = emptyList(),
 ) {
-    val label = if (message.speaker != null) Rooms.glyph(message.speaker) else "HERMES"
+    val label = Rooms.speakerLabel(message.speaker, participants, profiles)
     val railIndex = Rooms.speakerIndex(message.speaker, participants)
     val error = message.toolDetail.orEmpty().takeIf { message.speaker != null && message.text.isBlank() && !message.passed }.orEmpty()
     Row(
@@ -650,7 +656,20 @@ private fun AssistantRow(
 
 /** Shown between send and the first agent token, or while a tool runs with no text yet. */
 @Composable
-private fun PendingRow(label: String, speaker: String? = null, railIndex: Int = 0) {
+private fun PendingRow(
+    label: String,
+    speaker: String? = null,
+    railIndex: Int = 0,
+    roomMode: Boolean = false,
+    participants: List<RoomParticipant> = emptyList(),
+    profiles: List<ProfileRef> = emptyList(),
+) {
+    val speakerText = when {
+        speaker != null -> Rooms.displayName(speaker, participants, profiles)
+        participants.size == 1 -> Rooms.displayName(participants[0].profile, participants, profiles)
+        roomMode -> "ROOM"
+        else -> "HERMES"
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -664,7 +683,7 @@ private fun PendingRow(label: String, speaker: String? = null, railIndex: Int = 
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
-                text = if (speaker != null) Rooms.glyph(speaker) else "HERMES",
+                text = speakerText,
                 style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
             )
             LiveDot()

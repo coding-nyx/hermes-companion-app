@@ -35,4 +35,27 @@ class RoomsTest {
         assertEquals(0, Rooms.speakerIndex("ghost", parts))
         assertEquals(0, Rooms.speakerIndex(null, parts))
     }
+
+    @Test
+    fun displayNamePrefersProfileDisplayName() {
+        val profiles = listOf(
+            app.hermes.companion.model.ProfileRef(id = "coder", displayName = "Senior Coder", glyph = "SEN"),
+        )
+        val parts = listOf(RoomParticipant("coder", "COD"), RoomParticipant("ops", "OPS"))
+        assertEquals("Senior Coder", Rooms.displayName("coder", parts, profiles))
+        assertEquals("ops", Rooms.displayName("ops", parts, profiles))
+        assertEquals("ghost", Rooms.displayName("ghost", parts, profiles))
+        assertEquals("YOU", Rooms.displayName(null, parts, profiles))
+        assertEquals("YOU", Rooms.displayName("operator", parts, profiles))
+    }
+
+    @Test
+    fun speakerLabelNeverSaysHermesInRoomMode() {
+        val parts = listOf(RoomParticipant("coder", "COD"), RoomParticipant("ops", "OPS"))
+        assertEquals("coder", Rooms.speakerLabel("coder", parts))
+        assertEquals("AGENT", Rooms.speakerLabel(null, parts))
+        val singlePart = listOf(RoomParticipant("coder", "COD"))
+        assertEquals("coder", Rooms.speakerLabel(null, singlePart))
+        assertEquals("HERMES", Rooms.speakerLabel(null, emptyList()))
+    }
 }
