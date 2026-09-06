@@ -329,7 +329,9 @@ class DashboardClient internal constructor(
             }
             val live = liveSessionId(sessionId)
             val rpcPage = runCatching { listMessagesRpc(socket, live, profileId, cap, beforeId) }.getOrNull()
-            if (rpcPage != null && !(beforeId.isNullOrBlank() && rpcPage.messages.isEmpty())) {
+            // Empty RPC (first page OR older-page beforeId) → REST fallback. Some gateways
+            // answer session.history with [] for Telegram/imported threads that still have REST history.
+            if (rpcPage != null && rpcPage.messages.isNotEmpty()) {
                 return rpcPage.copy(source = "rpc")
             }
         }

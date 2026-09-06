@@ -174,6 +174,15 @@ class PairingStore:
         self.save()
         return device
 
+    def note_seen(self, device_id: str, *, persist: bool = False) -> None:
+        """Bump last_seen for a live lane device without rewriting metadata."""
+        device = self.devices.get(device_id)
+        if device is None:
+            return
+        device.last_seen = self.now()
+        if persist:
+            self.save()
+
     def rename(self, device_id: str, name: str) -> Device:
         device = self.devices.get(device_id)
         if device is None:
@@ -255,7 +264,7 @@ class PairingStore:
 
     def _public_row(self, d: Device, *, lane_open: bool, live: dict | None = None) -> dict:
         live = live or {}
-        return {
+        row = {
             "device_id": d.device_id,
             "profile": d.profile,
             "name": self.display_name(d),
@@ -263,12 +272,17 @@ class PairingStore:
             "manufacturer": d.manufacturer,
             "os_version": d.os_version,
             "created_at": d.created_at,
-            "last_seen": d.last_seen,
+            "last_seen": float(live.get("last_seen") or d.last_seen or 0),
             "is_default": d.device_id == self.default_device_id,
             "lane": lane_open,
             "armed": bool(live.get("armed")),
             "foreground_app": str(live.get("foreground_app") or ""),
         }
+        if "a11y_bound" in live:
+            row["a11y_bound"] = bool(live["a11y_bound"])
+        if "overlay" in live:
+            row["overlay"] = bool(live["overlay"])
+        return row
 
     def load(self) -> None:
         if self.path is None or not self.path.exists():

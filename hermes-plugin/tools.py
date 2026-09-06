@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 
-from broker import Broker, BrokerError
+try:
+    from .broker import Broker, BrokerError
+except ImportError:  # script/tests on sys.path
+    from broker import Broker, BrokerError
 
 TOOLSET = "mobile"
 
@@ -94,7 +97,10 @@ def make_handlers(broker: Broker):
             code = getattr(exc, "args", ["unknown_device"])[0] if not hasattr(exc, "code") else getattr(exc, "code", "unknown_device")
             if hasattr(exc, "code"):
                 return _err(exc) if isinstance(exc, BrokerError) else _err(BrokerError(str(exc), str(exc)))
-            from pairing import PairingError
+            try:
+                from .pairing import PairingError
+            except ImportError:
+                from pairing import PairingError
 
             if isinstance(exc, PairingError):
                 return _err(BrokerError(str(exc), str(exc)))

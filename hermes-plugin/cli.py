@@ -105,7 +105,10 @@ def handle(args) -> None:
         return
     if cmd == "relay":
         if getattr(args, "check", False):
-            from relay import check_upstream
+            try:
+                from .relay import check_upstream
+            except ImportError:
+                from relay import check_upstream
 
             report = check_upstream()
             print(json.dumps(report, indent=2))

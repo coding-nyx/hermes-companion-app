@@ -8,8 +8,12 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from broker import Broker, BrokerError, LiveDevice
-from tickets import TicketError
+try:
+    from .broker import Broker, BrokerError, LiveDevice
+    from .tickets import TicketError
+except ImportError:  # script/tests on sys.path
+    from broker import Broker, BrokerError, LiveDevice
+    from tickets import TicketError
 
 
 def _raise_payload(payload: dict[str, Any]) -> dict[str, Any]:

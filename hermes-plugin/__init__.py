@@ -5,10 +5,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from broker import Broker
-from pairing import PairingStore, default_store_path
-from schemas import APPS, ARM, CLICK, DEVICES, DISARM, OPEN, PRESS, SCREENSHOT, SCROLL, SELECT_DEVICE, SNAPSHOT, STATUS, SWIPE, TYPE, WAIT
-from tools import TOOLSET, armed_hint, bind_stores, make_handlers
+try:
+    from .broker import Broker
+    from .pairing import PairingStore, default_store_path
+    from .schemas import APPS, ARM, CLICK, DEVICES, DISARM, OPEN, PRESS, SCREENSHOT, SCROLL, SELECT_DEVICE, SNAPSHOT, STATUS, SWIPE, TYPE, WAIT
+    from .tools import TOOLSET, armed_hint, bind_stores, make_handlers
+except ImportError:  # script/tests on sys.path
+    from broker import Broker
+    from pairing import PairingStore, default_store_path
+    from schemas import APPS, ARM, CLICK, DEVICES, DISARM, OPEN, PRESS, SCREENSHOT, SCROLL, SELECT_DEVICE, SNAPSHOT, STATUS, SWIPE, TYPE, WAIT
+    from tools import TOOLSET, armed_hint, bind_stores, make_handlers
 
 pairing_store = PairingStore(path=default_store_path())
 broker = Broker()
@@ -47,7 +53,10 @@ def register(ctx):
     if hasattr(ctx, "register_system_prompt_section"):
         ctx.register_system_prompt_section("hermes-companion", _prompt)
     if hasattr(ctx, "register_cli_command"):
-        from cli import handle, setup
+        try:
+            from .cli import handle, setup
+        except ImportError:
+            from cli import handle, setup
 
         ctx.register_cli_command(
             name="companion",
@@ -60,17 +69,27 @@ def register(ctx):
         ctx.register_command("companion", lambda raw: HANDLERS["mobile_status"]({}), description="Android companion status")
     if os.environ.get("HERMES_COMPANION_RELAY", "1") != "0":
         try:
-            from relay import CompanionHandler, RelayState, start_background
-            from live import attach_inprocess
+            try:
+                from .relay import CompanionHandler, RelayState, start_background
+                from .live import attach_inprocess
+            except ImportError:
+                from relay import CompanionHandler, RelayState, start_background
+                from live import attach_inprocess
 
             start_background(state=RelayState(pairing=pairing_store))
             bind_stores(pairing_store, CompanionHandler.state)
             attach_inprocess(broker, CompanionHandler.state)
         except OSError:
-            from live import attach_http
+            try:
+                from .live import attach_http
+            except ImportError:
+                from live import attach_http
 
             attach_http(broker)
     else:
-        from live import attach_http
+        try:
+            from .live import attach_http
+        except ImportError:
+            from live import attach_http
 
         attach_http(broker)

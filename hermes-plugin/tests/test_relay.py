@@ -189,5 +189,125 @@ class RelayTests(unittest.TestCase):
             relay.server_close()
 
 
+
+    def test_status_and_arm_result_update_lanes(self):
+        """GET /companion/device/lanes must reflect armed + last_seen after WS frames."""
+        clock = {"t": 1000.0}
+        pairing = PairingStore(now=lambda: clock["t"])
+        device = pairing.approve(pairing.issue("ops"))
+        pairing.rename(device.device_id, "S22")
+        state = RelayState(pairing=pairing)
+        class FakeWfile:
+            def write(self, data):
+                del data
+            def flush(self):
+                return None
+        state.lanes[device.device_id] = FakeWfile()
+
+        relay = make_server("127.0.0.1:0", "http://127.0.0.1:9", state)
+        threading.Thread(target=relay.serve_forever, daemon=True).start()
+        try:
+            host, port = relay.server_address
+            origin = f"http://{host}:{port}"
+            with urllib.request.urlopen(f"{origin}/companion/device/lanes", timeout=5) as resp:
+                before = json.loads(resp.read().decode())
+            row = next(r for r in before["devices"] if r["device_id"] == device.device_id)
+            self.assertFalse(row.get("armed"))
+
+            clock["t"] = 1100.0
+            state.on_frame(
+                json.dumps({
+                    "type": "mobile.controller.status",
+                    "device_id": device.device_id,
+                    "armed": True,
+                    "foreground_app": "com.example.app",
+                    "a11y_bound": True,
+                }),
+                device_id=device.device_id,
+            )
+            with urllib.request.urlopen(f"{origin}/companion/device/lanes", timeout=5) as resp:
+                after_status = json.loads(resp.read().decode())
+            row = next(r for r in after_status["devices"] if r["device_id"] == device.device_id)
+            self.assertTrue(row["armed"])
+            self.assertEqual(row["foreground_app"], "com.example.app")
+            self.assertGreaterEqual(row["last_seen"], 1100.0)
+
+            # Disarm via result frame (phone omits top-level device_id; lane id from WS).
+            clock["t"] = 1200.0
+            state.on_frame(
+                json.dumps({
+                    "type": "mobile.controller.result",
+                    "command_id": "c-arm-1",
+                    "ok": True,
+                    "result": {"armed": False},
+                }),
+                device_id=device.device_id,
+            )
+            with urllib.request.urlopen(f"{origin}/companion/device/lanes", timeout=5) as resp:
+                after_result = json.loads(resp.read().decode())
+            row = next(r for r in after_result["devices"] if r["device_id"] == device.device_id)
+            self.assertFalse(row["armed"])
+            self.assertGreaterEqual(row["last_seen"], 1200.0)
+        finally:
+            relay.shutdown()
+            relay.server_close()
+
+    def test_device_command_resolves_default_and_name(self):
+        """POST /companion/device/command uses same device resolution as mobile_*/attach_http."""
+        pairing = PairingStore(now=lambda: 50.0)
+        a = pairing.approve(pairing.issue("ops"))
+        b = pairing.approve(pairing.issue("ops"))
+        pairing.rename(a.device_id, "S22")
+        pairing.set_default(a.device_id)
+        state = RelayState(pairing=pairing)
+        written = []
+
+        class FakeWfile:
+            def write(self, data):
+                written.append(data)
+            def flush(self):
+                return None
+
+        state.lanes[a.device_id] = FakeWfile()
+        state.lanes[b.device_id] = FakeWfile()
+        relay = make_server("127.0.0.1:0", "http://127.0.0.1:9", state)
+        threading.Thread(target=relay.serve_forever, daemon=True).start()
+        try:
+            host, port = relay.server_address
+            origin = f"http://{host}:{port}"
+
+            def post(payload, wait=False):
+                body = dict(payload)
+                body["wait"] = wait
+                req = urllib.request.Request(
+                    f"{origin}/companion/device/command",
+                    data=json.dumps(body).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    return json.loads(resp.read().decode())
+
+            # Empty device_id → default live lane (was lane_down before).
+            out = post({"action": "device.noop"})
+            self.assertEqual(out["device_id"], a.device_id)
+            self.assertIn("command_id", out)
+
+            # Friendly name resolves.
+            out = post({"device": "S22", "action": "device.noop"})
+            self.assertEqual(out["device_id"], a.device_id)
+
+            # Unknown / offline → structured error, not opaque lane_down on "".
+            try:
+                post({"device_id": "nope", "action": "device.noop"})
+                self.fail("expected error")
+            except urllib.error.HTTPError as exc:
+                payload = json.loads(exc.read().decode())
+                self.assertIn(payload.get("error"), ("unknown_device", "lane_down"))
+        finally:
+            relay.shutdown()
+            relay.server_close()
+
+
 if __name__ == "__main__":
     unittest.main()
