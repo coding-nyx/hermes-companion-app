@@ -36,9 +36,12 @@ fun ThreadsScreen(
     sessions: List<SessionRef>,
     modifier: Modifier = Modifier,
     loading: Boolean = false,
+    error: String? = null,
+    activeProfileId: String? = null,
     pendingDelete: SessionRef? = null,
     onOpen: (SessionRef) -> Unit = {},
     onNew: () -> Unit = {},
+    onRetry: (() -> Unit)? = null,
     onDeleteRequest: (SessionRef) -> Unit = {},
     onConfirmDelete: () -> Unit = {},
     onCancelDelete: () -> Unit = {},
@@ -66,12 +69,16 @@ fun ThreadsScreen(
             FetchRow(label = "LOADING THREADS", modifier = Modifier.testTag("threads.loading"))
         }
         if (sessions.isEmpty() && !loading) {
+            val failed = !error.isNullOrBlank()
+            val profileHint = activeProfileId?.takeIf { it.isNotBlank() }?.let { "profile=$it" } ?: "idle"
             FetchPane(
-                label = "NO SESSIONS",
-                hint = "// idle",
+                label = if (failed) "SESSIONS FAILED" else "NO SESSIONS",
+                hint = if (failed) error else "// $profileHint",
+                retryLabel = if (failed) "RETRY" else null,
+                onRetry = if (failed) onRetry else null,
                 modifier = Modifier
                     .weight(1f)
-                    .testTag("threads.empty"),
+                    .testTag(if (failed) "threads.failed" else "threads.empty"),
             )
             return
         }
@@ -80,7 +87,7 @@ fun ThreadsScreen(
             return
         }
         LazyColumn {
-            items(sessions, key = { it.id }) { session ->
+            items(sessions.distinctBy { it.id }, key = { it.id }) { session ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
