@@ -402,6 +402,7 @@ def maybe_wake_for_notification(event: dict, *, now: Callable[[], float] | None 
             _wake_botchat(profile, message, profile_home)
         else:
             _wake_cli(profile, message, profile_home)
+        print(f"companion agent wake scheduled mode={mode} profile={profile} pkg={package}", flush=True)
         return True
     except Exception as exc:
         logger.warning("agent wake schedule failed profile=%s: %s", profile, exc)
