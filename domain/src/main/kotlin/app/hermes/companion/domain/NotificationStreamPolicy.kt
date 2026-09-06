@@ -2,7 +2,8 @@ package app.hermes.companion.domain
 
 /**
  * Denylist-only forward filter for the live notification stream (A13.2).
- * Built-in protected packages ∪ custom sticky rules ∪ companion self package / FGS channels.
+ * Custom sticky rules ∪ companion self package / FGS channels (self-echo always blocked).
+ * Built-in package denylist is empty — do not rely on it for stream suppression.
  */
 object NotificationStreamPolicy {
     /** Channels Companion posts that must never echo into the stream. */

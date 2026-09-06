@@ -1,5 +1,11 @@
 # Slice 1 + Slice 2 notes (feat/multi-gateway-mobile-control)
 
+## Empty built-in denylist (`fix/empty-builtin-denylist`)
+- `DeviceLanePolicy.PROTECTED_PACKAGES` and `hermes-plugin/broker.py` `PROTECTED_PACKAGES` are empty; `isProtected` / `is_protected` still merge custom extras.
+- Device tab copy: `BLOCKLIST empty · add packages to protect` / `BLOCKLIST  N custom` (no "N built-in").
+- Stream filter: self-package + FGS channels still suppressed; do not rely on built-in package list.
+
+
 ## Landed
 
 ### Slice 1 — Multi-gateway
@@ -12,7 +18,7 @@
 ### Slice 2 — Mobile Hands
 - A6.7 multi-device: metadata on register, `companion-devices.json` fields (`name/model/manufacturer/os_version/is_default/last_seen/extra_protected`), rich `GET /companion/device/lanes`, `POST /companion/device/default|rename`, broker/live resolve (1 device auto; multi without default → `ambiguous_device`), tools `mobile_devices` / `mobile_select_device` + optional `device=` on mobile_*, CLI `lanes|default|rename`.
 - App sends Build metadata + custom protected packages on lane register; HANDS friendly label editor.
-- Minimal built-in denylist restored (Settings/permission/installer/keychain + authenticators/password managers); custom list kept; synced to host via register `protected_packages`.
+- Built-in denylist emptied (`PROTECTED_PACKAGES = emptySet()` / broker `frozenset()`); protection is custom-only via StickyStore + register `protected_packages`. Notification stream still blocks Companion self package/FGS channels.
 - Biometric: suppress `lockIfEnabled` while Activity Result picker outstanding; `BiometricGate` calls `onFail` when busy.
 
 ## Deferred / out of scope
@@ -27,6 +33,6 @@
 - [ ] Pair two phones (or phone + emulator): `hermes companion lanes`, `mobile_devices`, `mobile_snapshot(device=…)`.
 - [ ] Multi without default → ambiguous_device; set default via CLI/tool.
 - [ ] Rename label on HANDS; appears in lanes.
-- [ ] Built-in denylist blocks Settings/authenticator; custom add/remove still works.
+- [ ] Custom denylist add/remove protects Settings/authenticator when added; UI shows empty built-in (0).
 - [ ] Camera/photo/file pickers do not trip biometric lock mid-pick.
 - [ ] Biometric prompt while busy surfaces failure (no silent no-op).

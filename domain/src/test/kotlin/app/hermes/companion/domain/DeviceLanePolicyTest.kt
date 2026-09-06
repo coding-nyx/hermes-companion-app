@@ -75,7 +75,8 @@ class DeviceLanePolicyTest {
     }
 
     @Test
-    fun minimalBuiltInDenylistProtectsSettingsAuthAndPasswordManagers() {
+    fun builtInDenylistIsEmptyFormerDefaultsUnprotectedWithoutCustom() {
+        assertTrue(DeviceLanePolicy.PROTECTED_PACKAGES.isEmpty())
         for (pkg in listOf(
             "com.android.settings",
             "com.android.permissioncontroller",
@@ -88,27 +89,8 @@ class DeviceLanePolicyTest {
             "com.kunzisoft.keepass.free",
             "com.beemdevelopment.aegis",
             "com.samsung.android.settings.foo",
-        )) {
-            assertTrue(pkg, DeviceLanePolicy.isProtected(pkg))
-            assertEquals(
-                pkg,
-                "protected_package",
-                DeviceLanePolicy.reject(
-                    DeviceArm.ARMED,
-                    a11yBound = true,
-                    action = "device.open_app",
-                    foregroundApp = "com.example.fixture",
-                    targetPackage = pkg,
-                ),
-            )
-        }
-        for (pkg in listOf(
             "com.example.fixture",
             "org.telegram.messenger",
-            "com.android.vending",
-            "com.phonepe.app",
-            "com.chase.sig.android",
-            "com.samsung.android.spay",
         )) {
             assertFalse(pkg, DeviceLanePolicy.isProtected(pkg))
             assertNull(
@@ -121,6 +103,31 @@ class DeviceLanePolicyTest {
                 ),
             )
         }
+    }
+
+    @Test
+    fun customRulesProtectSettingsAndBitwarden() {
+        val custom = setOf("com.android.settings", "com.x8bit.bitwarden", "com.samsung.android.settings.*")
+        for (pkg in listOf(
+            "com.android.settings",
+            "com.x8bit.bitwarden",
+            "com.samsung.android.settings.foo",
+        )) {
+            assertTrue(pkg, DeviceLanePolicy.isProtected(pkg, custom))
+            assertEquals(
+                pkg,
+                "protected_package",
+                DeviceLanePolicy.reject(
+                    DeviceArm.ARMED,
+                    a11yBound = true,
+                    action = "device.open_app",
+                    foregroundApp = "com.example.fixture",
+                    targetPackage = pkg,
+                    extraProtected = custom,
+                ),
+            )
+        }
+        assertFalse(DeviceLanePolicy.isProtected("org.telegram.messenger", custom))
     }
 
     @Test

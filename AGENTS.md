@@ -23,5 +23,6 @@ Agents must call `mobile_arm` before snapshot/gestures (and before long reasonin
 ## Notification stream (A13.2)
 
 - Phone streams shade notifications (denylist) to a configurable gateway+profile; agent reads via `mobile_notifications` and may explicitly `mobile_notifications_inject`.
+- Built-in package denylist is **empty**; protect apps via Device tab custom rules. Stream always suppresses Companion's own package/FGS channels (self-echo).
 - Skill + `_prompt()` document the workflow; never auto-inject into Telegram/chat.
 - Deploy plugin to **lab** and **raj** together with app changes that touch stream protocol/tools.

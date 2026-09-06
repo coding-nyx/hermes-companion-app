@@ -38,9 +38,17 @@ class BrokerTests(unittest.TestCase):
         result = broker.dispatch("device.snapshot")
         self.assertEqual(result["nodes"][0]["ref"], "e1")
 
-    def test_builtin_protects_settings(self):
+    def test_builtin_denylist_empty_settings_allowed(self):
         broker = Broker(
             device=MockDevice(armed=True, foreground_app="com.android.settings")
+        )
+        result = broker.dispatch("device.snapshot")
+        self.assertEqual(result["nodes"][0]["ref"], "e1")
+
+    def test_custom_protects_settings(self):
+        broker = Broker(
+            device=MockDevice(armed=True, foreground_app="com.android.settings"),
+            extra_protected=("com.android.settings",),
         )
         with self.assertRaises(BrokerError) as ctx:
             broker.dispatch("device.snapshot")

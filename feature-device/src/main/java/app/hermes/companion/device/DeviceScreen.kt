@@ -440,8 +440,9 @@ fun DeviceScreen(
     }
 }
 
-/** Denylist editor. Built-ins are fixed; user rows are exact ids or `prefix.*`. */
+/** Denylist editor. Built-in list is empty; user rows are exact ids or `prefix.*`. */
 @Composable
+@Suppress("UNUSED_PARAMETER")
 private fun ProtectedPackages(
     custom: List<String>,
     defaults: Int,
@@ -453,10 +454,10 @@ private fun ProtectedPackages(
     val dismissKeyboard = rememberDismissKeyboard()
     Column(modifier = Modifier.fillMaxWidth().testTag("device.protected")) {
         Text(
-            text = if (defaults > 0) {
-                "BLOCKLIST  $defaults built-in · ${custom.size} custom"
+            text = if (custom.isEmpty()) {
+                "BLOCKLIST empty · add packages to protect"
             } else {
-                "BLOCKLIST  ${custom.size} blocked"
+                "BLOCKLIST  ${custom.size} custom"
             },
             style = CompanionType.Mono,
             modifier = Modifier.testTag("device.protected.count"),
@@ -464,7 +465,7 @@ private fun ProtectedPackages(
         Spacer(Modifier.height(CompanionSpace.Xs))
         Text(
             text = if (custom.isEmpty()) {
-                "blocklist empty · companion controls all apps"
+                "no built-in denylist · hands can touch any app until you add rules"
             } else {
                 "hands will not touch these blocked apps"
             },
