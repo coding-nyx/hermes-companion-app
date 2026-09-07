@@ -12,8 +12,10 @@ from urllib.parse import parse_qs
 
 try:
     from .drift import profiles_dir, self_test
+    from . import hermes_store
 except ImportError:  # script/tests on sys.path
     from drift import profiles_dir, self_test
+    import hermes_store
 
 TINY_PNG = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
@@ -231,6 +233,9 @@ class Operator:
         return bool(exp and exp >= time.time())
 
     def profiles(self) -> list:
+        disk = hermes_store.profiles()
+        if disk:
+            return disk
         with self.lock:
             rows = list(self.data["profiles"])
             counts: dict[str, int] = {}
@@ -246,11 +251,37 @@ class Operator:
                 return row
         return None
 
+    def _preview_title(self, sess: dict) -> str:
+        title = str(sess.get("title") or "")
+        if title and title not in ("new thread", sess.get("id")):
+            return title
+        for msg in self.data.get("messages", {}).get(sess.get("id"), []) or []:
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if isinstance(content, list):
+                text = " ".join(str(p.get("text") or "") for p in content if isinstance(p, dict))
+            else:
+                text = str(content or "")
+            text = text.strip()
+            if text:
+                return text[:40]
+        return title or "new thread"
+
     def list_sessions(self, profile: str) -> list:
         if not profile:
             raise OperatorError("profile_required", 400)
+        disk = hermes_store.list_sessions(profile)
+        if disk:
+            return disk
+        if hermes_store.profile_dir(profile) is not None:
+            return []
         with self.lock:
-            return [s for s in self.data["sessions"] if s["profile"] == profile]
+            return [
+                {**s, "title": self._preview_title(s)}
+                for s in self.data["sessions"]
+                if s["profile"] == profile
+            ]
 
     def create_session(self, profile: str, title: str = "", model: str = "") -> dict:
         if not profile:
@@ -286,6 +317,9 @@ class Operator:
             self._save()
 
     def messages(self, sid: str, profile: str, limit=None, before=None) -> list:
+        disk = hermes_store.list_messages(sid, profile, limit=limit, before=before)
+        if disk is not None:
+            return disk
         with self.lock:
             sess = self._session(sid)
             if sess is None:
@@ -400,20 +434,36 @@ class Operator:
         return list(self.data.get("cron") or [])
 
     def model_options(self) -> dict:
-        current = self.data.get("model") or "default"
-        provider = self.data.get("provider") or "local"
-        return {
-            "model": current,
-            "provider": provider,
-            "providers": [
-                {
-                    "slug": provider,
-                    "name": provider,
-                    "models": [current],
-                    "capabilities": {current: {"fast": True}},
-                }
-            ],
-        }
+        discovered = _discover_hermes_models()
+        stored_model = str(self.data.get("model") or "").strip()
+        stored_provider = str(self.data.get("provider") or "").strip()
+        env_model = (os.environ.get("HERMES_MODEL") or "").strip()
+        env_provider = (os.environ.get("HERMES_PROVIDER") or "").strip()
+        current = env_model or (stored_model if stored_model and stored_model != "default" else "") or (
+            discovered[0][1] if discovered else "default"
+        )
+        provider = env_provider or (stored_provider if stored_provider and stored_provider != "local" else "") or (
+            discovered[0][0] if discovered else "local"
+        )
+        rows: dict[str, list[str]] = {}
+        for slug, name in discovered:
+            rows.setdefault(slug or provider, [])
+            if name and name not in rows[slug or provider]:
+                rows[slug or provider].append(name)
+        rows.setdefault(provider, [])
+        if current and current not in rows[provider]:
+            rows[provider].insert(0, current)
+        providers = []
+        for slug, models in rows.items():
+            if not models:
+                continue
+            providers.append({
+                "slug": slug,
+                "name": slug,
+                "models": models,
+                "capabilities": {m: {"fast": True} for m in models},
+            })
+        return {"model": current, "provider": provider, "providers": providers}
 
     def set_model(self, model: str, provider: str) -> dict:
         with self.lock:
@@ -558,6 +608,62 @@ class Operator:
         if path == "/api/hermes/update" and method == "POST":
             return 200, "application/json", json.dumps(self.apply_update()).encode()
         return None
+
+
+def _parse_model_block(text: str) -> tuple[str, str]:
+    """Read `model.default` / `model.provider` from a Hermes config.yaml (no PyYAML)."""
+    model = provider = ""
+    in_model = False
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if not in_model:
+            if line.startswith("model:"):
+                rest = line.split(":", 1)[1].strip().strip("'\"")
+                if rest and rest not in ("|", ">", "{", "", "[]"):
+                    model = rest
+                else:
+                    in_model = True
+            continue
+        if line and line[0] not in (" ", "\t", "#"):
+            break
+        stripped = line.strip()
+        if stripped.startswith("default:"):
+            model = stripped.split(":", 1)[1].strip().strip("'\"")
+        elif stripped.startswith("provider:"):
+            provider = stripped.split(":", 1)[1].strip().strip("'\"")
+    return model, provider
+
+
+def _discover_hermes_models() -> list[tuple[str, str]]:
+    """[(provider, model), ...] from HERMES_HOME + ~/.hermes (+ profiles)."""
+    homes = []
+    env_home = os.environ.get("HERMES_HOME")
+    if env_home:
+        homes.append(Path(env_home))
+    homes.append(Path.home() / ".hermes")
+    seen: set[tuple[str, str]] = set()
+    rows: list[tuple[str, str]] = []
+    candidates: list[Path] = []
+    for home in homes:
+        candidates.append(home / "config.yaml")
+        profiles = home / "profiles"
+        if profiles.is_dir():
+            for child in sorted(profiles.iterdir()):
+                candidates.append(child / "config.yaml")
+    for path in candidates:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        model, provider = _parse_model_block(text)
+        if not model:
+            continue
+        key = (provider or "auto", model)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(key)
+    return rows
 
 
 def parse_query(path: str) -> dict:

@@ -567,7 +567,7 @@ class CompanionViewModel(
     }
 
     fun connect(originOverride: String? = null) {
-        val origin = (originOverride ?: _state.value.originInput).trim().trimEnd('/')
+        val origin = OriginPolicy.canonicalize(originOverride ?: _state.value.originInput)
         if (origin.isBlank()) {
             _state.update { it.copy(loading = false, error = "origin required") }
             return
@@ -640,6 +640,7 @@ class CompanionViewModel(
                 val cached = runCatching { cache.sessions(origin, active.id) }.getOrDefault(emptyList())
                 if (cached.isNotEmpty()) {
                     _state.update {
+                        val switched = it.origin != origin
                         it.copy(
                             loading = false,
                             sessionsLoading = true,
@@ -654,7 +655,7 @@ class CompanionViewModel(
                             gatewayHello = hello,
                             status = status,
                             hud = hud,
-                        )
+                        ).let { next -> if (switched) next.dropHostScoped() else next }
                     }
                     if (pendingWake == null) chat.newThread()
                 }
@@ -664,6 +665,7 @@ class CompanionViewModel(
                     },
                 )
                 _state.update {
+                    val switched = it.origin != origin
                     it.copy(
                         loading = false,
                         sessionsLoading = false,
@@ -678,7 +680,7 @@ class CompanionViewModel(
                         gatewayHello = hello,
                         status = status,
                         hud = hud,
-                    )
+                    ).let { next -> if (switched) next.dropHostScoped() else next }
                 }
                 sync.startHud(origin)
                 sync.startWatch(origin, active.id)

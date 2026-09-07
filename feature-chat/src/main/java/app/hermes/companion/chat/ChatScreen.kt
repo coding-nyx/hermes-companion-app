@@ -192,7 +192,7 @@ fun ChatScreen(
             val draft = DraftThread.isDraft(threadId)
             FetchPane(
                 label = if (!error.isNullOrBlank()) "history failed" else if (draft) "new" else "no messages",
-                hint = if (!error.isNullOrBlank()) error else if (draft) "// not saved until you send" else if (historySource.isNotBlank()) "// $historySource" else "// idle",
+                hint = if (!error.isNullOrBlank()) error else if (historySource.isNotBlank()) "// $historySource" else "// idle",
                 scanning = false,
                 retryLabel = if (!error.isNullOrBlank()) "RETRY" else null,
                 onRetry = if (!error.isNullOrBlank()) onRetryHistory else null,

@@ -104,7 +104,9 @@ def register(ctx):
             start_background(state=RelayState(pairing=pairing_store))
             bind_stores(pairing_store, CompanionHandler.state)
             attach_inprocess(broker, CompanionHandler.state)
-        except OSError:
+            print("companion relay started in-process on :9120", flush=True)
+        except OSError as exc:
+            print(f"companion relay bind skipped: {exc}", flush=True)
             try:
                 from .live import attach_http
             except ImportError:

@@ -20,6 +20,13 @@ object OriginPolicy {
     private val PRIVATE_SUFFIXES = listOf(".local", ".ts.net", ".internal", ".lan", ".home.arpa", ".localdomain")
     private val LOOPBACK_HOSTS = setOf("127.0.0.1", "localhost", "::1", "0.0.0.0", "[::1]")
 
+    /** OkHttp needs a scheme. Bare `host:9120` becomes `http://host:9120`. */
+    fun canonicalize(origin: String): String {
+        val trimmed = origin.trim().trimEnd('/')
+        if (trimmed.isBlank()) return ""
+        return if ("://" in trimmed) trimmed else "http://$trimmed"
+    }
+
     fun host(origin: String): String {
         val rest = origin.trim()
             .removePrefix("http://")

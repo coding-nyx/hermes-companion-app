@@ -49,21 +49,19 @@ Relay URL override: `HERMES_COMPANION_RELAY_URL=http://127.0.0.1:9120`.
 
 Pairing file: `~/.hermes/companion-devices.json` (mode 600).
 
-## Boot persistence (systemd user units)
+## Boot persistence
 
-The phone needs two processes alive on the host: the Hermes dashboard on `127.0.0.1:9119`
-(the API the app talks to) and this relay on `0.0.0.0:9120`. Install both as systemd *user*
-units so they survive a power cycle:
+`install.sh` (after copy) and `install-services.sh` pick the host supervisor:
+
+- **Linux:** systemd user units (`hermes-companion-relay`, or dashboard + `hermes-agent-companion`)
+- **macOS:** LaunchAgents `ai.hermes.companion-relay` (standalone) or `ai.hermes.dashboard` + `ai.hermes.companion` (proxy)
 
 ```bash
+bash ~/.hermes/plugins/hermes-companion/install.sh
 bash ~/.hermes/plugins/hermes-companion/install-services.sh
 ```
 
-Writes `~/.config/systemd/user/hermes-dashboard.service` and `hermes-agent-companion.service`
-from the templates in `systemd/`, enables them in `default.target`, turns on `loginctl
-enable-linger`, and stops any hand-started copies. Check with
-`systemctl --user status hermes-dashboard hermes-agent-companion`. Without the dashboard the
-relay has nothing to proxy and the phone sees `unexpected end of stream`.
+macOS logs: `~/Library/Logs/hermes-companion/`. Linux: `systemctl --user status hermes-dashboard hermes-agent-companion`.
 
 ## Relay
 

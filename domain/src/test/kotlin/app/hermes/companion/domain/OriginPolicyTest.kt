@@ -8,6 +8,13 @@ import org.junit.Test
 
 class OriginPolicyTest {
     @Test
+    fun canonicalizeAddsHttpWhenSchemeMissing() {
+        assertEquals("http://100.86.138.6:9120", OriginPolicy.canonicalize("100.86.138.6:9120"))
+        assertEquals("http://raj-13766.mullet-pantone.ts.net:9120", OriginPolicy.canonicalize("http://raj-13766.mullet-pantone.ts.net:9120/"))
+        assertEquals("", OriginPolicy.canonicalize("  "))
+    }
+
+    @Test
     fun loopbackIsThisPhone() {
         assertTrue(OriginPolicy.loopback("http://127.0.0.1:19219"))
         assertTrue(OriginPolicy.loopback("http://localhost:9119"))

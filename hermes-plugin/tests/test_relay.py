@@ -15,7 +15,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pairing import PairingStore
-from relay import CompanionHandler, RelayState, make_server, parse_bind, parse_upstream
+from relay import CompanionHandler, RelayState, make_server, parse_bind, parse_upstream, workspace_dir
 from tickets import TicketError
 
 
@@ -235,6 +235,27 @@ class RelayTests(unittest.TestCase):
             self.assertIn("cpu", payload["metrics"])
             self.assertIn("percent", payload["metrics"]["cpu"])
             self.assertIn("platform", payload["metrics"]["system"])
+        finally:
+            relay.shutdown()
+            relay.server_close()
+
+    def test_workspace_dir_survives_deleted_cwd(self):
+        with patch.dict(os.environ, {"HERMES_WORKSPACE": ""}, clear=False):
+            with patch("relay.os.getcwd", side_effect=FileNotFoundError("gone")):
+                path = workspace_dir()
+        self.assertTrue(path)
+
+    def test_host_metrics_survives_deleted_cwd(self):
+        relay = make_server("127.0.0.1:0", "http://127.0.0.1:1")
+        threading.Thread(target=relay.serve_forever, daemon=True).start()
+        try:
+            host, port = relay.server_address
+            with patch.dict(os.environ, {"HERMES_WORKSPACE": ""}, clear=False):
+                with patch("relay.os.getcwd", side_effect=FileNotFoundError("gone")):
+                    with urllib.request.urlopen(f"http://{host}:{port}/companion/host/metrics", timeout=5) as resp:
+                        payload = json.loads(resp.read().decode())
+            self.assertTrue(payload["ok"])
+            self.assertIn("cpu", payload["metrics"])
         finally:
             relay.shutdown()
             relay.server_close()

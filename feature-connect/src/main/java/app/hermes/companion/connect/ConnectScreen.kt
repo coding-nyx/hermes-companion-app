@@ -299,7 +299,18 @@ private fun GatewayChip(
                 style = CompanionType.MonoSmall.copy(color = CompanionColor.Text),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
             )
+            if (choice.forgettable) {
+                Spacer(Modifier.width(CompanionSpace.Sm))
+                Text(
+                    text = "DEL",
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger),
+                    modifier = Modifier
+                        .testTag("connect.gw.${choice.id}.forget")
+                        .clickable(onClick = onForget),
+                )
+            }
         }
         Text(
             text = choice.host,

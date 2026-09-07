@@ -1,0 +1,23 @@
+[Unit]
+Description=Hermes companion phone relay (0.0.0.0:9120 standalone)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=@PYTHON@ -u -m relay
+WorkingDirectory=@PLUGIN_DIR@
+Environment="HERMES_HOME=@HERMES_HOME@"
+Environment="HERMES_WORKSPACE=@HOME@"
+Environment="HERMES_COMPANION_STANDALONE=1"
+Restart=always
+RestartSec=3
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

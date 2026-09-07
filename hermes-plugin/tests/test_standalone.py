@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -28,7 +29,9 @@ class StandaloneOperatorTests(unittest.TestCase):
             "HERMES_COMPANION_STANDALONE": "1",
             "HERMES_COMPANION_STATE": str(self.state_path),
             "HERMES_COMPANION_MEDIA": str(self.media_root),
+            "HERMES_HOME": str(Path(self.tmp.name) / "empty-hermes"),
         }
+        Path(self.env["HERMES_HOME"]).mkdir(parents=True, exist_ok=True)
         self.patch = patch.dict(os.environ, self.env, clear=False)
         self.patch.start()
         state = RelayState(operator=Operator(self.state_path), media=MediaStore(self.media_root))
@@ -92,6 +95,8 @@ class StandaloneOperatorTests(unittest.TestCase):
             raw = resp.read().decode()
         self.assertIn("assistant.delta", raw)
         self.assertIn("run.completed", raw)
+        titled = self._json("GET", "/api/sessions?profile=coder")["sessions"]
+        self.assertEqual(titled[0]["title"], "lab")
         self._json("DELETE", f"/api/sessions/{sid}?profile=coder")
         gone = self._json("GET", f"/api/sessions/{sid}/messages?profile=coder", status=404)
         self.assertEqual(gone["error"], "unknown_session")
@@ -119,6 +124,81 @@ class StandaloneOperatorTests(unittest.TestCase):
         health = self._json("GET", "/companion/health")
         self.assertEqual(health["mode"], "standalone")
         self.assertEqual(health["relay"], "ok")
+
+    def test_profiles_and_sessions_from_state_db(self):
+        home = Path(self.tmp.name) / "bishop-home"
+        home.mkdir()
+        (home / "config.yaml").write_text("model:\n  default: gpt-5.6-terra\n  provider: openai-codex\n", encoding="utf-8")
+        con = sqlite3.connect(home / "state.db")
+        con.execute(
+            "CREATE TABLE sessions (id TEXT, title TEXT, display_name TEXT, last_activity_at REAL, "
+            "started_at REAL, ended_at REAL, end_reason TEXT, profile_name TEXT, hidden INTEGER, "
+            "archived INTEGER, message_count INTEGER)"
+        )
+        con.execute(
+            "CREATE TABLE messages (id INTEGER, session_id TEXT, role TEXT, content TEXT, timestamp REAL, active INTEGER)"
+        )
+        con.execute(
+            "INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            ("20260907_sess", "bishop online", None, 1788770000.0, 1788770000.0, None, None, "bishop", 0, 0, 2),
+        )
+        con.execute(
+            "INSERT INTO messages VALUES (?,?,?,?,?,?)",
+            (1, "20260907_sess", "user", "hello bishop", 1788770000.0, 1),
+        )
+        con.commit()
+        con.close()
+        with patch.dict(os.environ, {"HERMES_HOME": str(home)}, clear=False):
+            profiles = self._json("GET", "/api/profiles")["profiles"]
+            self.assertEqual([p["id"] for p in profiles], ["bishop-home"])
+            sessions = self._json("GET", "/api/sessions?profile=bishop-home")["sessions"]
+            self.assertEqual(sessions[0]["id"], "20260907_sess")
+            self.assertEqual(sessions[0]["title"], "bishop online")
+            msgs = self._json("GET", "/api/sessions/20260907_sess/messages?profile=bishop-home")["messages"]
+            self.assertEqual(msgs[0]["content"], "hello bishop")
+
+    def test_list_sessions_titles_from_first_user_message(self):
+        created = self._json("POST", "/api/sessions?profile=coder", {}, status=201)["session"]
+        self.assertEqual(created["title"], "new thread")
+        sid = created["id"]
+        op = self.relay.RequestHandlerClass.state.operator
+        with op.lock:
+            op.data["messages"][sid] = [{"id": "1", "role": "user", "content": "why is metrics 500"}]
+        sessions = self._json("GET", "/api/sessions?profile=coder")["sessions"]
+        row = next(s for s in sessions if s["id"] == sid)
+        self.assertEqual(row["title"], "why is metrics 500")
+
+    def test_profiles_from_minimal_state_db(self):
+        home = Path(self.tmp.name) / "sparse-home"
+        home.mkdir()
+        (home / "config.yaml").write_text("model: local\n", encoding="utf-8")
+        con = sqlite3.connect(home / "state.db")
+        con.execute("CREATE TABLE sessions (id TEXT, title TEXT, started_at REAL)")
+        con.execute("INSERT INTO sessions VALUES (?,?,?)", ("sess-sparse", "real work", 1788770000.0))
+        con.commit()
+        con.close()
+        with patch.dict(os.environ, {"HERMES_HOME": str(home)}, clear=False):
+            profiles = self._json("GET", "/api/profiles")["profiles"]
+            self.assertEqual([p["id"] for p in profiles], ["sparse-home"])
+            sessions = self._json("GET", "/api/sessions?profile=sparse-home")["sessions"]
+            self.assertEqual(sessions[0]["id"], "sess-sparse")
+            self.assertEqual(sessions[0]["title"], "real work")
+
+    def test_model_options_reads_hermes_config(self):
+        cfg = Path(self.tmp.name) / "hermes-home"
+        cfg.mkdir()
+        (cfg / "config.yaml").write_text(
+            "model:\n  default: gpt-5.6-terra\n  provider: openai-codex\n",
+            encoding="utf-8",
+        )
+        with patch.dict(os.environ, {"HERMES_HOME": str(cfg), "HERMES_MODEL": "", "HERMES_PROVIDER": ""}, clear=False):
+            catalog = self._json("GET", "/api/model/options")
+        self.assertEqual(catalog["model"], "gpt-5.6-terra")
+        self.assertEqual(catalog["provider"], "openai-codex")
+        slugs = [p["slug"] for p in catalog["providers"]]
+        self.assertIn("openai-codex", slugs)
+        terra = next(p for p in catalog["providers"] if p["slug"] == "openai-codex")
+        self.assertIn("gpt-5.6-terra", terra["models"])
 
 
 if __name__ == "__main__":

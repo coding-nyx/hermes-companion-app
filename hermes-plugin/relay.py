@@ -14,6 +14,7 @@ import queue
 import socket
 import struct
 import threading
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -67,6 +68,17 @@ def parse_bind(bind: str) -> tuple[str, int]:
 def parse_upstream(url: str) -> tuple[str, int]:
     parsed = urlparse(url if "://" in url else f"http://{url}")
     return parsed.hostname or "127.0.0.1", parsed.port or 80
+
+
+def workspace_dir() -> str:
+    """Cwd can be gone (deleted WorkingDirectory); never throw from the HTTP path."""
+    env = (os.environ.get("HERMES_WORKSPACE") or "").strip()
+    if env:
+        return env
+    try:
+        return os.getcwd()
+    except OSError:
+        return os.path.expanduser("~") or "/"
 
 
 def _ws_accept(key: str) -> str:
@@ -500,6 +512,14 @@ class CompanionHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _relay_failed(self, path: str):
+        print(f"companion relay_failed {self.command} {path} from {self.client_address[0]}", flush=True)
+        traceback.print_exc()
+        try:
+            return self._json({"error": "relay_failed"}, 500)
+        except Exception:
+            return None
+
     def _read_json(self) -> dict:
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"
@@ -743,7 +763,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
             except RoomError as extra:
                 return self._json({"error": extra.code, "message": extra.message}, extra.status)
             except Exception:
-                return self._json({"error": "relay_failed"}, 500)
+                return self._relay_failed(path)
         try:
             if path == "/companion/device/pair" and self.command == "POST":
                 body = self._read_json()
@@ -856,48 +876,40 @@ class CompanionHandler(BaseHTTPRequestHandler):
                     self.state._apply_live_meta(device_id, res)
                 return self._json(result)
             if path in ("/companion/host/metrics", "/companion/host/status") and self.command == "GET":
-                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
                 try:
-                    return self._json(collect_metrics(repo_dir))
+                    return self._json(collect_metrics(workspace_dir()))
                 except Exception as extra:
                     print(f"companion host metrics failed: {extra}", flush=True)
+                    traceback.print_exc()
                     return self._json({"ok": False, "error": "metrics_failed", "metrics": {}})
             if path == "/companion/git/status" and self.command == "GET":
-                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
-                return self._json(get_git_status(repo_dir))
+                return self._json(get_git_status(workspace_dir()))
             if path == "/companion/git/diff" and self.command == "GET":
-                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
                 query = parse_qs(urlparse(self.path).query)
                 file_arg = query.get("file", [None])[0]
                 staged_arg = query.get("staged", ["false"])[0].lower() in ("true", "1")
-                return self._json(get_git_diff(repo_dir, file_path=file_arg, staged=staged_arg))
+                return self._json(get_git_diff(workspace_dir(), file_path=file_arg, staged=staged_arg))
             if path == "/companion/git/branches" and self.command == "GET":
-                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
-                return self._json(get_git_branches(repo_dir))
+                return self._json(get_git_branches(workspace_dir()))
             if path == "/companion/git/stage" and self.command == "POST":
-                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
                 body = self._read_json()
-                return self._json(stage_git_file(repo_dir, str(body.get("path") or ""), bool(body.get("stage", True))))
+                return self._json(stage_git_file(workspace_dir(), str(body.get("path") or ""), bool(body.get("stage", True))))
             if path == "/companion/git/commit" and self.command == "POST":
-                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
                 body = self._read_json()
-                return self._json(commit_git(repo_dir, str(body.get("message") or "")))
+                return self._json(commit_git(workspace_dir(), str(body.get("message") or "")))
             if path == "/companion/terminal/exec" and self.command == "POST":
-                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
                 body = self._read_json()
-                return self._json(execute_quick_command(str(body.get("cmd") or ""), cwd=repo_dir))
+                return self._json(execute_quick_command(str(body.get("cmd") or ""), cwd=workspace_dir()))
             if path == "/companion/terminal/ws":
                 return self._terminal_ws()
             if path == "/companion/fs/tree" and self.command == "GET":
-                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
                 query = parse_qs(urlparse(self.path).query)
                 subpath = query.get("path", [""])[0]
-                return self._json(list_dir_tree(repo_dir, subpath))
+                return self._json(list_dir_tree(workspace_dir(), subpath))
             if path == "/companion/fs/read" and self.command == "GET":
-                repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
                 query = parse_qs(urlparse(self.path).query)
                 filepath = query.get("path", [""])[0]
-                return self._json(read_file_content(repo_dir, filepath))
+                return self._json(read_file_content(workspace_dir(), filepath))
             if path == "/companion/health" and self.command == "GET":
                 return self._health()
             if path == "/companion/media" and self.command == "POST":
@@ -919,7 +931,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 status = 503
             return self._json({"error": extra.code}, status)
         except Exception:
-            return self._json({"error": "relay_failed"}, 500)
+            return self._relay_failed(path)
 
     def _rooms(self, path: str):
         ctl = self.state.room_controller
@@ -1075,8 +1087,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
         self.send_header("Sec-WebSocket-Accept", _ws_accept(key))
         self.end_headers()
 
-        repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
-        pty_session = PtySession(cwd=repo_dir)
+        pty_session = PtySession(cwd=workspace_dir())
 
         def _pump_pty():
             try:

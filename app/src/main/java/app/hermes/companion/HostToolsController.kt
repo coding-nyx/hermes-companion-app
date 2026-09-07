@@ -4,6 +4,7 @@ import app.hermes.companion.console.TerminalLogEntry
 import app.hermes.companion.data.local.OperatorCredStore
 import app.hermes.companion.data.remote.DashboardClient
 import app.hermes.companion.data.remote.HostClientPool
+import app.hermes.companion.domain.OriginPolicy
 import app.hermes.companion.model.SavedGateway
 import app.hermes.companion.model.TerminalExecResult
 import kotlinx.coroutines.CoroutineScope
@@ -26,21 +27,25 @@ class HostToolsController(
 ) {
     private fun client(origin: String): DashboardClient = clients.forOrigin(origin)
 
+    private fun applyIfOrigin(origin: String, transform: (CompanionState) -> CompanionState) {
+        _state.update { if (it.origin != origin) it else transform(it) }
+    }
+
     fun refreshHostMetrics() {
         val origin = _state.value.origin ?: return
         scope.launch {
-            _state.update { it.copy(hostLoading = true) }
+            applyIfOrigin(origin) { it.copy(hostLoading = true) }
             val metrics = runCatching { client(origin).getHostMetrics(origin) }.getOrNull()
-            _state.update { it.copy(hostMetrics = metrics ?: it.hostMetrics, hostLoading = false) }
+            applyIfOrigin(origin) { it.copy(hostMetrics = metrics, hostLoading = false) }
         }
     }
 
     fun loadCronJobs() {
         val origin = _state.value.origin ?: return
         scope.launch {
-            _state.update { it.copy(cronLoading = true) }
+            applyIfOrigin(origin) { it.copy(cronLoading = true) }
             val jobs = runCatching { client(origin).getCronJobs(origin) }.getOrDefault(emptyList())
-            _state.update { it.copy(cronJobs = jobs, cronLoading = false) }
+            applyIfOrigin(origin) { it.copy(cronJobs = jobs, cronLoading = false) }
         }
     }
 
@@ -63,14 +68,14 @@ class HostToolsController(
     fun loadModelCatalog() {
         val origin = _state.value.origin ?: return
         scope.launch {
-            _state.update { it.copy(modelLoading = true) }
+            applyIfOrigin(origin) { it.copy(modelLoading = true) }
             val cat = runCatching { client(origin).getModelCatalog(origin) }.getOrNull()
-            _state.update {
+            applyIfOrigin(origin) {
                 val override = it.modelOverride.ifBlank {
                     cat?.currentModel.orEmpty().ifBlank { it.activeProfile?.model.orEmpty() }
                 }
                 it.copy(
-                    modelCatalog = cat ?: it.modelCatalog,
+                    modelCatalog = cat,
                     modelLoading = false,
                     modelOverride = override,
                 )
@@ -170,22 +175,27 @@ class HostToolsController(
     }
 
     fun loadSavedGateways() {
-        val gateways = operatorCreds.loadGateways()
-        val currentOrigin = _state.value.origin
-        val withActive = if (gateways.isEmpty() && currentOrigin != null) {
-            val initial = listOf(SavedGateway(id = currentOrigin, name = "Primary Host", origin = currentOrigin, isActive = true))
-            operatorCreds.saveGateways(initial)
-            initial
-        } else {
-            gateways.map { it.copy(isActive = currentOrigin != null && HostClientPool.key(it.origin) == HostClientPool.key(currentOrigin)) }
+        val currentOrigin = _state.value.origin?.let { OriginPolicy.canonicalize(it) }
+        val gateways = operatorCreds.loadGateways().toMutableList()
+        if (!currentOrigin.isNullOrBlank()) {
+            val key = HostClientPool.key(currentOrigin)
+            if (gateways.none { HostClientPool.key(it.origin) == key }) {
+                val name = if (gateways.isEmpty()) "Primary Host" else OriginPolicy.host(currentOrigin)
+                gateways.add(SavedGateway(id = currentOrigin, name = name, origin = currentOrigin, isActive = true))
+                operatorCreds.saveGateways(gateways)
+            }
+        }
+        val withActive = gateways.map {
+            it.copy(isActive = currentOrigin != null && HostClientPool.key(it.origin) == HostClientPool.key(currentOrigin))
         }
         _state.update { it.copy(savedGateways = withActive) }
     }
 
     fun addSavedGateway(name: String, origin: String) {
+        val origin = OriginPolicy.canonicalize(origin)
         val current = operatorCreds.loadGateways().toMutableList()
         val existingIdx = current.indexOfFirst { HostClientPool.key(it.origin) == HostClientPool.key(origin) }
-        val newGw = SavedGateway(id = origin, name = name, origin = origin, isActive = true)
+        val newGw = SavedGateway(id = origin, name = name.ifBlank { OriginPolicy.host(origin) }, origin = origin, isActive = true)
         if (existingIdx >= 0) {
             current[existingIdx] = newGw
         } else {

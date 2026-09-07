@@ -145,6 +145,22 @@ data class CompanionState(
      */
     val openSession: SessionRef?
         get() = sessions.find { it.id == openSessionId } ?: openSessionRef?.takeIf { it.id == openSessionId }
+
+    /** Drop previous host's metrics/catalog so a switch cannot show stale telemetry. */
+    fun dropHostScoped(): CompanionState = copy(
+        hostMetrics = null,
+        modelCatalog = null,
+        cronJobs = emptyList(),
+        gitStatus = null,
+        gitDiff = null,
+        gitSelectedFile = null,
+        terminalLogs = emptyList(),
+        updateStatus = null,
+        hostLoading = true,
+        modelLoading = true,
+        cronLoading = true,
+        gitLoading = false,
+    )
 }
 
 internal fun CompanionState.mirror(node: DeviceNodeState): CompanionState = copy(
