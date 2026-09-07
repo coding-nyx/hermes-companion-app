@@ -698,11 +698,31 @@ class CompanionHandler(BaseHTTPRequestHandler):
         host = (self.client_address[0] if self.client_address else "") or ""
         return host in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
+    def _operator_ok(self) -> bool:
+        """Standalone with no basic-auth (typical Tailscale) or a valid operator session."""
+        if not standalone_enabled():
+            return False
+        op = getattr(self.state, "operator", None)
+        if op is None:
+            return False
+        headers = {}
+        for key in ("Authorization", "Cookie", "X-Hermes-Session-Token"):
+            value = self.headers.get(key)
+            if value:
+                headers[key] = value
+        query = parse_qs(urlparse(self.path).query)
+        try:
+            return bool(op.check_token(headers, query))
+        except Exception:
+            return False
+
     def _companion_authorized(self, path: str) -> bool:
         """Loopback (CLI, in-process agent) or a paired device presenting its credential."""
         if path.startswith(self.OPEN_COMPANION_PATHS) and not path.endswith("/approve"):
             return True
         if self._is_loopback():
+            return True
+        if path in ("/companion/host/metrics", "/companion/host/status") and self._operator_ok():
             return True
         header = self.headers.get("Authorization") or ""
         scheme, _, value = header.partition(" ")
@@ -837,7 +857,11 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 return self._json(result)
             if path in ("/companion/host/metrics", "/companion/host/status") and self.command == "GET":
                 repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
-                return self._json(collect_metrics(repo_dir))
+                try:
+                    return self._json(collect_metrics(repo_dir))
+                except Exception as extra:
+                    print(f"companion host metrics failed: {extra}", flush=True)
+                    return self._json({"ok": False, "error": "metrics_failed", "metrics": {}})
             if path == "/companion/git/status" and self.command == "GET":
                 repo_dir = os.environ.get("HERMES_WORKSPACE", os.getcwd())
                 return self._json(get_git_status(repo_dir))

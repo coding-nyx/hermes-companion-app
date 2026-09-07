@@ -15,7 +15,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pairing import PairingStore
-from relay import RelayState, make_server, parse_bind, parse_upstream
+from relay import CompanionHandler, RelayState, make_server, parse_bind, parse_upstream
 from tickets import TicketError
 
 
@@ -224,7 +224,68 @@ class RelayTests(unittest.TestCase):
             relay.shutdown()
             relay.server_close()
 
+    def test_host_metrics_json(self):
+        relay = make_server("127.0.0.1:0", "http://127.0.0.1:1")
+        threading.Thread(target=relay.serve_forever, daemon=True).start()
+        try:
+            host, port = relay.server_address
+            with urllib.request.urlopen(f"http://{host}:{port}/companion/host/metrics", timeout=5) as resp:
+                payload = json.loads(resp.read().decode())
+            self.assertTrue(payload["ok"])
+            self.assertIn("cpu", payload["metrics"])
+            self.assertIn("percent", payload["metrics"]["cpu"])
+            self.assertIn("platform", payload["metrics"]["system"])
+        finally:
+            relay.shutdown()
+            relay.server_close()
 
+    def test_host_metrics_collect_failure_is_json(self):
+        relay = make_server("127.0.0.1:0", "http://127.0.0.1:1")
+        threading.Thread(target=relay.serve_forever, daemon=True).start()
+        try:
+            host, port = relay.server_address
+            with patch("relay.collect_metrics", side_effect=RuntimeError("boom")):
+                with urllib.request.urlopen(f"http://{host}:{port}/companion/host/metrics", timeout=5) as resp:
+                    payload = json.loads(resp.read().decode())
+            self.assertFalse(payload["ok"])
+            self.assertEqual(payload["error"], "metrics_failed")
+            self.assertEqual(payload["metrics"], {})
+        finally:
+            relay.shutdown()
+            relay.server_close()
+
+    def test_host_metrics_non_loopback_ok_without_basic_auth(self):
+        relay = make_server("127.0.0.1:0", "http://127.0.0.1:1")
+        threading.Thread(target=relay.serve_forever, daemon=True).start()
+        try:
+            host, port = relay.server_address
+            with patch.dict(os.environ, {"HERMES_DASHBOARD_BASIC_AUTH_USER": ""}, clear=False):
+                with patch.object(CompanionHandler, "_is_loopback", return_value=False):
+                    with urllib.request.urlopen(f"http://{host}:{port}/companion/host/metrics", timeout=5) as resp:
+                        payload = json.loads(resp.read().decode())
+            self.assertTrue(payload["ok"])
+            self.assertIn("cpu", payload["metrics"])
+        finally:
+            relay.shutdown()
+            relay.server_close()
+
+    def test_host_metrics_non_loopback_401_when_basic_auth_required(self):
+        relay = make_server("127.0.0.1:0", "http://127.0.0.1:1")
+        threading.Thread(target=relay.serve_forever, daemon=True).start()
+        try:
+            host, port = relay.server_address
+            with patch.dict(os.environ, {"HERMES_DASHBOARD_BASIC_AUTH_USER": "ops"}, clear=False):
+                with patch.object(CompanionHandler, "_is_loopback", return_value=False):
+                    try:
+                        urllib.request.urlopen(f"http://{host}:{port}/companion/host/metrics", timeout=5)
+                        self.fail("expected 401")
+                    except urllib.error.HTTPError as exc:
+                        self.assertEqual(exc.code, 401)
+                        payload = json.loads(exc.read().decode())
+                        self.assertEqual(payload["error"], "unauthorized")
+        finally:
+            relay.shutdown()
+            relay.server_close()
 
     def test_status_and_arm_result_update_lanes(self):
         """GET /companion/device/lanes must reflect armed + last_seen after WS frames."""
