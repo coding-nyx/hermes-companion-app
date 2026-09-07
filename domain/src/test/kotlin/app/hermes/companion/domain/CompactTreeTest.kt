@@ -28,6 +28,18 @@ class CompactTreeTest {
     }
 
     @Test
+    fun findClickablePrefersExactClickableThenUniqueSubstring() {
+        val send = SnapshotNode(ref = "e1", role = "button", text = "Send", clickable = true, bounds = listOf(0, 0, 10, 10))
+        val sendTo = SnapshotNode(ref = "e2", role = "button", text = "Send to group", clickable = true, bounds = listOf(0, 20, 10, 30))
+        val label = SnapshotNode(ref = "e3", role = "text", text = "Send", clickable = false, bounds = listOf(0, 40, 10, 50))
+        assertEquals("e1", CompactTree.findClickable(listOf(send, sendTo, label), "Send")?.ref)
+        assertEquals("e2", CompactTree.findClickable(listOf(send, sendTo), "group")?.ref)
+        assertEquals(null, CompactTree.findClickable(listOf(send, sendTo), "Sen"))
+        assertEquals("e3", CompactTree.findClickable(listOf(label), "Send")?.ref)
+        assertEquals(null, CompactTree.findClickable(listOf(send), "  "))
+    }
+
+    @Test
     fun includesSafeAreaWhenSpecified() {
         val nodes = listOf(
             SnapshotNode(ref = "e1", role = "button", text = "Submit", clickable = true, bounds = listOf(80, 400, 1000, 496))

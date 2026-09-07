@@ -5,6 +5,7 @@ import app.hermes.companion.data.local.StickyStore
 import app.hermes.companion.data.local.TranscriptCache
 import app.hermes.companion.data.remote.DashboardClient
 import app.hermes.companion.data.remote.HostClientPool
+import app.hermes.companion.domain.DraftThread
 import app.hermes.companion.domain.GatewayBook
 import app.hermes.companion.domain.GatewayHudMap
 import app.hermes.companion.domain.HostHealthMap
@@ -168,7 +169,7 @@ class SyncManager(
                     backoff = 1_000L
                     runCatching { chat.flushOutbox() }
                     val openId = _state.value.openSessionId
-                    if (openId != null && !_state.value.streaming) {
+                    if (openId != null && DraftThread.isPersisted(openId) && !_state.value.streaming) {
                         runCatching { client(origin).pageMessages(origin, openId, profileId) }.onSuccess { page ->
                             runCatching { cache.replaceMessages(origin, profileId, openId, page.messages) }
                             val merged = chat.withQueued(origin, profileId, openId, page.messages)

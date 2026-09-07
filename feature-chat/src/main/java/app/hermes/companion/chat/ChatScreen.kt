@@ -63,6 +63,7 @@ import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
 import app.hermes.companion.model.ProfileRef
 import app.hermes.companion.model.RoomParticipant
+import app.hermes.companion.domain.DraftThread
 import app.hermes.companion.domain.Rooms
 import app.hermes.companion.model.ModelCatalog
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -188,9 +189,10 @@ fun ChatScreen(
             .testTag("chat.surface"),
     ) {
         if (!loading && messages.isEmpty()) {
+            val draft = DraftThread.isDraft(threadId)
             FetchPane(
-                label = if (!error.isNullOrBlank()) "history failed" else "no messages",
-                hint = if (!error.isNullOrBlank()) error else if (historySource.isNotBlank()) "// $historySource" else "// idle",
+                label = if (!error.isNullOrBlank()) "history failed" else if (draft) "new" else "no messages",
+                hint = if (!error.isNullOrBlank()) error else if (draft) "// not saved until you send" else if (historySource.isNotBlank()) "// $historySource" else "// idle",
                 scanning = false,
                 retryLabel = if (!error.isNullOrBlank()) "RETRY" else null,
                 onRetry = if (!error.isNullOrBlank()) onRetryHistory else null,

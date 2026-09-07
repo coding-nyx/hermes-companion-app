@@ -23,6 +23,15 @@ class SessionListsTest {
     }
 
     @Test
+    fun prependAndNormalizeDropDraftPlaceholders() {
+        val draft = DraftThread.placeholder("default")
+        val real = session("n1", 5)
+        assertEquals(listOf("n1"), SessionLists.prepend(draft, listOf(real, draft)).map { it.id })
+        assertEquals(listOf("n1"), SessionLists.prepend(real, listOf(draft)).map { it.id })
+        assertEquals(listOf("n1"), SessionLists.normalize(listOf(draft, real, draft)).map { it.id })
+    }
+
+    @Test
     fun normalizeDedupesAndOrdersByUpdatedAt() {
         val rows = listOf(
             session("old", 10),

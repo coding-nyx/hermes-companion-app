@@ -1,7 +1,7 @@
 ---
 name: hermes-companion
 description: "Drive the paired Android Hermes Companion: arm-first, snapshot, tap, type, swipe, multi-device."
-version: 0.2.0
+version: 0.2.1
 platforms: [linux, macos]
 metadata:
   hermes:
@@ -37,8 +37,8 @@ Host CLI (outside chat): `hermes companion list`, `hermes companion approve CODE
 4. If `a11y_bound` is false: tell the user to enable **Installed apps → Hermes Companion** in Accessibility. You cannot grant it. Stop.
 5. **`mobile_arm` immediately** — before long planning text and before other tools — so the phone does not lock / sleep while you think. If arm fails `a11y_unavailable`, stop and ask the user.
 6. **`mobile_snapshot`** — work from `@eN` refs. Prefer snapshot over screenshot.
-7. Gesture: `mobile_click` / `mobile_type` / `mobile_swipe` / `mobile_scroll` / `mobile_press` / `mobile_open_app` (from `mobile_apps`).
-8. Snapshot again after each gesture if the UI changed.
+7. Gesture: `mobile_click` (`text=` label or `ref=@eN`) / `mobile_type` / `mobile_swipe` / `mobile_scroll` / `mobile_press` / `mobile_open_app` (from `mobile_apps`).
+8. Clicks/types/swipes return a **fresh snapshot**. Use those new refs. Never reuse `@eN` from before the gesture.
 9. **`mobile_disarm`** when the task is done, or immediately if the user says stop / that's enough / take your hands off.
 
 **Allowed while disarmed:** `mobile_status`, `mobile_devices`, `mobile_select_device`, `mobile_arm`, `mobile_disarm`, `mobile_notifications`, `mobile_notifications_inject`.
@@ -79,11 +79,24 @@ A user turn that starts with `[room "…" · you are XYZ …]` means the operato
 - Do **not** call `mobile_*` control tools (arm/snapshot/click/type/…) from a room turn. Status and notification reads are fine.
 - Never invent lines for other participants; never repeat the `[room]` prefix in your reply.
 
+## How not to fail (observe → act → verify)
+
+Agents usually fail by guessing pixels, typing into nothing, or reusing dead refs. Do this instead:
+
+1. **Arm first**, then snapshot. Do not plan in text while the phone can lock.
+2. **Tap with `text=`** (the visible label) or `ref=@eN` from the latest tree. Do **not** invent coordinates when a node exists.
+3. **Read the snapshot on the gesture result.** Those refs replace the previous tree. `stale_ref` means you used a dead `@eN` — snapshot (or use the returned tree) and pick a new one. Do not retry the same ref.
+4. **Type:** click the input, confirm it is focused in the new snapshot, then `mobile_type`. `no_focus` means you skipped the click.
+5. **Open app:** `mobile_apps` → `mobile_open_app` → `mobile_wait` 800–1500ms → `mobile_snapshot`. The launcher has not finished if you snapshot immediately.
+6. If a tap does nothing: one snapshot, then a different node — do not spam clicks.
+7. `no_match` on `text=`: the label was missing or ambiguous. Use `candidates` / the attached snapshot and click a unique `@eN`.
+8. Never banking / authenticator / Settings (`protected_package`). Never adb/scrcpy as a workaround.
+
 ## Fail-closed codes
 
-`no_device` · `disarmed` · `a11y_unavailable` · `protected_package` · `stale_ref` · `rate_limited` · `capability_denied`
+`no_device` · `disarmed` · `a11y_unavailable` · `protected_package` · `stale_ref` · `no_match` · `no_focus` · `click_failed` · `rate_limited` · `capability_denied`
 
-If you get `stale_ref`, snapshot again before clicking. If you get `disarmed`, call `mobile_arm` (do not invent shell/adb workarounds).
+Errors include a `hint` with the next tool to call. Follow it. If you get `disarmed`, call `mobile_arm` (do not invent shell/adb workarounds).
 
 ## Origin
 

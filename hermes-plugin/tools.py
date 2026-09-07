@@ -26,12 +26,84 @@ def _dump(payload: dict) -> str:
     return json.dumps(payload)
 
 
+ERROR_HINTS = {
+    "disarmed": "call mobile_arm first — do not guess adb/shell workarounds",
+    "stale_ref": "call mobile_snapshot and use a fresh @eN (or mobile_click text=). Do not reuse old refs.",
+    "protected_package": "that package is denylisted; pick another app or ask the user",
+    "a11y_unavailable": "user must enable Accessibility → Installed apps → Hermes Companion; you cannot grant it",
+    "no_device": "pair from the phone Device tab, then `hermes companion approve CODE`",
+    "rate_limited": "wait ~200ms and retry; do not spam gestures",
+    "capability_denied": "unknown or ungranted action — use a documented mobile_* tool",
+    "safe_area_violation": "click a snapshot @eN or coordinates inside the content area, not the status/nav bars",
+    "no_focus": "click the input @eN (or text=) first, then mobile_type",
+    "no_match": "snapshot again and click a unique @eN, or pass a more specific text=",
+    "click_failed": "snapshot and click an @eN; pixel taps miss often",
+    "ambiguous_device": "call mobile_devices then mobile_select_device (or pass device=)",
+    "lane_down": "phone lane is down — ask the user to open Companion / stay-connected",
+}
+
+
+def error_hint(code: str, message: str = "") -> str:
+    if code == "a11y_unavailable" and "focus" in (message or "").lower():
+        return ERROR_HINTS["no_focus"]
+    return ERROR_HINTS.get(code, "")
+
+
 def _err(exc: BrokerError) -> str:
+    hint = error_hint(exc.code, exc.message)
     payload = {"ok": False, "error": {"code": exc.code, "message": exc.message}}
-    if exc.code == "disarmed":
-        payload["error"]["hint"] = "call mobile_arm first"
-        payload["hint"] = "call mobile_arm first"
+    if hint:
+        payload["error"]["hint"] = hint
+        payload["hint"] = hint
     return _dump(payload)
+
+
+def find_clickable(nodes: list, query: str) -> tuple[dict | None, list[dict]]:
+    """Unique node for click text=. Exact clickable, then unique substring, then any node."""
+    needle = (query or "").strip().lower()
+    if not needle:
+        return None, []
+    pool = [n for n in nodes if isinstance(n, dict)]
+
+    def hay(node: dict) -> str:
+        return str(node.get("text") or "").strip().lower()
+
+    def pick(rows: list[dict], exact: bool) -> tuple[dict | None, list[dict]]:
+        matched = [n for n in rows if hay(n) == needle] if exact else [n for n in rows if needle in hay(n)]
+        if len(matched) == 1:
+            return matched[0], matched
+        return None, matched
+
+    clickable = [n for n in pool if n.get("clickable")]
+    for rows in (clickable, pool):
+        node, matched = pick(rows, exact=True)
+        if node is not None:
+            return node, matched
+        if len(matched) > 1:
+            return None, matched
+        node, matched = pick(rows, exact=False)
+        if node is not None:
+            return node, matched
+        if len(matched) > 1:
+            return None, matched
+    return None, []
+
+
+def _with_follow_snapshot(broker: Broker, result: dict, device: str | None = None) -> dict:
+    """Attach a fresh tree so the agent does not reuse stale @eN refs."""
+    if not isinstance(result, dict):
+        return result
+    args = {"device": device} if device else {}
+    try:
+        tree = broker.dispatch("device.snapshot", args)
+    except BrokerError:
+        return result
+    if not isinstance(tree, dict) or "nodes" not in tree:
+        return result
+    out = dict(result)
+    out["snapshot"] = tree
+    out["next"] = "use snapshot.nodes[].ref for the next gesture; previous @eN refs are invalid"
+    return out
 
 
 def _with_device(params: dict | None) -> dict:
@@ -197,6 +269,40 @@ def make_handlers(broker: Broker):
             payload["device"] = args["device"]
         if "ref" in args:
             payload["ref"] = args["ref"]
+        text = str(args.get("text") or "").strip()
+        if text and "ref" not in payload and not ("x" in args and "y" in args):
+            try:
+                tree = broker.dispatch("device.snapshot", {"device": args["device"]} if "device" in args else {})
+            except BrokerError as extra:
+                return _err(extra)
+            nodes = tree.get("nodes") if isinstance(tree, dict) else None
+            node, matched = find_clickable(nodes or [], text)
+            if node is None:
+                candidates = [
+                    {
+                        "ref": n.get("ref"),
+                        "text": n.get("text"),
+                        "role": n.get("role"),
+                        "clickable": n.get("clickable"),
+                    }
+                    for n in matched[:8]
+                ]
+                hint = error_hint("no_match")
+                return _dump(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "no_match",
+                            "message": f"no unique clickable node matching {text!r}",
+                            "hint": hint,
+                            "candidates": candidates,
+                        },
+                        "hint": hint,
+                        "snapshot": tree,
+                    }
+                )
+            payload["ref"] = node.get("ref")
+            payload["text"] = text
         if "x" in args and "y" in args:
             x, y = args["x"], args["y"]
             device = broker.device
@@ -217,7 +323,7 @@ def make_handlers(broker: Broker):
             payload["xy"] = [x, y]
         try:
             result = broker.dispatch("device.click", payload)
-            return _dump({"ok": True, "result": result})
+            return _dump({"ok": True, "result": _with_follow_snapshot(broker, result, args.get("device"))})
         except BrokerError as exc:
             return _err(exc)
 
@@ -226,31 +332,34 @@ def make_handlers(broker: Broker):
         args = _with_device(params)
         try:
             result = broker.dispatch("device.type", {"text": args.get("text", ""), **({"device": args["device"]} if "device" in args else {})})
-            return _dump({"ok": True, "result": result})
+            return _dump({"ok": True, "result": _with_follow_snapshot(broker, result, args.get("device"))})
         except BrokerError as exc:
             return _err(exc)
 
     def mobile_press(params, **kwargs):
         del kwargs
+        args = _with_device(params)
         try:
-            result = broker.dispatch("device.press", _with_device(params))
-            return _dump({"ok": True, "result": result})
+            result = broker.dispatch("device.press", args)
+            return _dump({"ok": True, "result": _with_follow_snapshot(broker, result, args.get("device"))})
         except BrokerError as exc:
             return _err(exc)
 
     def mobile_swipe(params, **kwargs):
         del kwargs
+        args = _with_device(params)
         try:
-            result = broker.dispatch("device.swipe", _with_device(params))
-            return _dump({"ok": True, "result": result})
+            result = broker.dispatch("device.swipe", args)
+            return _dump({"ok": True, "result": _with_follow_snapshot(broker, result, args.get("device"))})
         except BrokerError as exc:
             return _err(exc)
 
     def mobile_scroll(params, **kwargs):
         del kwargs
+        args = _with_device(params)
         try:
-            result = broker.dispatch("device.scroll", _with_device(params))
-            return _dump({"ok": True, "result": result})
+            result = broker.dispatch("device.scroll", args)
+            return _dump({"ok": True, "result": _with_follow_snapshot(broker, result, args.get("device"))})
         except BrokerError as exc:
             return _err(exc)
 
@@ -263,6 +372,9 @@ def make_handlers(broker: Broker):
             payload["device"] = args["device"]
         try:
             result = broker.dispatch("device.open_app", payload)
+            if isinstance(result, dict):
+                result = dict(result)
+                result["next"] = "call mobile_wait with 800-1500ms, then mobile_snapshot — the UI has not settled yet"
             return _dump({"ok": True, "result": result})
         except BrokerError as extra:
             return _err(extra)
@@ -411,8 +523,9 @@ def armed_hint(paired: bool, armed: bool) -> str | None:
         return None
     if armed:
         return (
-            "Android companion is ARMED. Prefer mobile_snapshot then mobile_click. "
-            "Call mobile_disarm when done."
+            "Android companion is ARMED. Loop: mobile_snapshot → tap @eN or mobile_click text= → "
+            "use the snapshot returned on the gesture (old refs are dead). Click the field before "
+            "mobile_type. After mobile_open_app, wait 800-1500ms then snapshot. mobile_disarm when done."
         )
     return (
         "Android companion is DISARMED. Call mobile_arm before snapshot/gestures "

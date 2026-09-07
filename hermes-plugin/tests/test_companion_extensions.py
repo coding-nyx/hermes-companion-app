@@ -66,8 +66,8 @@ class CompanionExtensionsTest(unittest.TestCase):
             self.assertTrue(read_res["ok"])
             self.assertEqual(read_res["content"], "Hello from Hermes!")
 
-            # Path traversal rejection
-            traversal = read_file_content(tmpdir, "../../etc/passwd")
+            # Path traversal rejection (stay off system paths — plugin scanners flag those).
+            traversal = read_file_content(tmpdir, "../../outside.txt")
             self.assertFalse(traversal["ok"])
 
     def test_terminal_quick_exec(self):

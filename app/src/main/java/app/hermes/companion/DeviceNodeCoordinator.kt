@@ -719,7 +719,17 @@ class DeviceNodeCoordinator(
             }
             "device.click" -> {
                 val id = jsonField(args, "ref")
-                val node = lastNodes.find { it.ref == id }
+                val query = jsonField(args, "text")
+                if (lastNodes.isEmpty() && (!id.isNullOrBlank() || !query.isNullOrBlank())) {
+                    val (_, nodes) = service?.snapshot() ?: ("" to emptyList())
+                    lastNodes = CompactTree.clip(nodes)
+                    lastRefs = CompactTree.refsOf(lastNodes)
+                }
+                val node = when {
+                    !id.isNullOrBlank() -> lastNodes.find { it.ref == id }
+                    !query.isNullOrBlank() -> CompactTree.findClickable(lastNodes, query)
+                    else -> null
+                }
                 val xy = jsonXy(args) ?: run {
                     val x = jsonNumber(args, "x")
                     val y = jsonNumber(args, "y")
@@ -744,15 +754,32 @@ class DeviceNodeCoordinator(
                 }
                 if (ok) DeviceLanePolicy.ok(
                     command.commandId,
-                    """{"clicked":${jsonQuote(id ?: "${xy?.first},${xy?.second}")}}""",
+                    """{"clicked":${jsonQuote(node?.ref ?: id ?: "${xy?.first},${xy?.second}")}}""",
                 )
-                else DeviceLanePolicy.fail(command.commandId, "stale_ref")
+                else {
+                    val code = when {
+                        !id.isNullOrBlank() -> "stale_ref"
+                        !query.isNullOrBlank() -> "no_match"
+                        xy != null -> "click_failed"
+                        else -> "stale_ref"
+                    }
+                    val message = when (code) {
+                        "stale_ref" -> "ref is not from the last snapshot — snapshot again"
+                        "no_match" -> "no unique clickable node matching '$query'"
+                        else -> "click did not land"
+                    }
+                    DeviceLanePolicy.fail(command.commandId, code, message)
+                }
             }
             "device.type" -> {
                 val text = jsonField(args, "text").orEmpty()
                 val ok = service?.type(text) == true
                 if (ok) DeviceLanePolicy.ok(command.commandId)
-                else DeviceLanePolicy.fail(command.commandId, "a11y_unavailable", "no focused field")
+                else DeviceLanePolicy.fail(
+                    command.commandId,
+                    "no_focus",
+                    "no focused field — click an input, then mobile_type",
+                )
             }
             "device.press" -> {
                 val key = jsonField(args, "key").orEmpty()

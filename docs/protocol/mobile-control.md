@@ -143,6 +143,8 @@ Return a compact accessibility tree, not a raw dump.
 
 Refs are session-local until the next snapshot. Clicks by `ref` must follow a snapshot; stale refs return `stale_ref`.
 
+`mobile_click` also accepts `text` (visible label / content-desc). The plugin snapshots, resolves a unique clickable node, then taps it. Ambiguous or missing labels return `no_match` plus `candidates`. Successful click/type/swipe/scroll/press results include a fresh `snapshot` so the agent does not reuse dead `@eN` refs.
+
 Protected packages return `error.code = protected_package` and no tree.
 
 ## Screenshot
@@ -168,6 +170,9 @@ While `ARMED` the phone **must** show: persistent notification `HERMES HAS HANDS
 | `no_device` | Nothing paired |
 | `protected_package` | Deny list |
 | `stale_ref` | Click/type without a fresh snapshot |
+| `no_match` | `text=` did not uniquely match a node |
+| `no_focus` | `mobile_type` with no focused field — click the input first |
+| `click_failed` | Pixel tap did not land |
 | `capability_denied` | Action not in the ticket allowlist |
 | `timeout` | Command exceeded budget (15s / screenshot 10s) |
 | `a11y_unavailable` | Service not bound |

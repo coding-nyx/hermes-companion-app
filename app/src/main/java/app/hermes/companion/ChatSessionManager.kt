@@ -8,6 +8,7 @@ import app.hermes.companion.data.remote.HostClientPool
 import app.hermes.companion.data.remote.DashboardException
 import app.hermes.companion.domain.ChatContent
 import app.hermes.companion.domain.coalesceDeltas
+import app.hermes.companion.domain.DraftThread
 import app.hermes.companion.domain.HistoryPaging
 import app.hermes.companion.domain.OutboxPolicy
 import app.hermes.companion.domain.ProfileScope
@@ -36,6 +37,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Operator chat: open/close a session, history paging, approvals, outbox flush with backoff,
@@ -52,6 +54,7 @@ class ChatSessionManager(
     private var turnJob: Job? = null
     private var retryJob: Job? = null
     private val outboxMutex = Mutex()
+    private val draftMutex = Mutex()
     private fun client(origin: String): DashboardClient = clients.forOrigin(origin)
 
     var onAssistantDelta: ((String) -> Unit)? = null
@@ -146,6 +149,7 @@ class ChatSessionManager(
         val origin = _state.value.origin ?: return
         val session = _state.value.openSession ?: return
         val profile = _state.value.activeProfileId ?: return
+        if (DraftThread.isDraft(session)) return
         val st = _state.value
         if (st.historyLoading || !st.historyHasMore || st.messages.isEmpty()) return
         val before = st.messages.first().id
@@ -203,18 +207,29 @@ class ChatSessionManager(
         }
     }
 
+    /** Open a local dummy composer. Host `session.create` waits until the first send. */
     fun newThread() {
-        val origin = _state.value.origin ?: return
+        if (_state.value.origin == null) return
         val profile = _state.value.activeProfileId ?: return
-        scope.launch {
-            try {
-                val created = client(origin).createSession(origin, profile, model = turnModel())
-                runCatching { cache.upsertSession(origin, created) }
-                _state.update { it.copy(sessions = SessionLists.prepend(created, it.sessions), error = null) }
-                openSession(created)
-            } catch (t: Throwable) {
-                _state.update { it.copy(error = t.toMonoError()) }
-            }
+        cancelTurn()
+        val draft = DraftThread.placeholder(profile)
+        _state.update {
+            it.copy(
+                openSessionId = draft.id,
+                openSessionRef = draft,
+                transcriptLoading = false,
+                historySource = "",
+                error = null,
+                draft = "",
+                approval = null,
+                rewindTargetId = null,
+                messages = emptyList(),
+                historyHasMore = false,
+                historyLoading = false,
+                pendingAttachments = emptyList(),
+                attachOpen = false,
+                streaming = false,
+            )
         }
     }
 
@@ -250,6 +265,7 @@ class ChatSessionManager(
         }
         val rewindId = _state.value.rewindTargetId
         if (rewindId != null) {
+            if (DraftThread.isDraft(session)) return fail("no open thread")
             sendRewind(origin, session, profile, rewindId, text)
             return
         }
@@ -261,12 +277,13 @@ class ChatSessionManager(
             blocks = ChatContent.userBlocks(text, attachments),
         )
         scope.launch {
+            val persisted = ensurePersistedSession() ?: return@launch
             outbox.enqueue(
                 OutboxItem(
                     id = user.id,
                     origin = origin,
                     profileId = profile,
-                    sessionId = session.id,
+                    sessionId = persisted.id,
                     text = text,
                     createdAtEpochMs = System.currentTimeMillis(),
                     attachmentsJson = encodeAttachments(attachments),
@@ -306,6 +323,7 @@ class ChatSessionManager(
                 _state.update { it.copy(error = t.toMonoError()) }
                 return@launch
             }
+            val persisted = ensurePersistedSession() ?: return@launch
             val user = ChatMessage(
                 id = "u-${UUID.randomUUID()}",
                 role = MessageRole.USER,
@@ -317,7 +335,7 @@ class ChatSessionManager(
                     id = user.id,
                     origin = origin,
                     profileId = profile,
-                    sessionId = session.id,
+                    sessionId = persisted.id,
                     text = clean,
                     createdAtEpochMs = System.currentTimeMillis(),
                 ),
@@ -472,6 +490,7 @@ class ChatSessionManager(
         _state.update { it.copy(streaming = false, messages = it.messages.map { m -> m.copy(streaming = false, toolRunning = false) }) }
         onTurnInterrupted?.invoke()
         if (origin == null || session == null || profile == null) return
+        if (DraftThread.isDraft(session)) return
         scope.launch {
             runCatching { client(origin).interruptTurn(origin, session.id, profile) }
         }
@@ -505,6 +524,10 @@ class ChatSessionManager(
             val profile = _state.value.activeProfileId ?: return
             while (true) {
                 val item = outbox.pending(origin, profile).firstOrNull() ?: return
+                if (DraftThread.isDraft(item.sessionId)) {
+                    outbox.remove(item.id)
+                    continue
+                }
                 val open = _state.value.openSessionId == item.sessionId
                 val assistantId = "a-${UUID.randomUUID()}"
                 if (open) {
@@ -624,7 +647,35 @@ class ChatSessionManager(
         val origin = st.origin ?: return
         val profile = st.activeProfileId ?: return
         val sessionId = st.openSessionId ?: return
+        if (!DraftThread.isPersisted(sessionId)) return
         runCatching { cache.replaceMessages(origin, profile, sessionId, st.messages) }
+    }
+
+    /**
+     * Promote the local dummy to a host session on the first real turn.
+     * No-op when the open thread is already persisted.
+     */
+    private suspend fun ensurePersistedSession(): SessionRef? = draftMutex.withLock {
+        val origin = _state.value.origin ?: return@withLock null
+        val profile = _state.value.activeProfileId ?: return@withLock null
+        val session = _state.value.openSession ?: return@withLock null
+        if (!DraftThread.isDraft(session)) return@withLock session
+        try {
+            val created = client(origin).createSession(origin, profile, model = turnModel())
+            runCatching { cache.upsertSession(origin, created) }
+            _state.update {
+                it.copy(
+                    sessions = SessionLists.prepend(created, it.sessions),
+                    openSessionId = created.id,
+                    openSessionRef = created,
+                    error = null,
+                )
+            }
+            created
+        } catch (t: Throwable) {
+            _state.update { it.copy(error = t.toMonoError()) }
+            null
+        }
     }
 
     private suspend fun uploadAttachments(origin: String, items: List<ChatAttachment>): List<ChatAttachment> {

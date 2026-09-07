@@ -14,6 +14,7 @@ import app.hermes.companion.data.remote.DashboardException
 import app.hermes.companion.data.remote.HostClientPool
 import app.hermes.companion.domain.AuthPolicy
 import app.hermes.companion.domain.ChatContent
+import app.hermes.companion.domain.DraftThread
 import app.hermes.companion.domain.GatewayBook
 import app.hermes.companion.domain.GatewayHudMap
 import app.hermes.companion.domain.OriginPolicy
@@ -319,7 +320,10 @@ class CompanionViewModel(
         _state.update { it.copy(tab = tab) }
         when (tab) {
             // Pairing may have happened since the last fetch; the room list needs the credential.
-            MainTab.THREADS -> rooms.refreshRooms()
+            MainTab.THREADS -> {
+                rooms.refreshRooms()
+                if (_state.value.openSessionId == null && !_state.value.inRoom) chat.newThread()
+            }
             MainTab.CONSOLE -> host.refreshHostMetrics()
             MainTab.REVIEW -> host.loadGitStatus()
             MainTab.REMINDERS -> host.loadCronJobs()
@@ -438,13 +442,8 @@ class CompanionViewModel(
     fun toggleVoiceStream() {
         _state.update { it.copy(error = null) }
         if (_state.value.voiceStreamState == VoiceStreamState.IDLE) {
-            if (_state.value.openSessionId == null) {
-                val first = _state.value.visibleSessions.firstOrNull()
-                if (first != null) {
-                    chat.openSession(first)
-                } else {
-                    chat.newThread()
-                }
+            if (_state.value.openSessionId == null && !_state.value.inRoom) {
+                chat.newThread()
             }
         }
         voiceStream.toggle()
@@ -657,6 +656,7 @@ class CompanionViewModel(
                             hud = hud,
                         )
                     }
+                    if (pendingWake == null) chat.newThread()
                 }
                 val sessions = SessionLists.normalize(
                     cache.readSessions(origin, active.id) {
@@ -694,7 +694,7 @@ class CompanionViewModel(
                 pendingWake?.let { wake ->
                     pendingWake = null
                     openWake(wake.origin, wake.profile, wake.sessionId)
-                }
+                } ?: chat.newThread()
             } catch (t: Throwable) {
                 _state.update {
                     it.copy(
@@ -715,7 +715,7 @@ class CompanionViewModel(
         val origin = _state.value.origin ?: return
         if (profileId == _state.value.activeProfileId) return
         sticky.setProfile(origin, profileId)
-        val keepChat = _state.value.openSession?.takeIf { it.profileId == profileId }
+        val keepChat = _state.value.openSession?.takeIf { it.profileId == profileId && DraftThread.isPersisted(it.id) }
         chat.cancelTurn()
         voiceStream.stopStream()
         viewModelScope.launch {
@@ -729,13 +729,15 @@ class CompanionViewModel(
                     sessions = cached,
                     sessionsLoading = true,
                     openSessionId = keepChat?.id,
+                    openSessionRef = keepChat,
                     messages = if (keepChat == null) emptyList() else it.messages,
                     streaming = false,
                     rewindTargetId = null,
-                    // Picked from the profiles tab → land on the new profile's rail.
+                    // Picked from the profiles tab → land on a new chat for that profile.
                     tab = if (it.tab == MainTab.PROFILES) MainTab.THREADS else it.tab,
                 )
             }
+            if (keepChat == null && !_state.value.inRoom) chat.newThread()
             sync.startWatch(origin, profileId)
             rooms.refreshRooms()
             try {

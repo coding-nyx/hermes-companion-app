@@ -1,6 +1,7 @@
 package app.hermes.companion
 
 import app.hermes.companion.console.TerminalLogEntry
+import app.hermes.companion.domain.DraftThread
 import app.hermes.companion.domain.HostHealth
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.Rooms
@@ -130,15 +131,17 @@ data class CompanionState(
     val isVoiceStreamActive: Boolean
         get() = voiceStreamState != VoiceStreamState.IDLE
     val visibleSessions: List<SessionRef>
-        get() = ProfileScope.visibleSessions(sessions, activeProfileId).filterNot { Rooms.isBackingSession(it.title) }
+        get() = ProfileScope.visibleSessions(sessions, activeProfileId).filterNot {
+            Rooms.isBackingSession(it.title) || DraftThread.isDraft(it)
+        }
     val inRoom: Boolean
         get() = openRoomId != null
     val activeProfile: ProfileRef?
         get() = profiles.find { it.id == activeProfileId }
     /**
-     * The open thread. Falls back to [openSessionRef] because a freshly created session can be
-     * missing from the host's next `session.list` (empty threads are not persisted yet), and
-     * without the fallback SEND became a silent no-op.
+     * The open thread. Falls back to [openSessionRef] for the local draft placeholder (never
+     * on the rail) and for a freshly created session that the host has not persisted yet.
+     * Without the fallback SEND became a silent no-op.
      */
     val openSession: SessionRef?
         get() = sessions.find { it.id == openSessionId } ?: openSessionRef?.takeIf { it.id == openSessionId }

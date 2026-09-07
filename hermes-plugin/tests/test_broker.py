@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from broker import ALLOWLIST, Broker, BrokerError, LiveDevice, MockDevice
-from tools import make_handlers
+from tools import error_hint, find_clickable, make_handlers
 
 
 class BrokerTests(unittest.TestCase):
@@ -189,6 +189,58 @@ class BrokerTests(unittest.TestCase):
         resp = json.loads(handlers["mobile_click"]({"x": 500, "y": 500}))
         self.assertTrue(resp["ok"])
         self.assertEqual(resp["result"]["clicked"], [500, 500])
+        self.assertIn("nodes", resp["result"]["snapshot"])
+        self.assertIn("snapshot.nodes", resp["result"]["next"])
+
+    def test_click_by_text_resolves_unique_ref(self):
+        handlers = make_handlers(Broker(device=MockDevice(armed=True)))
+        resp = json.loads(handlers["mobile_click"]({"text": "Submit"}))
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["result"]["clicked"], "e1")
+        self.assertEqual(resp["result"]["snapshot"]["nodes"][0]["ref"], "e1")
+
+    def test_click_by_text_ambiguous_returns_candidates(self):
+        def handler(action, arguments):
+            del arguments
+            if action == "device.snapshot":
+                return {
+                    "app": "com.example.fixture",
+                    "nodes": [
+                        {"ref": "e1", "role": "button", "text": "Send", "clickable": True},
+                        {"ref": "e2", "role": "button", "text": "Send", "clickable": True},
+                    ],
+                }
+            return {"clicked": "nope"}
+
+        handlers = make_handlers(Broker(device=MockDevice(armed=True, handler=handler)))
+        resp = json.loads(handlers["mobile_click"]({"text": "Send"}))
+        self.assertFalse(resp["ok"])
+        self.assertEqual(resp["error"]["code"], "no_match")
+        self.assertEqual(len(resp["error"]["candidates"]), 2)
+        self.assertIn("unique", resp["hint"])
+
+    def test_error_hints_cover_common_failures(self):
+        self.assertIn("mobile_arm", error_hint("disarmed"))
+        self.assertIn("mobile_snapshot", error_hint("stale_ref"))
+        self.assertIn("input", error_hint("no_focus"))
+        self.assertIn("input", error_hint("a11y_unavailable", "no focused field"))
+
+    def test_find_clickable_prefers_exact_button(self):
+        nodes = [
+            {"ref": "e1", "text": "Send", "clickable": True},
+            {"ref": "e2", "text": "Send to group", "clickable": True},
+        ]
+        node, _ = find_clickable(nodes, "Send")
+        self.assertEqual(node["ref"], "e1")
+        none, matched = find_clickable(nodes, "Sen")
+        self.assertIsNone(none)
+        self.assertEqual(len(matched), 2)
+
+    def test_open_app_tells_agent_to_wait(self):
+        handlers = make_handlers(Broker(device=MockDevice(armed=True)))
+        resp = json.loads(handlers["mobile_open_app"]({"package": "com.example.fixture"}))
+        self.assertTrue(resp["ok"])
+        self.assertIn("mobile_wait", resp["result"]["next"])
 
     def test_authenticator_and_password_managers_protected_in_blocklist(self):
         blocked = (

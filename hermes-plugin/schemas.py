@@ -31,7 +31,7 @@ SELECT_DEVICE = {
 
 SNAPSHOT = {
     "name": "mobile_snapshot",
-    "description": "Accessibility tree of the current screen with @eN refs. Do not use on banking or authenticator apps.",
+    "description": "Accessibility tree of the current screen with @eN refs. Work from this tree; refs die on the next snapshot. Prefer this over screenshot. Do not use on banking or authenticator apps.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -43,12 +43,13 @@ SNAPSHOT = {
 
 CLICK = {
     "name": "mobile_click",
-    "description": "Tap a node from the last snapshot (ref) or a point in screenshot space (x, y).",
+    "description": "Tap a control. Prefer text= (visible label) or ref=@eN from the last snapshot. Avoid x,y. Returns a fresh snapshot; do not reuse old refs. Snapshot first if you have no tree.",
     "parameters": {
         "type": "object",
         "properties": {
             "device": {"type": "string", "description": "Device id or friendly name. Optional when exactly one device is connected or a default is set."},
-            "ref": {"type": "string"},
+            "ref": {"type": "string", "description": "@eN from the last snapshot (invalid after any later snapshot/gesture)."},
+            "text": {"type": "string", "description": "Visible label/content-desc to tap. Unique match required; ambiguous returns candidates."},
             "x": {"type": "number"},
             "y": {"type": "number"},
         },
@@ -57,7 +58,7 @@ CLICK = {
 
 TYPE = {
     "name": "mobile_type",
-    "description": "Type into the focused field. Never log the text.",
+    "description": "Type into the currently focused field. Click the input first. Returns a fresh snapshot. Never log the text.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -100,7 +101,7 @@ SWIPE = {
 
 SCROLL = {
     "name": "mobile_scroll",
-    "description": "Scroll the screen or a snapshot node. direction: up, down, left, right.",
+    "description": "Scroll the screen or a snapshot node. direction is content movement: down reveals content below. Prefer ref= on the scrollable node.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -114,7 +115,7 @@ SCROLL = {
 
 OPEN = {
     "name": "mobile_open_app",
-    "description": "Launch a package from a prior mobile_apps list. Blocked on protected packages.",
+    "description": "Launch a package from a prior mobile_apps list. Then mobile_wait(800-1500) and mobile_snapshot — the UI has not settled. Blocked on protected packages.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -136,7 +137,7 @@ APPS = {
 
 WAIT = {
     "name": "mobile_wait",
-    "description": "Pause up to 5 seconds while ARMED.",
+    "description": "Pause up to 5 seconds while ARMED so the UI can settle (after open_app or a tap that navigates).",
     "parameters": {
         "type": "object",
         "properties": {
