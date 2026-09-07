@@ -15,7 +15,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pairing import PairingStore
-from relay import CompanionHandler, RelayState, make_server, parse_bind, parse_upstream, workspace_dir
+from relay import CompanionHandler, RelayState, make_server, parse_bind, parse_upstream, port_in_use, workspace_dir
 from tickets import TicketError
 
 
@@ -38,6 +38,17 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(parse_bind("0.0.0.0:9120"), ("0.0.0.0", 9120))
         self.assertEqual(parse_bind("http://127.0.0.1:9120"), ("127.0.0.1", 9120))
         self.assertEqual(parse_upstream("http://127.0.0.1:9119"), ("127.0.0.1", 9119))
+
+    def test_port_in_use_matches_live_server(self):
+        relay = make_server("127.0.0.1:0", "http://127.0.0.1:1")
+        threading.Thread(target=relay.serve_forever, daemon=True).start()
+        try:
+            host, port = relay.server_address
+            self.assertTrue(port_in_use(f"{host}:{port}"))
+            self.assertFalse(port_in_use("127.0.0.1:1"))
+        finally:
+            relay.shutdown()
+            relay.server_close()
 
     def test_proxy_get_without_half_close(self):
         up = ThreadingHTTPServer(("127.0.0.1", 0), SlowUpstream)

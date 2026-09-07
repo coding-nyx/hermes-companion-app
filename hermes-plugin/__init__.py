@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 from pathlib import Path
 
@@ -92,31 +93,33 @@ def register(ctx):
         )
     if hasattr(ctx, "register_command"):
         ctx.register_command("companion", lambda raw: HANDLERS["mobile_status"]({}), description="Android companion status")
-    if os.environ.get("HERMES_COMPANION_RELAY", "1") != "0":
-        try:
-            try:
-                from .relay import CompanionHandler, RelayState, start_background
-                from .live import attach_inprocess
-            except ImportError:
-                from relay import CompanionHandler, RelayState, start_background
-                from live import attach_inprocess
-
-            start_background(state=RelayState(pairing=pairing_store))
-            bind_stores(pairing_store, CompanionHandler.state)
-            attach_inprocess(broker, CompanionHandler.state)
-            print("companion relay started in-process on :9120", flush=True)
-        except OSError as exc:
-            print(f"companion relay bind skipped: {exc}", flush=True)
-            try:
-                from .live import attach_http
-            except ImportError:
-                from live import attach_http
-
-            attach_http(broker)
-    else:
+    def _attach_http():
         try:
             from .live import attach_http
         except ImportError:
             from live import attach_http
-
         attach_http(broker)
+
+    if os.environ.get("HERMES_COMPANION_RELAY", "1") == "0":
+        _attach_http()
+        return
+    try:
+        try:
+            from .relay import CompanionHandler, RelayState, port_in_use, start_background
+            from .live import attach_inprocess
+        except ImportError:
+            from relay import CompanionHandler, RelayState, port_in_use, start_background
+            from live import attach_inprocess
+
+        if port_in_use():
+            # launchd/systemd already owns :9120 — talk to it, don't log an error.
+            _attach_http()
+            return
+        start_background(state=RelayState(pairing=pairing_store))
+        bind_stores(pairing_store, CompanionHandler.state)
+        attach_inprocess(broker, CompanionHandler.state)
+        print("companion relay started in-process on :9120", flush=True)
+    except OSError as exc:
+        if getattr(exc, "errno", None) != errno.EADDRINUSE:
+            print(f"companion relay bind skipped: {exc}", flush=True)
+        _attach_http()

@@ -39,7 +39,13 @@ def _json(method: str, path: str, payload: dict | None = None) -> dict:
 
 
 def setup(parser) -> None:
-    sub = parser.add_subparsers(dest="companion_cmd", required=True)
+    parser.set_defaults(_companion_parser=parser)
+    sub = parser.add_subparsers(
+        dest="companion_cmd",
+        required=False,
+        metavar="COMMAND",
+        title="commands",
+    )
     sub.add_parser("list", help="List paired Android devices")
     approve = sub.add_parser("approve", help="Approve the 6-char code shown on the phone")
     approve.add_argument("code")
@@ -75,6 +81,13 @@ def setup(parser) -> None:
 
 def handle(args) -> None:
     cmd = getattr(args, "companion_cmd", None)
+    if not cmd:
+        parser = getattr(args, "_companion_parser", None)
+        if parser is not None:
+            parser.print_help()
+        else:
+            print("usage: hermes companion {list,approve,revoke,lanes,default,rename,relay,room} ...")
+        return
     if cmd == "list":
         rows = _json("GET", "/companion/device/list").get("devices") or []
         if not rows:

@@ -65,6 +65,17 @@ def parse_bind(bind: str) -> tuple[str, int]:
     return (host or "0.0.0.0"), int(port or "9120")
 
 
+def port_in_use(bind: str = DEFAULT_BIND, timeout: float = 0.4) -> bool:
+    """True when something (usually launchd/systemd relay) already owns the bind port."""
+    host, port = parse_bind(bind)
+    probe = "127.0.0.1" if host in ("0.0.0.0", "", "::") else host
+    try:
+        with socket.create_connection((probe, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def parse_upstream(url: str) -> tuple[str, int]:
     parsed = urlparse(url if "://" in url else f"http://{url}")
     return parsed.hostname or "127.0.0.1", parsed.port or 80

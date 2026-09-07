@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import threading
@@ -16,6 +17,19 @@ from relay import RelayState, make_server
 
 
 class CliTests(unittest.TestCase):
+    def test_help_lists_subcommands(self):
+        from cli import handle, setup
+
+        parser = argparse.ArgumentParser(prog="hermes companion")
+        setup(parser)
+        text = parser.format_help()
+        for name in ("list", "approve", "revoke", "lanes", "default", "rename", "relay", "room"):
+            self.assertIn(name, text)
+        buf = StringIO()
+        with patch("sys.stdout", buf):
+            handle(parser.parse_args([]))
+        self.assertIn("revoke", buf.getvalue())
+
     def test_list_approve_via_http(self):
         state = RelayState(pairing=PairingStore(now=lambda: 50.0))
         code = state.pairing.offer("K7M2QX", "coder")
