@@ -57,6 +57,10 @@ class CompanionApp : Application() {
         deviceCreds = DeviceCredStore.encrypted(this)
         operatorCreds = OperatorCredStore.encrypted(this)
         deviceNode = DeviceNodeCoordinator(this, clients, deviceCreds, sticky, appScope)
+        if (sticky.stayConnected || sticky.notifStreamEnabled) {
+            val stay = android.content.Intent(this, StayConnectedService::class.java)
+            runCatching { androidx.core.content.ContextCompat.startForegroundService(this, stay) }
+        }
     }
 
     /** Display name for a host: gateway-book name, else bare host. */

@@ -27,3 +27,11 @@ Agents must call `mobile_arm` before snapshot/gestures (and before long reasonin
 - Relay **agent wake** (P1.5): on ring accept, wake the sink profile with a strong chat `-Q` operating prompt (`HERMES_COMPANION_NOTIF_WAKE`, default on; modes `telegram`(default)/`cli`/`botchat`) plus a short human Telegram nudge. Prompt requires immediate `mobile_notifications`, no parroting, no invented bodies; inject only if warranted (default no). Skips Telegram messenger packages by default. **Never** auto-calls `mobile_notifications_inject`.
 - Skill + `_prompt()` document the workflow; never auto-inject into Telegram/chat.
 - Deploy plugin to **lab** and **raj** together with app changes that touch stream protocol/tools.
+
+## Agent rooms (P21)
+
+- Rooms live in the plugin (`hermes-plugin/rooms.py`); each participant profile gets a backing session titled `room:<id>` (hidden from the phone rail). Turns are mention-first then round-robin, capped by `max_rounds`; `PASS` stays silent. Agents must not call `mobile_*` control tools from a room turn (skill + `_prompt()` say so).
+- `/companion/*` is gated: loopback or `Authorization: Companion <device_id>:<credential>`. Pairing handshake, register, health, ticket ws and media GET stay open. Deploy plugin + app together — an old app against a new plugin loses host tools until it re-pairs/updates.
+- Relay diagnostics: `HERMES_COMPANION_DEBUG=1` logs every request with timing; 401s always log method/path/client/scheme.
+- Protocol: `docs/protocol/rooms.md`.
+

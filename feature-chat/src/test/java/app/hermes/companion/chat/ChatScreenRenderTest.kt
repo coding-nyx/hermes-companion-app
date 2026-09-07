@@ -16,6 +16,8 @@ import androidx.compose.ui.unit.dp
 import app.hermes.companion.design.CompanionTheme
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
+import app.hermes.companion.model.RoomParticipant
+import androidx.compose.ui.test.onAllNodesWithText
 import java.io.File
 import org.junit.Rule
 import org.junit.Test
@@ -48,7 +50,12 @@ class ChatScreenRenderTest {
         id = "a2", role = MessageRole.ASSISTANT, text = "reading the journal now — the gateway restarted twice", streaming = true,
     )
 
-    private fun mount(messages: List<ChatMessage>, streaming: Boolean) {
+    private fun mount(
+        messages: List<ChatMessage>,
+        streaming: Boolean,
+        participants: List<RoomParticipant> = emptyList(),
+        pendingSpeaker: String? = null,
+    ) {
         rule.mainClock.autoAdvance = false
         rule.setContent {
             CompanionTheme {
@@ -64,11 +71,48 @@ class ChatScreenRenderTest {
                         onInterrupt = {},
                         onApproval = {},
                         threadId = "s1",
+                        participants = participants,
+                        pendingSpeaker = pendingSpeaker,
                     )
                 }
             }
         }
         rule.mainClock.advanceTimeBy(600)
+    }
+
+    private val room = listOf(RoomParticipant("coder", "COD"), RoomParticipant("ops", "OPS"), RoomParticipant("ash", "ASH"))
+
+    @Test
+    fun roomModeLabelsSpeakersAndOffersMentions() {
+        val rows = listOf(
+            ChatMessage(id = "rm-1", role = MessageRole.USER, text = "gateway restarted twice, who owns it?"),
+            ChatMessage(id = "rm-2-t0", role = MessageRole.TOOL, text = "journalctl -u gw", toolName = "terminal", toolDetail = "journalctl -u gw", speaker = "coder"),
+            ChatMessage(id = "rm-2", role = MessageRole.ASSISTANT, text = "Ticket mint fails after 30s. @OPS can you pull the journal?", speaker = "coder"),
+            ChatMessage(id = "rm-3", role = MessageRole.ASSISTANT, text = "", speaker = "ash", passed = true),
+            ChatMessage(id = "a-t4", role = MessageRole.ASSISTANT, text = "Journal shows two restarts at 02:14 and 02:31 —", speaker = "ops", streaming = true),
+        )
+        mount(rows, streaming = true, participants = room, pendingSpeaker = "ops")
+        rule.onNodeWithText("coder").assertIsDisplayed()
+        rule.onNodeWithText("ops").assertIsDisplayed()
+        rule.onNodeWithTag("chat.passed").assertIsDisplayed()
+        rule.onNodeWithText("passed").assertIsDisplayed()
+        rule.onNodeWithTag("chat.cursor").assertIsDisplayed()
+        rule.onNodeWithTag("chat.mentions").assertIsDisplayed()
+        rule.onNodeWithTag("chat.mention.OPS").assertIsDisplayed()
+        rule.onNodeWithText("INTERRUPT ALL").assertIsDisplayed()
+        rule.onAllNodesWithTag("chat.attach").assertCountEquals(0)
+        rule.onAllNodesWithText("HERMES").assertCountEquals(0)
+        snap("05-room-streaming")
+    }
+
+    @Test
+    fun roomWaitingShowsSpeakerPending() {
+        val rows = listOf(ChatMessage(id = "rm-1", role = MessageRole.USER, text = "@COD status?"))
+        mount(rows, streaming = true, participants = room, pendingSpeaker = "coder")
+        rule.onNodeWithTag("chat.pending").assertIsDisplayed()
+        rule.onNodeWithText("thinking").assertIsDisplayed()
+        rule.onNodeWithText("coder").assertIsDisplayed()
+        snap("06-room-thinking")
     }
 
     /** Software-draws the decor view; Compose's idle wait never settles with infinite blink animations. */

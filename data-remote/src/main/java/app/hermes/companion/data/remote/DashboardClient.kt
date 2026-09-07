@@ -22,6 +22,7 @@ import app.hermes.companion.model.HistoryPage
 import app.hermes.companion.model.GatewayHello
 import app.hermes.companion.model.PairingStatus
 import app.hermes.companion.model.ProfileRef
+import app.hermes.companion.model.RoomRef
 import app.hermes.companion.model.SessionRef
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -65,6 +66,7 @@ import kotlinx.serialization.json.longOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
 
 class DashboardException(val code: String, message: String) : RuntimeException(message)
@@ -82,6 +84,15 @@ class DashboardClient internal constructor(
     private val cookies = MemoryCookieJar()
 
     private val http: OkHttpClient = buildHttp(http, attachToken)
+
+    /**
+     * `device_id:credential` of this phone's pairing with the host. Sent as
+     * `Authorization: Companion …` on `/companion/` calls, which the relay gates for anything
+     * beyond the pairing handshake (rooms, device command, host tools). Set by the device node
+     * once a credential is known; null until then.
+     */
+    @Volatile
+    var companionAuth: String? = null
 
     constructor() : this(
         OkHttpClient.Builder()
@@ -226,6 +237,7 @@ class DashboardClient internal constructor(
         protectedPackages: Collection<String> = emptyList(),
         capabilities: List<String> = DeviceLanePolicy.CAPABILITIES,
     ): DeviceTicket {
+        companionAuth = "${cred.deviceId}:${cred.credential}"
         val payload = DeviceLanePolicy.registerJson(
             deviceId = cred.deviceId,
             profileId = cred.profileId,
@@ -255,6 +267,7 @@ class DashboardClient internal constructor(
         protectedPackages: Collection<String> = emptyList(),
         capabilities: List<String> = DeviceLanePolicy.CAPABILITIES,
     ) {
+        companionAuth = "${cred.deviceId}:${cred.credential}"
         deviceLock.withLock {
             deviceWs?.close()
             val ticket = registerDevice(
@@ -632,6 +645,73 @@ class DashboardClient internal constructor(
         }
     }.flowOn(Dispatchers.IO)
 
+    // ---- Agent rooms (P21) — plugin-owned routes under /companion/rooms -------------------------
+
+    suspend fun listRooms(origin: String): List<RoomRef> =
+        get(DashboardUrls.machine(origin, "/companion/rooms")) { RoomJson.rooms(it) }
+
+    suspend fun createRoom(origin: String, title: String, participants: List<String>, maxRounds: Int = 2): RoomRef {
+        val parts = participants.joinToString(",") { it.json() }
+        val payload = """{"title":${title.json()},"participants":[$parts],"policy":{"max_rounds":$maxRounds}}"""
+        return post(DashboardUrls.machine(origin, "/companion/rooms"), payload) {
+            RoomJson.roomEnvelope(it) ?: throw DashboardException("room_parse", "room missing in reply")
+        }
+    }
+
+    suspend fun roomHistory(origin: String, roomId: String, after: Int = 0): Pair<RoomRef?, List<ChatMessage>> =
+        get(DashboardUrls.machine(origin, "/companion/rooms/$roomId/history?after=$after")) { RoomJson.history(it) }
+
+    /** Posts as the operator; the host starts the agents' turns. Returns the operator line's seq. */
+    suspend fun postRoom(origin: String, roomId: String, text: String): Int =
+        post(DashboardUrls.machine(origin, "/companion/rooms/$roomId/post"), """{"text":${text.json()}}""") { body ->
+            (DashboardJson.parseToJsonElement(body) as? JsonObject)?.get("seq")?.jsonPrimitive?.intOrNull ?: 0
+        }
+
+    suspend fun interruptRoom(origin: String, roomId: String) {
+        post(DashboardUrls.machine(origin, "/companion/rooms/$roomId/interrupt"), "{}") { }
+    }
+
+    suspend fun deleteRoom(origin: String, roomId: String) {
+        delete(DashboardUrls.machine(origin, "/companion/rooms/$roomId"))
+    }
+
+    /**
+     * Live `room.*` events for one room as [ChatEvent]s. Completes when the socket closes;
+     * callers reconnect. Heartbeats and unknown frames are dropped.
+     */
+    fun roomEvents(origin: String, roomId: String): Flow<ChatEvent> = callbackFlow {
+        val url = DashboardUrls.machine(origin, "/companion/rooms/events?room_id=$roomId")
+            .replaceFirst("http://", "ws://").replaceFirst("https://", "wss://")
+        // Websocket upgrades bypass the REST interceptors on this client, so attach the pairing
+        // credential here as well (the relay gates /companion/rooms/events).
+        val request = Request.Builder().url(url).apply {
+            companionAuth?.takeIf { it.isNotBlank() }?.let { header("Authorization", "Companion $it") }
+        }.build()
+        val socket = wsHttp.newWebSocket(
+            request,
+            object : okhttp3.WebSocketListener() {
+                override fun onMessage(webSocket: okhttp3.WebSocket, text: String) {
+                    text.split('\n').forEach { line ->
+                        RoomJson.event(line)?.let { trySend(it) }
+                    }
+                }
+
+                override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: Response?) {
+                    val code = response?.code
+                    close(
+                        if (code == 401) DashboardException("room_unauthorized", "pair this phone to use rooms")
+                        else DashboardException("room_events", t.message ?: "room events socket failed"),
+                    )
+                }
+
+                override fun onClosed(webSocket: okhttp3.WebSocket, code: Int, reason: String) {
+                    close()
+                }
+            },
+        )
+        awaitClose { socket.cancel() }
+    }.flowOn(Dispatchers.IO)
+
     private suspend fun ensureRpc(origin: String, profileId: String, ticket: String? = null): GatewaySocket =
         rpcLock.withLock {
             val key = "$origin|$profileId"
@@ -748,20 +828,18 @@ class DashboardClient internal constructor(
                 if (!url.isHttps && !OriginPolicy.privateHost(url.host)) {
                     throw java.io.IOException(OriginPolicy.CLEARTEXT_DENIED)
                 }
-                chain.proceed(chain.request())
-            }
-            .apply {
-                if (attachToken) {
-                    addInterceptor { chain ->
-                        val token = sessionToken
-                        val req = chain.request().newBuilder()
-                        if (!gated && !token.isNullOrBlank()) {
-                            req.header("X-Hermes-Session-Token", token)
-                            req.header("Authorization", "Bearer $token")
-                        }
-                        chain.proceed(req.build())
-                    }
+                val req = chain.request().newBuilder()
+                val auth = companionAuth
+                val token = sessionToken
+                if (!auth.isNullOrBlank() && url.encodedPath.startsWith("/companion/")) {
+                    // Plugin routes: the pairing credential is the identity. Must not be
+                    // overwritten by the dashboard bearer below.
+                    req.header("Authorization", "Companion $auth")
+                } else if (attachToken && !gated && !token.isNullOrBlank()) {
+                    req.header("X-Hermes-Session-Token", token)
+                    req.header("Authorization", "Bearer $token")
                 }
+                chain.proceed(req.build())
             }
             .build()
 

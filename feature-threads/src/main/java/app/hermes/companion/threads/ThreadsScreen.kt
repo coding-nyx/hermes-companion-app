@@ -29,6 +29,8 @@ import app.hermes.companion.design.FetchPane
 import app.hermes.companion.design.FetchRow
 import app.hermes.companion.design.FetchSkeleton
 import app.hermes.companion.design.Hairline
+import app.hermes.companion.design.LiveDot
+import app.hermes.companion.model.RoomRef
 import app.hermes.companion.model.SessionRef
 
 @Composable
@@ -39,6 +41,12 @@ fun ThreadsScreen(
     error: String? = null,
     activeProfileId: String? = null,
     pendingDelete: SessionRef? = null,
+    /** Agent rooms (P21) listed above the threads. */
+    rooms: List<RoomRef> = emptyList(),
+    roomsError: String? = null,
+    onOpenRoom: (RoomRef) -> Unit = {},
+    onNewRoom: () -> Unit = {},
+    onDeleteRoom: (RoomRef) -> Unit = {},
     onOpen: (SessionRef) -> Unit = {},
     onNew: () -> Unit = {},
     onRetry: (() -> Unit)? = null,
@@ -52,15 +60,28 @@ fun ThreadsScreen(
             .background(CompanionColor.Void)
             .testTag("threads.list"),
     ) {
-        Text(
-            text = "NEW",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-            modifier = Modifier
-                .testTag("threads.new")
-                .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
-                .clickable(onClick = onNew),
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "NEW",
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                modifier = Modifier
+                    .testTag("threads.new")
+                    .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
+                    .clickable(onClick = onNew),
+            )
+            Text(
+                text = "NEW ROOM",
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                modifier = Modifier
+                    .testTag("threads.newroom")
+                    .padding(horizontal = CompanionSpace.Sm, vertical = CompanionSpace.Md)
+                    .clickable(onClick = onNewRoom),
+            )
+        }
         Hairline()
+        if (rooms.isNotEmpty() || !roomsError.isNullOrBlank()) {
+            RoomsSection(rooms, roomsError, onOpenRoom, onDeleteRoom)
+        }
         pendingDelete?.let { target ->
             DeleteStrip(target, onConfirmDelete, onCancelDelete)
             Hairline()
@@ -140,6 +161,77 @@ fun ThreadsScreen(
                 Hairline()
             }
         }
+    }
+}
+
+/** ROOMS rail: title, participant glyphs, live dot while a turn runs. Long-press deletes. */
+@Composable
+private fun RoomsSection(
+    rooms: List<RoomRef>,
+    error: String?,
+    onOpen: (RoomRef) -> Unit,
+    onDelete: (RoomRef) -> Unit,
+) {
+    Column(Modifier.testTag("threads.rooms")) {
+        Text(
+            text = "ROOMS",
+            style = CompanionType.MonoSmall,
+            modifier = Modifier.padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
+        )
+        if (!error.isNullOrBlank()) {
+            Text(
+                text = error,
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                modifier = Modifier
+                    .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
+                    .testTag("threads.rooms.error"),
+            )
+        }
+        rooms.forEach { room ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .pointerInput(room.id) {
+                        detectTapGestures(
+                            onTap = { onOpen(room) },
+                            onLongPress = { onDelete(room) },
+                        )
+                    }
+                    .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
+                    .testTag("threads.room.${room.id}"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier
+                        .padding(end = CompanionSpace.Sm)
+                        .width(2.dp)
+                        .height(18.dp)
+                        .background(if (room.busy) CompanionColor.Signal else CompanionColor.SignalDim),
+                )
+                Text(
+                    text = room.title,
+                    style = CompanionType.Body.copy(color = CompanionColor.Text),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (room.busy) {
+                    LiveDot(modifier = Modifier.padding(end = 6.dp))
+                }
+                Text(
+                    text = room.participants.joinToString(" ") { it.glyph },
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+            Hairline()
+        }
+        Text(
+            text = "THREADS",
+            style = CompanionType.MonoSmall,
+            modifier = Modifier.padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
+        )
     }
 }
 

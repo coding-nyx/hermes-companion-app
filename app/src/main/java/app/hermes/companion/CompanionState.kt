@@ -3,6 +3,7 @@ package app.hermes.companion
 import app.hermes.companion.console.TerminalLogEntry
 import app.hermes.companion.domain.HostHealth
 import app.hermes.companion.domain.ProfileScope
+import app.hermes.companion.domain.Rooms
 import app.hermes.companion.domain.WakePing
 import app.hermes.companion.model.ApprovalPrompt
 import app.hermes.companion.model.ChatAttachment
@@ -19,6 +20,7 @@ import app.hermes.companion.model.HostMetrics
 import app.hermes.companion.model.ModelCatalog
 import app.hermes.companion.model.PairingPhase
 import app.hermes.companion.model.ProfileRef
+import app.hermes.companion.model.RoomRef
 import app.hermes.companion.model.GatewayChoice
 import app.hermes.companion.model.SavedGateway
 import app.hermes.companion.model.SessionRef
@@ -57,6 +59,15 @@ data class CompanionState(
     val tab: MainTab = MainTab.THREADS,
     val openSessionId: String? = null,
     val openSessionRef: SessionRef? = null,
+    // Agent rooms (P21). A room and a thread are never open at the same time.
+    val rooms: List<RoomRef> = emptyList(),
+    val roomsLoading: Boolean = false,
+    val roomsError: String? = null,
+    val openRoomId: String? = null,
+    val openRoom: RoomRef? = null,
+    /** Profile taking a turn right now in the open room. */
+    val roomSpeaking: String? = null,
+    val roomCreateOpen: Boolean = false,
     val messages: List<ChatMessage> = emptyList(),
     val draft: String = "",
     val streaming: Boolean = false,
@@ -119,7 +130,9 @@ data class CompanionState(
     val isVoiceStreamActive: Boolean
         get() = voiceStreamState != VoiceStreamState.IDLE
     val visibleSessions: List<SessionRef>
-        get() = ProfileScope.visibleSessions(sessions, activeProfileId)
+        get() = ProfileScope.visibleSessions(sessions, activeProfileId).filterNot { Rooms.isBackingSession(it.title) }
+    val inRoom: Boolean
+        get() = openRoomId != null
     val activeProfile: ProfileRef?
         get() = profiles.find { it.id == activeProfileId }
     /**

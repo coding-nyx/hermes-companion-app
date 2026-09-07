@@ -36,6 +36,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -58,6 +61,9 @@ import app.hermes.companion.model.ChatAttachment
 import app.hermes.companion.model.ChatBlock
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
+import app.hermes.companion.model.ProfileRef
+import app.hermes.companion.model.RoomParticipant
+import app.hermes.companion.domain.Rooms
 import app.hermes.companion.model.ModelCatalog
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -100,8 +106,15 @@ fun ChatScreen(
     onOpenMedia: (ChatBlock) -> Unit = {},
     onFetchMedia: suspend (String) -> ByteArray? = { null },
     threadId: String? = null,
+    /** Agent room (P21): who is in it. Non-empty switches the screen to room mode. */
+    participants: List<RoomParticipant> = emptyList(),
+    /** Profile taking a turn right now (room mode); labels the pending row. */
+    pendingSpeaker: String? = null,
+    onMention: (String) -> Unit = {},
+    profiles: List<ProfileRef> = emptyList(),
     modifier: Modifier = Modifier,
 ) {
+    val roomMode = participants.isNotEmpty()
     val listState = remember(threadId) { LazyListState() }
     val scope = rememberCoroutineScope()
     var landed by remember(threadId) { mutableStateOf(false) }
@@ -211,25 +224,33 @@ fun ChatScreen(
                     item(key = "history.skeleton") { FetchSkeleton(lines = 4, padded = false) }
                 }
             }
-            items(messages, key = { it.id }) { message ->
+            // Duplicate keys crash LazyColumn outright; a reducer race must never take the app down.
+            items(messages.distinctBy { it.id }, key = { it.id }) { message ->
                 when (message.role) {
-                    MessageRole.USER -> UserRow(message, onRewind, onFetchMedia, onOpenMedia)
+                    MessageRole.USER -> UserRow(message, if (roomMode) ({}) else onRewind, onFetchMedia, onOpenMedia)
                     MessageRole.TOOL -> Box(Modifier.padding(start = AgentRailInset)) {
                         ToolRow(message, onFetchMedia, onOpenMedia)
                     }
-                    MessageRole.ASSISTANT -> AssistantRow(message, onFetchMedia, onOpenMedia)
+                    MessageRole.ASSISTANT -> AssistantRow(message, onFetchMedia, onOpenMedia, participants, profiles)
                 }
             }
             val last = messages.lastOrNull()
             val awaitingText = streaming && !(last?.role == MessageRole.ASSISTANT && last.streaming)
             if (awaitingText) {
                 item(key = "stream.pending") {
+                    val who = if (roomMode) pendingSpeaker else null
                     PendingRow(
-                        label = if (last?.role == MessageRole.TOOL && last.toolRunning) {
-                            "running · ${last.toolName?.ifBlank { null } ?: "tool"}"
-                        } else {
-                            "thinking"
+                        label = when {
+                            last?.role == MessageRole.TOOL && last.toolRunning ->
+                                "running · ${last.toolName?.ifBlank { null } ?: "tool"}"
+                            roomMode && who == null -> "waiting for the room"
+                            else -> "thinking"
                         },
+                        speaker = who,
+                        railIndex = Rooms.speakerIndex(who, participants),
+                        roomMode = roomMode,
+                        participants = participants,
+                        profiles = profiles,
                     )
                 }
             }
@@ -328,8 +349,31 @@ fun ChatScreen(
                 }
             }
         }
+        if (roomMode) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
+                    .testTag("chat.mentions"),
+                horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(text = "TO", style = CompanionType.MonoSmall)
+                participants.forEach { p ->
+                    Text(
+                        text = "@${p.glyph}",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                        modifier = Modifier
+                            .testTag("chat.mention.${p.glyph}")
+                            .border(CompanionSpace.Hairline, CompanionColor.LineStrong)
+                            .clickable { onMention(p.glyph) }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+            }
+        }
         val activeModel = modelOverride.ifBlank { modelCatalog?.currentModel.orEmpty() }
-        if (activeModel.isNotBlank()) {
+        if (activeModel.isNotBlank() && !roomMode) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -395,22 +439,25 @@ fun ChatScreen(
                 .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md),
             verticalAlignment = Alignment.Bottom,
         ) {
-            Text(
-                text = "+",
-                style = CompanionType.Mono.copy(color = CompanionColor.Signal),
-                modifier = Modifier
-                    .testTag("chat.attach")
-                    .border(CompanionSpace.Hairline, CompanionColor.Signal)
-                    .clickable(onClick = onToggleAttach)
-                    .padding(horizontal = 10.dp, vertical = 10.dp),
-            )
-            Spacer(Modifier.width(CompanionSpace.Sm))
+            if (!roomMode) {
+                Text(
+                    text = "+",
+                    style = CompanionType.Mono.copy(color = CompanionColor.Signal),
+                    modifier = Modifier
+                        .testTag("chat.attach")
+                        .border(CompanionSpace.Hairline, CompanionColor.Signal)
+                        .clickable(onClick = onToggleAttach)
+                        .padding(horizontal = 10.dp, vertical = 10.dp),
+                )
+                Spacer(Modifier.width(CompanionSpace.Sm))
+            }
             MarkdownComposer(
                 value = draft,
                 onValueChange = onDraftChange,
                 onSend = { if (!streaming) onSend() },
                 modifier = Modifier.weight(1f),
             )
+            if (!roomMode) {
             Spacer(Modifier.width(CompanionSpace.Sm))
             Text(
                 text = if (isListeningVoice) "..." else "MIC",
@@ -428,8 +475,10 @@ fun ChatScreen(
                     .clickable(onClick = onVoiceClick)
                     .padding(horizontal = 10.dp, vertical = 10.dp),
             )
+            }
             Spacer(Modifier.width(CompanionSpace.Sm))
-            val action = if (streaming) "INTERRUPT" to onInterrupt else "SEND" to onSend
+            val stopLabel = if (roomMode) "INTERRUPT ALL" else "INTERRUPT"
+            val action = if (streaming) stopLabel to onInterrupt else "SEND" to onSend
             Text(
                 text = action.first,
                 style = CompanionType.MonoSmall.copy(
@@ -505,24 +554,56 @@ private fun UserRow(
 }
 
 /** Agent turn: full width, 2dp signal rail, `HERMES` label, live cursor while streaming. */
+/**
+ * Left rail for agent rows. One accent only: participants differ by glyph and rail texture —
+ * index 0 solid, 1 dashed, 2+ dotted (tokens.yaml: "do not invent a second green").
+ */
+@Composable
+private fun AgentRail(live: Boolean, railIndex: Int, modifier: Modifier = Modifier) {
+    val color = if (live) CompanionColor.Signal else CompanionColor.SignalDim
+    val dash = when (railIndex) {
+        0 -> null
+        1 -> floatArrayOf(10f, 6f)
+        else -> floatArrayOf(3f, 5f)
+    }
+    Box(
+        modifier
+            .width(2.dp)
+            .fillMaxHeight()
+            .drawBehind {
+                if (dash == null) {
+                    drawRect(color)
+                } else {
+                    drawLine(
+                        color = color,
+                        start = Offset(size.width / 2f, 0f),
+                        end = Offset(size.width / 2f, size.height),
+                        strokeWidth = size.width,
+                        pathEffect = PathEffect.dashPathEffect(dash, 0f),
+                    )
+                }
+            },
+    )
+}
+
 @Composable
 private fun AssistantRow(
     message: ChatMessage,
     onFetchMedia: suspend (String) -> ByteArray?,
     onOpenMedia: (ChatBlock) -> Unit,
+    participants: List<RoomParticipant> = emptyList(),
+    profiles: List<ProfileRef> = emptyList(),
 ) {
+    val label = Rooms.speakerLabel(message.speaker, participants, profiles)
+    val railIndex = Rooms.speakerIndex(message.speaker, participants)
+    val error = message.toolDetail.orEmpty().takeIf { message.speaker != null && message.text.isBlank() && !message.passed }.orEmpty()
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
-            .testTag("chat.assistant"),
+            .testTag(if (message.passed) "chat.passed" else "chat.assistant"),
     ) {
-        Box(
-            Modifier
-                .width(2.dp)
-                .fillMaxHeight()
-                .background(if (message.streaming) CompanionColor.Signal else CompanionColor.SignalDim),
-        )
+        AgentRail(live = message.streaming, railIndex = railIndex)
         Spacer(Modifier.width(AgentRailInset - 2.dp))
         Column(Modifier.weight(1f)) {
             Row(
@@ -531,9 +612,19 @@ private fun AssistantRow(
                 modifier = Modifier.padding(bottom = 3.dp),
             ) {
                 Text(
-                    text = "HERMES",
+                    text = label,
                     style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
                 )
+                if (message.passed) {
+                    Text(text = "passed", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute))
+                }
+                if (error.isNotBlank()) {
+                    Text(
+                        text = Rooms.turnErrorLabel(error),
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                        modifier = Modifier.testTag("chat.turn.error"),
+                    )
+                }
                 if (message.streaming) {
                     LiveDot()
                     Text(
@@ -565,26 +656,34 @@ private fun AssistantRow(
 
 /** Shown between send and the first agent token, or while a tool runs with no text yet. */
 @Composable
-private fun PendingRow(label: String) {
+private fun PendingRow(
+    label: String,
+    speaker: String? = null,
+    railIndex: Int = 0,
+    roomMode: Boolean = false,
+    participants: List<RoomParticipant> = emptyList(),
+    profiles: List<ProfileRef> = emptyList(),
+) {
+    val speakerText = when {
+        speaker != null -> Rooms.displayName(speaker, participants, profiles)
+        participants.size == 1 -> Rooms.displayName(participants[0].profile, participants, profiles)
+        roomMode -> "ROOM"
+        else -> "HERMES"
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
             .testTag("chat.pending"),
     ) {
-        Box(
-            Modifier
-                .width(2.dp)
-                .fillMaxHeight()
-                .background(CompanionColor.Signal),
-        )
+        AgentRail(live = true, railIndex = railIndex)
         Spacer(Modifier.width(AgentRailInset - 2.dp))
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
-                text = "HERMES",
+                text = speakerText,
                 style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
             )
             LiveDot()

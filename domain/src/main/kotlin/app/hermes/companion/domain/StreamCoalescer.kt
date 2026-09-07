@@ -28,14 +28,20 @@ object StreamCoalescer {
         if (events.size < 2) return events
         val out = ArrayList<ChatEvent>(events.size)
         val pending = StringBuilder()
+        var speaker: String? = null
         fun flush() {
             if (pending.isNotEmpty()) {
-                out += ChatEvent.AssistantDelta(pending.toString())
+                out += ChatEvent.AssistantDelta(pending.toString(), speaker)
                 pending.setLength(0)
             }
         }
         for (ev in events) {
-            if (ev is ChatEvent.AssistantDelta) pending.append(ev.text) else {
+            if (ev is ChatEvent.AssistantDelta) {
+                // Room turns carry a speaker; never merge two speakers into one delta.
+                if (pending.isNotEmpty() && ev.speaker != speaker) flush()
+                speaker = ev.speaker
+                pending.append(ev.text)
+            } else {
                 flush()
                 out += ev
             }
@@ -54,9 +60,10 @@ fun Flow<ChatEvent>.coalesceDeltas(windowMs: Long = StreamCoalescer.DEFAULT_WIND
     coroutineScope {
         val inbox = produce(capacity = Channel.UNLIMITED) { collect { send(it) } }
         val pending = StringBuilder()
+        var speaker: String? = null
         suspend fun flush() {
             if (pending.isNotEmpty()) {
-                emit(ChatEvent.AssistantDelta(pending.toString()))
+                emit(ChatEvent.AssistantDelta(pending.toString(), speaker))
                 pending.setLength(0)
             }
         }
@@ -68,6 +75,7 @@ fun Flow<ChatEvent>.coalesceDeltas(windowMs: Long = StreamCoalescer.DEFAULT_WIND
                 emit(first)
                 continue
             }
+            speaker = first.speaker
             pending.append(first.text)
             // Drain until the frame closes or a non-delta arrives.
             var frameOpen = true
@@ -80,7 +88,13 @@ fun Flow<ChatEvent>.coalesceDeltas(windowMs: Long = StreamCoalescer.DEFAULT_WIND
                 }
                 when (next) {
                     null -> Unit
-                    is ChatEvent.AssistantDelta -> pending.append(next.text)
+                    is ChatEvent.AssistantDelta -> {
+                        if (next.speaker != speaker) {
+                            flush()
+                            speaker = next.speaker
+                        }
+                        pending.append(next.text)
+                    }
                     else -> {
                         flush()
                         emit(next)

@@ -10,6 +10,7 @@ import base64
 import hashlib
 import json
 import os
+import queue
 import socket
 import struct
 import threading
@@ -18,6 +19,8 @@ from urllib.parse import parse_qs, urlparse
 
 try:
     from .drift import self_test
+    from .rooms import RoomController, RoomError, RoomEvents, RoomStore
+    from .rooms import default_store_path as default_rooms_path
     from .fs_explorer import list_dir_tree, read_file_content
     from .git_workspace import commit_git, get_git_branches, get_git_diff, get_git_status, stage_git_file
     from .host_metrics import collect_metrics
@@ -28,6 +31,8 @@ try:
     from .tickets import ALLOWLIST, PROTOCOL, TICKET_PREFIX, TicketError, TicketStore, parse_subprotocols
 except ImportError:  # script/tests on sys.path
     from drift import self_test
+    from rooms import RoomController, RoomError, RoomEvents, RoomStore
+    from rooms import default_store_path as default_rooms_path
     from fs_explorer import list_dir_tree, read_file_content
     from git_workspace import commit_git, get_git_branches, get_git_diff, get_git_status, stage_git_file
     from host_metrics import collect_metrics
@@ -148,6 +153,16 @@ def probe_upstream(host: str, port: int, timeout: float = 1.5) -> str:
         return "refused"
 
 
+def _shutdown(sock: socket.socket) -> None:
+    """Send FIN now. close() alone is not enough while another thread sits in recv(): the fd
+    stays referenced, the peer never sees EOF, and (with OkHttp pooling) its next request on the
+    "healthy" connection falls into a dead pipe until its read timeout — a 60s stall per call."""
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
 def proxy_tcp(client: socket.socket, already: bytes, upstream_host: str, upstream_port: int) -> None:
     _keepalive(client)
     try:
@@ -162,6 +177,10 @@ def proxy_tcp(client: socket.socket, already: bytes, upstream_host: str, upstrea
         t = threading.Thread(target=_pipe, args=(client, up), daemon=True)
         t.start()
         _pipe(up, client)
+        # Upstream finished (we send it Connection: close). Tell the client immediately so it does
+        # not reuse this connection; that also unblocks the client→upstream pipe thread.
+        _shutdown(client)
+        _shutdown(up)
         t.join(timeout=1)
     finally:
         try:
@@ -181,6 +200,7 @@ class RelayState:
         tickets: TicketStore | None = None,
         operator: Operator | None = None,
         media: MediaStore | None = None,
+        rooms: RoomStore | None = None,
     ):
         self.pairing = pairing or PairingStore()
         self.tickets = tickets or TicketStore()
@@ -197,6 +217,33 @@ class RelayState:
         self.notif_rings: dict[str, list[dict]] = {}
         self.notif_ring_cap = 100
         self.injected_notif_keys: set[str] = set()
+        # Agent rooms (P21). Upstream is bound in make_server; unavailable in standalone mode.
+        self.rooms = rooms or RoomStore()
+        self.room_events = RoomEvents()
+        self.room_controller = RoomController(
+            self.rooms,
+            self.room_events,
+            available=lambda: not standalone_enabled(),
+            token_provider=self._dashboard_token,
+        )
+        self._dashboard_token_cache: str | None = None
+
+    def _dashboard_token(self) -> str | None:
+        """Loopback dashboards inject an ephemeral token into the SPA; adopt it for upstream ws."""
+        if self._dashboard_token_cache:
+            return self._dashboard_token_cache
+        host, port = self.room_controller.upstream
+        try:
+            import re
+            import urllib.request
+
+            with urllib.request.urlopen(f"http://{host}:{port}/", timeout=3) as resp:
+                html = resp.read(200_000).decode("utf-8", errors="replace")
+            m = re.search(r'__HERMES_SESSION_TOKEN__\s*=\s*"([^"]+)"', html)
+            self._dashboard_token_cache = m.group(1) if m else None
+        except Exception:
+            self._dashboard_token_cache = None
+        return self._dashboard_token_cache
 
     def send_command(self, device_id: str, action: str, arguments: dict | None = None) -> str:
         event = threading.Event()
@@ -419,9 +466,23 @@ class CompanionHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self._dispatch()
 
+    DEBUG = os.environ.get("HERMES_COMPANION_DEBUG", "") not in ("", "0")
+
     def _dispatch(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        if self.DEBUG:
+            import time as _t
+            _started = _t.monotonic()
+            print(f"relay> {self.command} {self.path} {self.request_version} from {self.client_address[0]} "
+                  f"conn={self.headers.get('Connection')} upgrade={self.headers.get('Upgrade')}", flush=True)
+            try:
+                return self._dispatch_inner(path, parsed)
+            finally:
+                print(f"relay< {self.command} {self.path} {_t.monotonic() - _started:.2f}s", flush=True)
+        return self._dispatch_inner(path, parsed)
+
+    def _dispatch_inner(self, path: str, parsed):
         if path.startswith("/companion/"):
             self._companion(path)
             return
@@ -469,6 +530,9 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 "warnings": [],
             }
         payload["upstream_url"] = f"http://{host}:{port}"
+        payload["rooms"] = "unavailable_standalone" if standalone_enabled() else (
+            "ok" if upstream == "reachable" else "upstream_down"
+        )
         return self._json(payload)
 
     def _media_put(self):
@@ -625,7 +689,41 @@ class CompanionHandler(BaseHTTPRequestHandler):
         self.close_connection = True
         return None
 
+    # Paths a not-yet-paired phone (or anyone) may hit: preflight, pairing handshake, register
+    # (validates the credential in its body), ticket-gated device ws, media fetch for transcripts.
+    OPEN_COMPANION_PATHS = ("/companion/health", "/companion/device/pair", "/companion/device/register",
+                            "/companion/device/ws", "/companion/media/")
+
+    def _is_loopback(self) -> bool:
+        host = (self.client_address[0] if self.client_address else "") or ""
+        return host in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
+    def _companion_authorized(self, path: str) -> bool:
+        """Loopback (CLI, in-process agent) or a paired device presenting its credential."""
+        if path.startswith(self.OPEN_COMPANION_PATHS) and not path.endswith("/approve"):
+            return True
+        if self._is_loopback():
+            return True
+        header = self.headers.get("Authorization") or ""
+        scheme, _, value = header.partition(" ")
+        if scheme.lower() != "companion" or ":" not in value:
+            return False
+        device_id, _, credential = value.strip().partition(":")
+        device = self.state.pairing.devices.get(device_id)
+        return device is not None and bool(credential) and device.credential == credential
+
     def _companion(self, path: str):
+        if not self._companion_authorized(path):
+            scheme = (self.headers.get("Authorization") or "").split(" ", 1)[0] or "none"
+            print(f"companion relay 401 {self.command} {path} from {self.client_address[0]} auth={scheme}", flush=True)
+            return self._json({"error": "unauthorized", "hint": "pair this phone or call from the host"}, 401)
+        if path.startswith("/companion/rooms"):
+            try:
+                return self._rooms(path)
+            except RoomError as extra:
+                return self._json({"error": extra.code, "message": extra.message}, extra.status)
+            except Exception:
+                return self._json({"error": "relay_failed"}, 500)
         try:
             if path == "/companion/device/pair" and self.command == "POST":
                 body = self._read_json()
@@ -799,6 +897,108 @@ class CompanionHandler(BaseHTTPRequestHandler):
         except Exception:
             return self._json({"error": "relay_failed"}, 500)
 
+    def _rooms(self, path: str):
+        ctl = self.state.room_controller
+        store = self.state.rooms
+        parts = [p for p in path.split("/") if p]  # companion, rooms, <id>, <action>
+        if path == "/companion/rooms/events":
+            return self._rooms_events_ws()
+        if len(parts) == 2:
+            if self.command == "GET":
+                return self._json({"rooms": [ctl.public_room(r) for r in store.list()]})
+            if self.command == "POST":
+                if not ctl.available():
+                    raise RoomError("rooms_unavailable", "rooms need the dashboard upstream (proxy mode)", 503)
+                body = self._read_json()
+                room = store.create(
+                    str(body.get("title") or ""),
+                    [str(p) for p in (body.get("participants") or []) if p],
+                    body.get("policy") if isinstance(body.get("policy"), dict) else None,
+                )
+                self.state.room_events.emit({"type": "room.created", "room_id": room.id, "room": ctl.public_room(room)})
+                return self._json({"room": ctl.public_room(room)}, 201)
+            return self._json({"error": "method_not_allowed"}, 405)
+        room = store.get(parts[2])
+        action = parts[3] if len(parts) > 3 else ""
+        if not action:
+            if self.command == "GET":
+                return self._json({"room": ctl.public_room(room)})
+            if self.command == "DELETE":
+                ctl.interrupt(room.id)
+                store.delete(room.id)
+                self.state.room_events.emit({"type": "room.deleted", "room_id": room.id})
+                return self._json({"ok": True})
+            return self._json({"error": "method_not_allowed"}, 405)
+        if action == "history" and self.command == "GET":
+            qs = parse_qs(urlparse(self.path).query)
+            after = int((qs.get("after") or ["0"])[0] or 0)
+            limit = int((qs.get("limit") or ["200"])[0] or 200)
+            rows = store.history(room, after=after, limit=limit)
+            return self._json({"room": ctl.public_room(room), "messages": [m.public() for m in rows], "seq": room.seq})
+        if action == "post" and self.command == "POST":
+            body = self._read_json()
+            msg = ctl.post(room.id, str(body.get("text") or ""))
+            return self._json({"ok": True, "seq": msg.seq, "message": msg.public()}, 202)
+        if action == "interrupt" and self.command == "POST":
+            return self._json({"ok": True, "interrupted": ctl.interrupt(room.id)})
+        if action == "participants" and self.command == "POST":
+            body = self._read_json()
+            room = store.set_participants(
+                room.id,
+                [str(p) for p in (body.get("add") or [])],
+                [str(p) for p in (body.get("remove") or [])],
+            )
+            return self._json({"room": ctl.public_room(room)})
+        return self._json({"error": "not_found"}, 404)
+
+    def _rooms_events_ws(self):
+        """Server→phone stream of room.* events. Optional ?room_id= narrows to one room."""
+        if self.headers.get("Upgrade", "").lower() != "websocket":
+            return self._json({"error": "upgrade_required"}, 426)
+        key = self.headers.get("Sec-WebSocket-Key", "")
+        if not key:
+            return self._json({"error": "missing_ws_key"}, 400)
+        qs = parse_qs(urlparse(self.path).query)
+        room_id = (qs.get("room_id") or [None])[0]
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", _ws_accept(key))
+        self.end_headers()
+        sub = self.state.room_events.subscribe(room_id)
+        alive = threading.Event()
+        alive.set()
+
+        def _reader():
+            try:
+                while alive.is_set():
+                    raw = _ws_recv(self.rfile, self.wfile)
+                    if raw is None:
+                        break
+            except OSError:
+                pass
+            finally:
+                alive.clear()
+
+        threading.Thread(target=_reader, name="room-events-reader", daemon=True).start()
+        try:
+            self.wfile.write(_ws_text(json.dumps({"type": "room.ready", "room_id": room_id})))
+            self.wfile.flush()
+            while alive.is_set():
+                try:
+                    event = sub.get(timeout=15.0)
+                except queue.Empty:
+                    event = {"type": "room.heartbeat"}
+                self.wfile.write(_ws_text(json.dumps(event)))
+                self.wfile.flush()
+        except OSError:
+            pass
+        finally:
+            alive.clear()
+            self.state.room_events.unsubscribe(sub)
+        self.close_connection = True
+        return None
+
     def _device_ws(self):
         if self.headers.get("Upgrade", "").lower() != "websocket":
             return self._json({"error": "upgrade_required"}, 426)
@@ -944,11 +1144,15 @@ def make_server(
     httpd = ThreadingHTTPServer((host, port), CompanionHandler)
     CompanionHandler.state = state or RelayState()
     CompanionHandler.upstream = parse_upstream(upstream)
+    CompanionHandler.state.room_controller.upstream = CompanionHandler.upstream
     return httpd
 
 
 def persistent_state() -> RelayState:
-    return RelayState(pairing=PairingStore(path=default_store_path()))
+    return RelayState(
+        pairing=PairingStore(path=default_store_path()),
+        rooms=RoomStore(path=default_rooms_path()),
+    )
 
 
 def check_upstream(upstream: str = DEFAULT_UPSTREAM) -> dict:

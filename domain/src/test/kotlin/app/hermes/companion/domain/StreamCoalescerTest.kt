@@ -24,6 +24,25 @@ class StreamCoalescerTest {
     }
 
     @Test
+    fun mergeKeepsSpeakersApart() {
+        val merged = StreamCoalescer.merge(
+            listOf(
+                ChatEvent.AssistantDelta("I am ", "coder"), ChatEvent.AssistantDelta("COD", "coder"),
+                ChatEvent.AssistantDelta("I am ", "ash"), ChatEvent.AssistantDelta("ASH", "ash"),
+            ),
+        )
+        assertEquals(listOf(ChatEvent.AssistantDelta("I am COD", "coder"), ChatEvent.AssistantDelta("I am ASH", "ash")), merged)
+    }
+
+    @Test
+    fun coalesceCarriesTheSpeaker() = runBlocking {
+        val out = flow {
+            emit(ChatEvent.AssistantDelta("a", "ops")); emit(ChatEvent.AssistantDelta("b", "ops"))
+        }.coalesceDeltas(windowMs = 20).toList()
+        assertEquals(listOf(ChatEvent.AssistantDelta("ab", "ops")), out)
+    }
+
+    @Test
     fun mergeLeavesSingletonsAlone() {
         assertEquals(listOf(d("x")), StreamCoalescer.merge(listOf(d("x"))))
         assertEquals(emptyList<ChatEvent>(), StreamCoalescer.merge(emptyList()))

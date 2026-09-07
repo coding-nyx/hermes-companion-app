@@ -6,7 +6,7 @@ Usage (any of):
   python -m hermes_companion_cli   # if console script installed
   hermes-companion lanes          # console_script alias when packaged
 
-Exposes: list, approve, revoke, lanes, default, rename, relay.
+Exposes: list, approve, revoke, lanes, default, rename, relay, room.
 """
 from __future__ import annotations
 
