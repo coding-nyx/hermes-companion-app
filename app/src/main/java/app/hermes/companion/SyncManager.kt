@@ -157,7 +157,7 @@ class SyncManager(
                     ) {
                         client(origin).forgetLiveIds()
                         runCatching {
-                            cache.readSessions(origin, profileId) { client(origin).listSessions(origin, profileId) }
+                            cache.readSessions(origin, profileId) { client(origin).listSessions(origin, profileId, _state.value.showArchived) }
                         }.onSuccess { rows ->
                             _state.update { st ->
                                 if (st.activeProfileId == profileId) st.copy(sessions = SessionLists.normalize(rows)) else st
@@ -210,7 +210,7 @@ class SyncManager(
         when (frame) {
             BusFrame.SessionRefetch -> scope.launch {
                 runCatching {
-                    cache.readSessions(origin, profileId) { client(origin).listSessions(origin, profileId) }
+                    cache.readSessions(origin, profileId) { client(origin).listSessions(origin, profileId, _state.value.showArchived) }
                 }.onSuccess { rows ->
                     _state.update { st ->
                         if (st.activeProfileId == profileId) st.copy(sessions = SessionLists.normalize(rows)) else st

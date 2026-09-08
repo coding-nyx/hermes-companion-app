@@ -38,6 +38,8 @@ class Device:
     os_version: str = ""
     last_seen: float = 0.0
     extra_protected: tuple[str, ...] = field(default_factory=tuple)
+    # ntfy topic URL the phone listens on for this host (A22.5 room wake). Blank = no wake.
+    wake_topic: str = ""
 
 
 def normalize_code(code: str) -> str:
@@ -151,10 +153,13 @@ class PairingStore:
         manufacturer: str | None = None,
         os_version: str | None = None,
         extra_protected: list[str] | tuple[str, ...] | None = None,
+        wake_topic: str | None = None,
     ) -> Device:
         device = self.devices.get(device_id)
         if device is None:
             raise PairingError("unknown_device")
+        if wake_topic is not None:
+            device.wake_topic = str(wake_topic or "").strip()[:200]
         if name is not None and str(name).strip():
             device.name = str(name).strip()
         if model is not None:
@@ -309,6 +314,7 @@ class PairingStore:
                 os_version=str(row.get("os_version") or ""),
                 last_seen=float(row.get("last_seen") or 0),
                 extra_protected=tuple(str(x).strip().lower() for x in extras if str(x).strip()),
+                wake_topic=str(row.get("wake_topic") or ""),
             )
             self.devices[device.device_id] = device
         self.unclaimed.clear()
@@ -344,6 +350,7 @@ class PairingStore:
                     "os_version": d.os_version,
                     "last_seen": d.last_seen,
                     "extra_protected": list(d.extra_protected),
+                    "wake_topic": d.wake_topic,
                 }
                 for d in self.devices.values()
             ],

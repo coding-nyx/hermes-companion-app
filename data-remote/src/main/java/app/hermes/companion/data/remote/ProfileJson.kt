@@ -27,6 +27,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 
 internal val DashboardJson = Json { ignoreUnknownKeys = true }
@@ -143,13 +144,8 @@ internal fun parseSessions(body: String): List<SessionRef> {
         val profile = obj.str("profile").ifBlank { obj.str("profile_id") }.ifBlank { obj.str("profile_name") }
         if (id.isBlank()) null
         else {
-            val started = obj.long("updated_at").takeIf { it > 0 }
-                ?: obj.long("started_at")
-            val epochMs = when {
-                started > 10_000_000_000L -> started
-                started > 0L -> started * 1000
-                else -> 0L
-            }
+            val created = obj.createdEpochMs()
+            val updated = obj.updatedEpochMs().takeIf { it > 0L } ?: created
             SessionRef(
                 id = id,
                 profileId = profile,
@@ -157,13 +153,58 @@ internal fun parseSessions(body: String): List<SessionRef> {
                     .ifBlank { obj.str("display_name") }
                     .ifBlank { obj.str("preview") }
                     .ifBlank { id },
-                updatedAtEpochMs = epochMs,
-                unread = obj.bool("unread") || obj.int("unread_count") > 0 ||
-                    obj["ended_at"] == null || obj["ended_at"] is JsonNull,
+                updatedAtEpochMs = updated,
+                createdAtEpochMs = created,
+                // Only explicit signals. "no ended_at" used to count as unread and lit every live row.
+                unread = obj.bool("unread") || obj.int("unread_count") > 0,
                 ended = sessionEnded(obj),
+                messageCount = obj.int("message_count").takeIf { it > 0 } ?: obj.int("messages"),
+                source = obj.str("source").ifBlank { obj.str("platform") },
+                archived = obj.archivedFlag(),
             )
         }
     }
+}
+
+/** `total` from a dashboard `GET /api/sessions` page (`{"sessions":[…],"total":114,"limit":100,"offset":0}`); 0 when absent. */
+internal fun parseSessionTotal(body: String): Int {
+    val root = runCatching { DashboardJson.parseToJsonElement(body) }.getOrNull() as? JsonObject ?: return 0
+    return root.int("total")
+}
+
+/** Host `started_at` / `created_at` in epoch ms (0 when absent). */
+internal fun JsonObject.createdEpochMs(): Long =
+    epochMs("started_at").takeIf { it > 0L } ?: epochMs("created_at")
+
+/** Host `updated_at` / `last_activity_at` / `last_active_at` in epoch ms (0 when absent). */
+internal fun JsonObject.updatedEpochMs(): Long =
+    epochMs("updated_at").takeIf { it > 0L }
+        ?: epochMs("last_activity_at").takeIf { it > 0L }
+        ?: epochMs("last_active_at")
+
+/**
+ * Hermes stores `REAL` seconds (`1756750000.5`), the standalone relay sends int ms, the mock sends
+ * int seconds and some hosts send ISO-8601. `longOrNull` on a float is null → everything sorted as 0,
+ * which is the bug behind the "random" rail (A18.9). Accept all four shapes; 0 when unparseable.
+ */
+internal fun JsonObject.epochMs(key: String): Long {
+    val prim = this[key] as? JsonPrimitive ?: return 0L
+    if (prim is JsonNull) return 0L
+    val number = prim.longOrNull?.toDouble() ?: prim.doubleOrNull
+    if (number != null) return normalizeEpoch(number)
+    val text = prim.contentOrNull?.trim().orEmpty()
+    if (text.isEmpty()) return 0L
+    text.toDoubleOrNull()?.let { return normalizeEpoch(it) }
+    return runCatching { java.time.OffsetDateTime.parse(text).toInstant().toEpochMilli() }
+        .recoverCatching { java.time.Instant.parse(text).toEpochMilli() }
+        .recoverCatching { java.time.LocalDateTime.parse(text).toInstant(java.time.ZoneOffset.UTC).toEpochMilli() }
+        .getOrDefault(0L)
+}
+
+private fun normalizeEpoch(value: Double): Long = when {
+    value <= 0.0 -> 0L
+    value > 10_000_000_000.0 -> value.toLong()
+    else -> (value * 1000.0).toLong()
 }
 
 internal fun parseMessages(body: String): List<ChatMessage> {
@@ -302,25 +343,33 @@ internal fun parseSessionChange(payload: JsonObject, fallbackProfile: String): S
     if (id.isBlank()) return null
     val profile = payload.str("profile").ifBlank { payload.str("profile_id") }.ifBlank { fallbackProfile }
     if (profile.isBlank()) return null
-    val started = payload.long("updated_at").takeIf { it > 0 } ?: payload.long("started_at")
-    val epochMs = when {
-        started > 10_000_000_000L -> started
-        started > 0L -> started * 1000
-        else -> 0L
-    }
+    val created = payload.createdEpochMs()
+    val updated = payload.updatedEpochMs().takeIf { it > 0L } ?: created
     val op = payload.str("op").ifBlank { payload.str("action") }.ifBlank { "upsert" }
     return SessionChange(
         op = op,
         session = SessionRef(
             id = id,
             profileId = profile,
+            // Blank / id-echo titles are treated as "unknown" by SessionLists.merge, not as renames.
             title = payload.str("title").ifBlank { payload.str("display_name") }.ifBlank { payload.str("preview") }
                 .ifBlank { id },
-            updatedAtEpochMs = epochMs,
+            updatedAtEpochMs = updated,
+            createdAtEpochMs = created,
             unread = payload.bool("unread") || op.lowercase() == "upsert",
             ended = sessionEnded(payload),
+            messageCount = payload.int("message_count"),
+            source = payload.str("source"),
+            archived = payload.archivedFlag(),
         ),
     )
+}
+
+/** Dashboard sends real booleans; SQLite-shaped hosts send 0/1. */
+internal fun JsonObject.archivedFlag(): Boolean {
+    val prim = this["archived"] as? JsonPrimitive ?: return false
+    if (prim is JsonNull) return false
+    return prim.booleanOrNull ?: ((prim.intOrNull ?: 0) > 0) || (prim.contentOrNull?.lowercase() == "true")
 }
 
 internal fun parseRpcSession(result: JsonObject, fallbackProfile: String): SessionRef {
@@ -334,8 +383,10 @@ internal fun parseRpcSession(result: JsonObject, fallbackProfile: String): Sessi
         id = stored,
         profileId = profile,
         title = result.str("title").ifBlank { "new thread" },
-        updatedAtEpochMs = result.long("updated_at").takeIf { it > 0 } ?: result.long("started_at"),
+        updatedAtEpochMs = result.updatedEpochMs().takeIf { it > 0L } ?: result.createdEpochMs(),
+        createdAtEpochMs = result.createdEpochMs(),
         unread = false,
+        source = result.str("source"),
     )
 }
 
@@ -398,8 +449,10 @@ internal fun parseCreatedSession(body: String, fallbackProfile: String): Session
         id = id,
         profileId = profile,
         title = obj.str("title").ifBlank { "new thread" },
-        updatedAtEpochMs = obj.long("updated_at"),
+        updatedAtEpochMs = obj.updatedEpochMs().takeIf { it > 0L } ?: obj.createdEpochMs(),
+        createdAtEpochMs = obj.createdEpochMs(),
         unread = false,
+        source = obj.str("source"),
     )
 }
 

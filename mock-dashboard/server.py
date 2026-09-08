@@ -47,11 +47,13 @@ PROFILES = [
 ]
 
 LOCK = threading.Lock()
+_BOOT = time.time()
+# started_at / updated_at are float seconds like the real dashboard; the phone must sort by them.
 SESSIONS = [
-    {"id": "sess-cod-1", "profile": "coder", "title": "fix auth ticket", "unread": True},
-    {"id": "sess-cod-2", "profile": "coder", "title": "research: a11y tree", "unread": False},
-    {"id": "sess-per-1", "profile": "personal", "title": "grocery brief", "unread": True},
-    {"id": "sess-ops-1", "profile": "ops", "title": "cleanup build", "unread": False},
+    {"id": "sess-cod-1", "profile": "coder", "title": "fix auth ticket", "unread": True, "started_at": _BOOT - 3 * 3600, "updated_at": _BOOT - 60},
+    {"id": "sess-cod-2", "profile": "coder", "title": "research: a11y tree", "unread": False, "started_at": _BOOT - 2 * 86400, "updated_at": _BOOT - 2 * 86400 + 900},
+    {"id": "sess-per-1", "profile": "personal", "title": "grocery brief", "unread": True, "started_at": _BOOT - 86400, "updated_at": _BOOT - 3600},
+    {"id": "sess-ops-1", "profile": "ops", "title": "cleanup build", "unread": False, "started_at": _BOOT - 9 * 86400, "updated_at": _BOOT - 8 * 86400},
 ]
 MESSAGES = {
     "sess-cod-1": [
@@ -300,7 +302,7 @@ class Handler(BaseHTTPRequestHandler):
             if not profile:
                 return self._json({"error": "profile_required"}, 400)
             sid = f"sess-{profile}-{int(time.time() * 1000)}"
-            row = {"id": sid, "profile": profile, "title": body.get("title") or "new thread", "unread": False}
+            row = {"id": sid, "profile": profile, "title": body.get("title") or "new thread", "unread": False, "started_at": time.time(), "updated_at": time.time()}
             if body.get("model"):
                 row["model"] = body.get("model")
             with LOCK:
@@ -628,7 +630,8 @@ class Handler(BaseHTTPRequestHandler):
                     "id": s["id"],
                     "title": s.get("title") or "",
                     "preview": s.get("title") or "",
-                    "started_at": int(time.time()),
+                    "started_at": s.get("started_at") or int(time.time()),
+                    "last_activity_at": s.get("updated_at") or s.get("started_at") or int(time.time()),
                     "message_count": len(MESSAGES.get(s["id"], [])),
                     "source": "mock",
                     "profile": s["profile"],
@@ -642,7 +645,7 @@ class Handler(BaseHTTPRequestHandler):
             raise RpcError(4001, "profile required")
         sid = f"sess-{profile}-{int(time.time() * 1000)}"
         title = str(params.get("title") or "new thread")
-        row = {"id": sid, "profile": profile, "title": title, "unread": False}
+        row = {"id": sid, "profile": profile, "title": title, "unread": False, "started_at": time.time(), "updated_at": time.time()}
         with LOCK:
             SESSIONS.insert(0, row)
             MESSAGES[sid] = []

@@ -27,6 +27,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.hermes.companion.design.ActionButton
+import app.hermes.companion.design.ActionKind
+import app.hermes.companion.design.ToggleRow
+import app.hermes.companion.design.LiveDot
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
@@ -45,6 +49,7 @@ import app.hermes.companion.model.HermesUpdateStatus
 import app.hermes.companion.model.HostMetrics
 import app.hermes.companion.model.HudState
 import app.hermes.companion.model.ModelCatalog
+import app.hermes.companion.model.PeerLink
 import app.hermes.companion.model.SavedGateway
 
 @Composable
@@ -71,6 +76,15 @@ fun GatewayScreen(
     hostLoading: Boolean = false,
     modelLoading: Boolean = false,
     updateLoading: Boolean = false,
+    /** Origin a host switch is connecting to right now; that row shows SWITCHING and the others lock. */
+    switchingOrigin: String? = null,
+    /** Cross-host rooms (A22.11): relays this host can ask for agent turns. */
+    peers: List<PeerLink> = emptyList(),
+    peersLoading: Boolean = false,
+    /** Saved-gateway origin a LINK HOSTS handshake is running against. */
+    peerLinking: String? = null,
+    onLinkHost: (SavedGateway) -> Unit = {},
+    onUnlinkPeer: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var newGatewayName by remember { mutableStateOf("") }
@@ -292,28 +306,35 @@ fun GatewayScreen(
                     modifier = Modifier.testTag("gateway.add.origin"),
                 )
                 Spacer(Modifier.height(CompanionSpace.Sm))
-                Box(
-                    modifier = Modifier
-                        .background(CompanionColor.SignalDim)
-                        .border(1.dp, CompanionColor.Signal)
-                        .clickable { saveGateway() }
-                        .padding(horizontal = CompanionSpace.Md, vertical = CompanionSpace.Sm),
-                ) {
-                    Text(text = "SAVE & SWITCH", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
-                }
+                ActionButton(
+                    label = "SAVE & SWITCH",
+                    kind = ActionKind.PRIMARY,
+                    enabled = newGatewayOrigin.isNotBlank(),
+                    onClick = { saveGateway() },
+                    modifier = Modifier.testTag("gateway.add.save"),
+                )
             }
             Spacer(Modifier.height(CompanionSpace.Sm))
         }
 
-        if (savedGateways.isNotEmpty()) {
+        if (savedGateways.isEmpty()) {
+            Text(
+                text = "NO SAVED GATEWAYS // add one above",
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                modifier = Modifier.testTag("gateway.fleet.empty"),
+            )
+        } else {
+            val switching = switchingOrigin != null
             for (gw in savedGateways) {
+                val isTarget = switching && GatewayBook.key(gw.origin) == GatewayBook.key(switchingOrigin.orEmpty())
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(if (gw.isActive) CompanionColor.VoidElevated else CompanionColor.Void)
-                        .border(1.dp, if (gw.isActive) CompanionColor.SignalDim else CompanionColor.Line)
-                        .clickable { onSelectGateway(gw) }
-                        .padding(CompanionSpace.Sm),
+                        .background(if (gw.isActive || isTarget) CompanionColor.VoidElevated else CompanionColor.Void)
+                        .border(1.dp, if (isTarget) CompanionColor.Signal else if (gw.isActive) CompanionColor.SignalDim else CompanionColor.Line)
+                        .clickable(enabled = !switching && !gw.isActive) { onSelectGateway(gw) }
+                        .padding(CompanionSpace.Sm)
+                        .testTag("gateway.fleet.${GatewayBook.chipId(gw.origin)}"),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -334,15 +355,22 @@ fun GatewayScreen(
                             origin = gw.origin,
                             health = hostHealth[GatewayBook.key(gw.origin)] ?: HostHealth.UNKNOWN,
                         )
-                        if (gw.isActive) {
-                            Text(
+                        when {
+                            isTarget -> {
+                                LiveDot(modifier = Modifier.padding(end = 6.dp))
+                                Text(
+                                    text = "SWITCHING",
+                                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                                    modifier = Modifier.testTag("gateway.switching"),
+                                )
+                            }
+                            gw.isActive -> Text(
                                 text = "ACTIVE",
                                 style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
                             )
-                        } else {
-                            Text(
+                            else -> Text(
                                 text = "[SWITCH]",
-                                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+                                style = CompanionType.MonoSmall.copy(color = if (switching) CompanionColor.TextMute else CompanionColor.TextDim),
                             )
                         }
                     }
@@ -350,6 +378,85 @@ fun GatewayScreen(
                 Spacer(Modifier.height(CompanionSpace.Xs))
             }
         }
+
+        Spacer(Modifier.height(CompanionSpace.Lg))
+        Hairline()
+        Spacer(Modifier.height(CompanionSpace.Lg))
+
+        // Peer links: which other relays may run turns in this host's rooms (A22.11)
+        Text(text = "peer links · cross-host rooms", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
+        Spacer(Modifier.height(CompanionSpace.Sm))
+        if (peersLoading && peers.isEmpty()) {
+            FetchRow(label = "LOADING PEERS", padded = false, modifier = Modifier.testTag("gateway.peers.loading"))
+        }
+        val linkedKeys = peers.map { GatewayBook.key(it.origin) }.toSet()
+        peers.forEach { peer ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, CompanionColor.SignalDim)
+                    .padding(CompanionSpace.Sm)
+                    .testTag("gateway.peer.${peer.name}"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(text = peer.name, style = CompanionType.Mono.copy(color = CompanionColor.Signal))
+                    Text(text = peer.origin, style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Text(
+                    text = "LINKED",
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                    modifier = Modifier.padding(end = CompanionSpace.Sm),
+                )
+                Text(
+                    text = "[UNLINK]",
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+                    modifier = Modifier
+                        .testTag("gateway.peer.unlink.${peer.name}")
+                        .clickable { onUnlinkPeer(peer.name) }
+                        .padding(CompanionSpace.Xs),
+                )
+            }
+            Spacer(Modifier.height(CompanionSpace.Xs))
+        }
+        val linkable = savedGateways.filter { !it.isActive && GatewayBook.key(it.origin) !in linkedKeys }
+        if (linkable.isEmpty() && peers.isEmpty()) {
+            Text(
+                text = "save a second gateway above, then LINK it so its agents can join rooms here",
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                modifier = Modifier.testTag("gateway.peers.empty"),
+            )
+        }
+        linkable.forEach { gw ->
+            val busy = peerLinking != null && GatewayBook.key(peerLinking) == GatewayBook.key(gw.origin)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, CompanionColor.Line)
+                    .padding(CompanionSpace.Sm)
+                    .testTag("gateway.peer.candidate.${GatewayBook.chipId(gw.origin)}"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(text = gw.name, style = CompanionType.Mono.copy(color = CompanionColor.Text))
+                    Text(text = gw.origin, style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                ActionButton(
+                    label = "LINK HOSTS",
+                    kind = ActionKind.GHOST,
+                    busy = busy,
+                    busyLabel = "LINKING",
+                    enabled = peerLinking == null,
+                    onClick = { onLinkHost(gw) },
+                    modifier = Modifier.testTag("gateway.peer.link.${GatewayBook.chipId(gw.origin)}"),
+                )
+            }
+            Spacer(Modifier.height(CompanionSpace.Xs))
+        }
+        Text(
+            text = "this phone is paired with both hosts, so it hands each relay a credential for the other",
+            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+        )
 
         Spacer(Modifier.height(CompanionSpace.Lg))
         Hairline()
@@ -380,15 +487,14 @@ fun GatewayScreen(
                     MonoLine("latest commit", updateStatus.summary)
                 }
                 Spacer(Modifier.height(CompanionSpace.Sm))
-                Box(
-                    modifier = Modifier
-                        .background(CompanionColor.SignalDim)
-                        .border(1.dp, CompanionColor.Signal)
-                        .clickable(onClick = onApplyUpdate)
-                        .padding(horizontal = CompanionSpace.Md, vertical = CompanionSpace.Sm),
-                ) {
-                    Text(text = "UPDATE HERMES NOW", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
-                }
+                ActionButton(
+                    label = "UPDATE HERMES NOW",
+                    kind = ActionKind.PRIMARY,
+                    busy = updateLoading,
+                    busyLabel = "UPDATING",
+                    onClick = onApplyUpdate,
+                    modifier = Modifier.testTag("gateway.update.apply"),
+                )
             } else {
                 Text(text = "HERMES IS UP TO DATE", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
             }
@@ -416,25 +522,14 @@ fun GatewayScreen(
             onDone = onSaveNtfy,
         )
         Spacer(Modifier.height(CompanionSpace.Sm))
-        Text(
-            text = "SAVE TOPIC",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-            modifier = Modifier
-                .testTag("gateway.ntfy.save")
-                .border(CompanionSpace.Hairline, CompanionColor.Signal)
-                .clickable(onClick = onSaveNtfy)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-        )
+        ActionButton(label = "SAVE TOPIC", onClick = onSaveNtfy, modifier = Modifier.testTag("gateway.ntfy.save"))
         Spacer(Modifier.height(CompanionSpace.Lg))
-        Text(
-            text = if (stayConnected) "STAY CONNECTED  on" else "STAY CONNECTED  off",
-            style = CompanionType.Mono.copy(
-                color = if (stayConnected) CompanionColor.Signal else CompanionColor.TextMute,
-            ),
-            modifier = Modifier
-                .testTag("gateway.stay")
-                .clickable(onClick = onToggleStay)
-                .padding(vertical = CompanionSpace.Xs),
+        ToggleRow(
+            label = "STAY CONNECTED",
+            hint = "keep the operator socket alive in the background",
+            on = stayConnected,
+            onToggle = onToggleStay,
+            modifier = Modifier.testTag("gateway.stay"),
         )
     }
 }

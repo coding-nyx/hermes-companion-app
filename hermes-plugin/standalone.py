@@ -268,30 +268,55 @@ class Operator:
                 return text[:40]
         return title or "new thread"
 
-    def list_sessions(self, profile: str) -> list:
+    @staticmethod
+    def _int(value, default: int) -> int:
+        try:
+            return int(value) if value is not None and str(value).strip() != "" else default
+        except (TypeError, ValueError):
+            return default
+
+    def list_sessions(self, profile: str, limit=None, offset=None, archived=None) -> list:
+        return self.list_sessions_page(profile, limit, offset, archived)["sessions"]
+
+    @staticmethod
+    def _include_archived(archived) -> bool:
+        """Dashboard vocabulary: `archived=exclude` (default) | `include`; RPC may send a bool."""
+        if isinstance(archived, bool):
+            return archived
+        return str(archived or "").strip().lower() in ("include", "only", "1", "true", "yes")
+
+    def list_sessions_page(self, profile: str, limit=None, offset=None, archived=None) -> dict:
+        """Dashboard-shaped page: `{"sessions": [...], "total": N, "limit": n, "offset": k}`."""
         if not profile:
             raise OperatorError("profile_required", 400)
-        disk = hermes_store.list_sessions(profile)
-        if disk:
-            return disk
+        n = max(1, self._int(limit, hermes_store.SESSION_PAGE))
+        skip = max(0, self._int(offset, 0))
+        include_archived = self._include_archived(archived)
         if hermes_store.profile_dir(profile) is not None:
-            return []
+            disk = hermes_store.list_sessions(profile, limit=n, offset=skip, include_archived=include_archived)
+            total = hermes_store.count_sessions(profile, include_archived=include_archived)
+            return {"sessions": disk, "total": total, "limit": n, "offset": skip}
         with self.lock:
-            return [
-                {**s, "title": self._preview_title(s)}
+            rows = [
+                {**s, "title": self._preview_title(s), "started_at": s.get("started_at") or s.get("updated_at") or 0}
                 for s in self.data["sessions"]
                 if s["profile"] == profile
             ]
+        # Newest-started first, same tie-breaks as the phone (SessionLists.comparator).
+        rows.sort(key=lambda r: (int(r.get("started_at") or 0), int(r.get("updated_at") or 0), str(r.get("id") or "")), reverse=True)
+        return {"sessions": rows[skip:skip + n], "total": len(rows), "limit": n, "offset": skip}
 
     def create_session(self, profile: str, title: str = "", model: str = "") -> dict:
         if not profile:
             raise OperatorError("profile_required", 400)
-        sid = f"sess-{profile}-{_now_ms()}"
+        now = _now_ms()
+        sid = f"sess-{profile}-{now}"
         row = {
             "id": sid,
             "profile": profile,
             "title": title or "new thread",
-            "updated_at": _now_ms(),
+            "started_at": now,
+            "updated_at": now,
             "unread": False,
         }
         if model:
@@ -492,8 +517,10 @@ class Operator:
         if method == "gateway.ping":
             return {"ok": True}, []
         if method == "session.list":
-            rows = self.list_sessions(scoped) if scoped else []
-            return {"sessions": rows}, []
+            if not scoped:
+                return {"sessions": [], "total": 0}, []
+            archived = params.get("include_archived", params.get("archived"))
+            return self.list_sessions_page(scoped, params.get("limit"), params.get("offset"), archived), []
         if method == "session.create":
             row = self.create_session(scoped, str(params.get("title") or ""), str(params.get("model") or ""))
             ev = {
@@ -507,6 +534,7 @@ class Operator:
                         "profile": scoped,
                         "op": "upsert",
                         "title": row["title"],
+                        "started_at": row.get("started_at") or row["updated_at"],
                         "updated_at": row["updated_at"],
                     },
                 },
@@ -570,7 +598,10 @@ class Operator:
         if path == "/api/profiles" and method == "GET":
             return 200, "application/json", json.dumps({"profiles": self.profiles()}).encode()
         if path == "/api/sessions" and method == "GET":
-            return 200, "application/json", json.dumps({"sessions": self.list_sessions(profile or "")}).encode()
+            limit = (query.get("limit") or [None])[0]
+            offset = (query.get("offset") or [None])[0]
+            archived = (query.get("archived") or [None])[0]
+            return 200, "application/json", json.dumps(self.list_sessions_page(profile or "", limit, offset, archived)).encode()
         if path == "/api/sessions" and method == "POST":
             row = self.create_session(profile or "", str(body.get("title") or ""), str(body.get("model") or ""))
             return 201, "application/json", json.dumps({"session": row}).encode()

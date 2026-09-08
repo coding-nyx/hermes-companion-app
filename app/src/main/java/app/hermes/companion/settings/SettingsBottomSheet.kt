@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.hermes.companion.CompanionState
 import app.hermes.companion.MainTab
+import app.hermes.companion.design.FetchRow
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
@@ -189,6 +190,9 @@ fun SettingsBottomSheet(
                     )
                 }
 
+                if (allModels.isEmpty() && state.modelLoading) {
+                    FetchRow(label = "LOADING MODELS", padded = false, modifier = Modifier.testTag("settings.model.loading"))
+                }
                 // Quick model switch chips
                 if (allModels.isNotEmpty()) {
                     Spacer(Modifier.height(CompanionSpace.Sm))

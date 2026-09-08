@@ -95,6 +95,7 @@ object DeviceLanePolicy {
         manufacturer: String = "",
         osVersion: String = "",
         protectedPackages: Collection<String> = emptyList(),
+        wakeTopic: String = "",
     ): String {
         val caps = filterCapabilities(capabilities).joinToString(",") { "\"$it\"" }
         val protected = protectedPackages.map { it.trim().lowercase() }.filter { it.isNotBlank() }
@@ -106,6 +107,7 @@ object DeviceLanePolicy {
             if (manufacturer.isNotBlank()) append(""","manufacturer":${q(manufacturer)}""")
             if (osVersion.isNotBlank()) append(""","os_version":${q(osVersion)}""")
             if (protected.isNotEmpty()) append(""","protected_packages":[$protected]""")
+            if (wakeTopic.isNotBlank()) append(""","wake_topic":${q(wakeTopic)}""")
             append("}")
         }
     }

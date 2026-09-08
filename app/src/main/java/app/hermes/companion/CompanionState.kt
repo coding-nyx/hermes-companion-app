@@ -5,7 +5,14 @@ import app.hermes.companion.domain.DraftThread
 import app.hermes.companion.domain.HostHealth
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.Rooms
+import app.hermes.companion.domain.SessionLists
+import app.hermes.companion.domain.ThreadSort
 import app.hermes.companion.domain.WakePing
+import app.hermes.companion.domain.AgentTranscriptState
+import app.hermes.companion.model.AgentDirListing
+import app.hermes.companion.model.AgentPane
+import app.hermes.companion.model.AgentSession
+import app.hermes.companion.model.AgentTool
 import app.hermes.companion.model.ApprovalPrompt
 import app.hermes.companion.model.ChatAttachment
 import app.hermes.companion.model.ChatMessage
@@ -20,6 +27,7 @@ import app.hermes.companion.model.HermesUpdateStatus
 import app.hermes.companion.model.HostMetrics
 import app.hermes.companion.model.ModelCatalog
 import app.hermes.companion.model.PairingPhase
+import app.hermes.companion.model.PeerLink
 import app.hermes.companion.model.ProfileRef
 import app.hermes.companion.model.RoomRef
 import app.hermes.companion.model.GatewayChoice
@@ -32,7 +40,7 @@ enum class MainTab { THREADS, CONSOLE, REVIEW, REMINDERS, PROFILES, GATEWAY, DEV
 enum class VoiceStreamState { IDLE, LISTENING, THINKING, SPEAKING }
 
 /** External `hermes-companion://open` request awaiting user confirmation (A7.10). */
-data class DeepLinkRequest(val profileId: String, val sessionId: String, val origin: String = "")
+data class DeepLinkRequest(val profileId: String, val sessionId: String, val origin: String = "", val roomId: String = "")
 
 data class CompanionState(
     val originInput: String = "",
@@ -57,6 +65,10 @@ data class CompanionState(
     val profiles: List<ProfileRef> = emptyList(),
     val activeProfileId: String? = null,
     val sessions: List<SessionRef> = emptyList(),
+    /** Rail order (A18.9). Sticky per phone; applied in [visibleSessions]. */
+    val threadSort: ThreadSort = ThreadSort.DEFAULT,
+    /** Include host-archived threads (A18.12). Sticky; toggling refetches with `archived=include`. */
+    val showArchived: Boolean = false,
     val tab: MainTab = MainTab.THREADS,
     val openSessionId: String? = null,
     val openSessionRef: SessionRef? = null,
@@ -69,6 +81,37 @@ data class CompanionState(
     /** Profile taking a turn right now in the open room. */
     val roomSpeaking: String? = null,
     val roomCreateOpen: Boolean = false,
+    /** Last seen transcript seq per room id (unread dot on the ROOMS rail). */
+    val roomSeen: Map<String, Int> = emptyMap(),
+    /** Peer relays the active host can ask for turns (cross-host rooms). */
+    val peers: List<PeerLink> = emptyList(),
+    val peersLoading: Boolean = false,
+    /** Profiles on each linked peer, by peer name (create sheet). */
+    val peerProfiles: Map<String, List<ProfileRef>> = emptyMap(),
+    /** Origin of a saved gateway a LINK HOSTS handshake is running against. */
+    val peerLinking: String? = null,
+    // Coding-agent sessions (P23).
+    val agentTools: List<AgentTool> = emptyList(),
+    val agentTmux: Boolean = true,
+    val agentDefaultCwd: String = "",
+    val agentToolsLoading: Boolean = false,
+    val agentSessions: List<AgentSession> = emptyList(),
+    val agentSessionsLoading: Boolean = false,
+    val agentStarting: Boolean = false,
+    val agentNewOpen: Boolean = false,
+    val openAgentId: String? = null,
+    val openAgent: AgentSession? = null,
+    val agentPane: AgentPane = AgentPane(),
+    val agentPaneLoading: Boolean = false,
+    val agentCols: Int = 80,
+    val agentInput: String = "",
+    val agentError: String? = null,
+    /** Directory picker in the NEW panel. */
+    val agentDirs: AgentDirListing? = null,
+    val agentDirsLoading: Boolean = false,
+    val agentDirsError: String? = null,
+    /** Structured (stream-json) session transcript while one is open. */
+    val agentTranscript: AgentTranscriptState = AgentTranscriptState(),
     val messages: List<ChatMessage> = emptyList(),
     val draft: String = "",
     val streaming: Boolean = false,
@@ -130,12 +173,22 @@ data class CompanionState(
 ) {
     val isVoiceStreamActive: Boolean
         get() = voiceStreamState != VoiceStreamState.IDLE
+    /** Profile-scoped rail, room backers and drafts removed, in the operator's chosen [threadSort]. */
     val visibleSessions: List<SessionRef>
-        get() = ProfileScope.visibleSessions(sessions, activeProfileId).filterNot {
-            Rooms.isBackingSession(it.title) || DraftThread.isDraft(it)
-        }
+        get() = SessionLists.sort(
+            SessionLists.archivedVisible(
+                ProfileScope.visibleSessions(sessions, activeProfileId).filterNot {
+                    Rooms.isBackingSession(it.title) || DraftThread.isDraft(it)
+                },
+                showArchived,
+            ),
+            threadSort,
+        )
     val inRoom: Boolean
         get() = openRoomId != null
+    /** Rooms whose host seq is past what this phone has seen. */
+    val unreadRooms: Set<String>
+        get() = rooms.filter { it.seq > (roomSeen[it.id] ?: 0) }.map { it.id }.toSet()
     val activeProfile: ProfileRef?
         get() = profiles.find { it.id == activeProfileId }
     /**
@@ -155,6 +208,12 @@ data class CompanionState(
         gitDiff = null,
         gitSelectedFile = null,
         terminalLogs = emptyList(),
+        agentSessions = emptyList(),
+        agentTools = emptyList(),
+        openAgentId = null,
+        openAgent = null,
+        agentPane = AgentPane(),
+        agentTranscript = AgentTranscriptState(),
         updateStatus = null,
         hostLoading = true,
         modelLoading = true,

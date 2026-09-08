@@ -26,11 +26,15 @@ object Rooms {
     ): String {
         if (speaker == null || speaker == OPERATOR) return "YOU"
         val p = speaker.trim()
-        val prof = profiles.firstOrNull { it.id.equals(p, ignoreCase = true) }
-        if (prof != null && prof.displayName.isNotBlank()) return prof.displayName
-        val participant = participants.firstOrNull { it.profile.equals(p, ignoreCase = true) }
-        if (participant != null && participant.profile.isNotBlank()) return participant.profile
-        return p
+        // Remote participants arrive as `profile@host`: name the profile, tag the host.
+        val host = hostOf(p)
+        val local = if (host != null) p.substringBefore('@') else p
+        val prof = profiles.firstOrNull { it.id.equals(local, ignoreCase = true) }
+        val base = when {
+            host == null && prof != null && prof.displayName.isNotBlank() -> prof.displayName
+            else -> participants.firstOrNull { it.id.equals(p, ignoreCase = true) || (host == null && it.profile.equals(p, ignoreCase = true)) }?.profile ?: local
+        }
+        return if (host != null) "$base · $host" else base
     }
 
     /**
@@ -70,8 +74,36 @@ object Rooms {
         "" -> ""
         "interrupted" -> "interrupted"
         "approval_required" -> "needs approval · answer it in that profile's thread"
+        "approval_timeout" -> "approval timed out"
         "upstream_timeout" -> "turn timed out"
+        "peer_unreachable" -> "peer host unreachable"
+        "peer_unknown" -> "peer not linked"
+        "hermes_cli_missing" -> "no hermes CLI on host"
         "empty_reply" -> "no reply"
         else -> code.replace('_', ' ')
     }
+
+    /** `bishop@hub-11` → `hub-11`; null for local participants. */
+    fun hostOf(participantId: String?): String? =
+        participantId?.substringAfter('@', "")?.takeIf { it.isNotBlank() }
+
+    /** Row text for the floor state under the transcript. Empty while running/idle. */
+    fun stateLabel(state: String, reason: String, turnsUsed: Int, budget: Int): String = when (state) {
+        "quiet" -> "room quiet · $turnsUsed turns"
+        "paused" -> when (reason) {
+            "budget" -> "paused · budget of $budget turns reached"
+            "time" -> "paused · time budget reached"
+            "stall" -> "paused · agents are repeating themselves"
+            "operator" -> "paused by you"
+            else -> "paused"
+        }
+        else -> ""
+    }
+
+    /** Does the operator get addressed in this line? Lights the rail tick. */
+    fun mentionsOperator(text: String): Boolean =
+        Regex("(?<![\\w@])@(you|operator)\\b", RegexOption.IGNORE_CASE).containsMatchIn(text)
+
+    /** Header pill: `R 7/12` while the floor is live. */
+    fun budgetPill(turnsUsed: Int, budget: Int): String = "R $turnsUsed/$budget"
 }

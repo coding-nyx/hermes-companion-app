@@ -34,6 +34,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.hermes.companion.design.FetchRow
+import app.hermes.companion.design.FetchSkeleton
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
@@ -51,6 +53,8 @@ fun ModelBottomSheet(
     profiles: List<ProfileRef> = emptyList(),
     onSelectModel: (model: String, provider: String) -> Unit,
     onDismiss: () -> Unit,
+    /** Catalog fetch in flight: an empty list says LOADING, not "no models". */
+    loading: Boolean = false,
     sheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -187,7 +191,12 @@ fun ModelBottomSheet(
                     .weight(1f, fill = false)
                     .padding(vertical = CompanionSpace.Xs),
             ) {
-                if (filteredModels.isEmpty()) {
+                if (filteredModels.isEmpty() && loading && searchQuery.isBlank()) {
+                    item {
+                        FetchRow(label = "LOADING MODELS", modifier = Modifier.testTag("model.sheet.loading"))
+                        FetchSkeleton(lines = 3)
+                    }
+                } else if (filteredModels.isEmpty()) {
                     item {
                         Column(
                             modifier = Modifier

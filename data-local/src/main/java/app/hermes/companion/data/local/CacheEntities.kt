@@ -23,6 +23,10 @@ data class SessionEntity(
     val updatedAtEpochMs: Long,
     val unread: Boolean,
     val ended: Boolean = false,
+    val createdAtEpochMs: Long = 0L,
+    val messageCount: Int = 0,
+    val source: String = "",
+    val archived: Boolean = false,
 )
 
 @Entity(
@@ -50,6 +54,10 @@ internal fun SessionEntity.toRef(): SessionRef = SessionRef(
     updatedAtEpochMs = updatedAtEpochMs,
     unread = unread,
     ended = ended,
+    createdAtEpochMs = createdAtEpochMs,
+    messageCount = messageCount,
+    source = source,
+    archived = archived,
 )
 
 internal fun SessionRef.toEntity(origin: String): SessionEntity = SessionEntity(
@@ -60,6 +68,10 @@ internal fun SessionRef.toEntity(origin: String): SessionEntity = SessionEntity(
     updatedAtEpochMs = updatedAtEpochMs,
     unread = unread,
     ended = ended,
+    createdAtEpochMs = createdAtEpochMs,
+    messageCount = messageCount,
+    source = source,
+    archived = archived,
 )
 
 internal fun MessageEntity.toModel(): ChatMessage = ChatMessage(

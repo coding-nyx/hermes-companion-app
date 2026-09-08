@@ -47,8 +47,17 @@ import app.hermes.companion.settings.ModelBottomSheet
 import app.hermes.companion.settings.SettingsBottomSheet
 import app.hermes.companion.chat.ChatScreen
 import app.hermes.companion.connect.ConnectScreen
+import app.hermes.companion.console.AgentConsoleScreen
+import app.hermes.companion.model.AgentSession
 import app.hermes.companion.console.ConsoleScreen
 import app.hermes.companion.device.DeviceScreen
+import app.hermes.companion.domain.SessionLists
+import app.hermes.companion.domain.ThreadSort
+import app.hermes.companion.domain.ThreadTime
+import app.hermes.companion.domain.DraftThread
+import app.hermes.companion.design.StatusStrip
+import app.hermes.companion.design.SwitchingPane
+import app.hermes.companion.design.LiveDot
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
@@ -87,13 +96,38 @@ fun CompanionShell(
     onOpenSession: (SessionRef) -> Unit,
     onNewThread: () -> Unit,
     onRetrySessions: () -> Unit = {},
+    onThreadSort: (ThreadSort) -> Unit = {},
+    onToggleArchived: (Boolean) -> Unit = {},
     onRequestDelete: (SessionRef) -> Unit = {},
     onConfirmDelete: () -> Unit = {},
     onCancelDelete: () -> Unit = {},
     onCloseChat: () -> Unit,
     onOpenRoom: (RoomRef) -> Unit = {},
     onNewRoom: () -> Unit = {},
-    onCreateRoom: (title: String, participants: List<String>, maxRounds: Int) -> Unit = { _, _, _ -> },
+    onCreateRoom: (RoomCreateSpec) -> Unit = {},
+    onRoomPause: () -> Unit = {},
+    onRoomContinue: (Int) -> Unit = {},
+    onRoomSummarize: () -> Unit = {},
+    onRoomAddParticipant: (String) -> Unit = {},
+    onRoomRemoveParticipant: (String) -> Unit = {},
+    onRoomRename: (String) -> Unit = {},
+    onLinkHost: (SavedGateway) -> Unit = {},
+    onUnlinkPeer: (String) -> Unit = {},
+    // Coding-agent sessions (P23)
+    onAgentRefresh: () -> Unit = {},
+    onAgentToggleNew: (Boolean) -> Unit = {},
+    onAgentStart: (String, String, String, String) -> Unit = { _, _, _, _ -> },
+    onAgentSubmit: (String) -> Unit = {},
+    onAgentBrowse: (String, Boolean) -> Unit = { _, _ -> },
+    onAgentApprove: (String) -> Unit = {},
+    onAgentOpen: (AgentSession) -> Unit = {},
+    onAgentClose: () -> Unit = {},
+    onAgentInput: (String) -> Unit = {},
+    onAgentSendText: (String, Boolean) -> Unit = { _, _ -> },
+    onAgentKey: (String) -> Unit = {},
+    onAgentKill: (AgentSession?) -> Unit = {},
+    onAgentForget: (AgentSession) -> Unit = {},
+    onAgentCols: (Int) -> Unit = {},
     onDismissRoomCreate: () -> Unit = {},
     onDeleteRoom: (RoomRef) -> Unit = {},
     onMention: (String) -> Unit = {},
@@ -156,6 +190,7 @@ fun CompanionShell(
     onRemoveAttachment: (String) -> Unit = {},
     onOpenMedia: (app.hermes.companion.model.ChatBlock) -> Unit = {},
     onFetchMedia: suspend (String) -> ByteArray? = { null },
+    onDismissError: () -> Unit = {},
 ) {
     if (state.origin == null) {
         ConnectScreen(
@@ -179,6 +214,7 @@ fun CompanionShell(
     val inChat = state.openSessionId != null || state.inRoom
     val imeVisible = WindowInsets.isImeVisible
     BackHandler(enabled = inChat && !imeVisible, onBack = onCloseChat)
+    BackHandler(enabled = !inChat && state.openAgentId != null && state.tab == MainTab.CONSOLE, onBack = onAgentClose)
 
     val focusManager = LocalFocusManager.current
     Column(
@@ -228,6 +264,7 @@ fun CompanionShell(
                 modelCatalog = state.modelCatalog,
                 currentModel = state.modelOverride,
                 profiles = state.profiles,
+                loading = state.modelLoading,
                 onSelectModel = { model, provider ->
                     onSwitchModel(model, provider)
                 },
@@ -240,6 +277,10 @@ fun CompanionShell(
                 onCreate = onCreateRoom,
                 onDismiss = onDismissRoomCreate,
                 error = state.error,
+                peers = state.peers,
+                peerProfiles = state.peerProfiles,
+                peersLoading = state.peersLoading,
+                hostName = state.hostName,
             )
         }
         if (showSettingsSheet) {
@@ -267,9 +308,27 @@ fun CompanionShell(
             DeepLinkStrip(req, onConfirmDeepLink, onDismissDeepLink)
             Hairline()
         }
+        // Tabs without an error slot of their own surface host failures here (threads/chat/device have one).
+        val ownsError = inChat || state.tab == MainTab.THREADS || state.tab == MainTab.DEVICE
+        if (!state.error.isNullOrBlank() && !ownsError && !state.loading) {
+            StatusStrip(
+                text = state.error,
+                actionLabel = "DISMISS",
+                onAction = onDismissError,
+                modifier = Modifier.testTag("shell.error"),
+            )
+            Hairline()
+        }
         // Chat pads for the IME itself; every other tab gets it here so inputs ride above the keyboard.
         val body = Modifier.weight(1f).then(if (inChat) Modifier else Modifier.imePadding())
-        if (inChat) {
+        if (state.loading) {
+            // Host switch / reconnect: never paint the old host's threads under the new host's name.
+            SwitchingPane(
+                hostName = state.hostName,
+                origin = state.originInput,
+                modifier = body,
+            )
+        } else if (inChat) {
             ChatScreen(
                 messages = state.messages,
                 draft = state.draft,
@@ -310,6 +369,14 @@ fun CompanionShell(
                 pendingSpeaker = state.roomSpeaking,
                 onMention = onMention,
                 profiles = state.profiles,
+                room = state.openRoom,
+                roomCandidates = roomCandidates(state),
+                onRoomPause = onRoomPause,
+                onRoomContinue = onRoomContinue,
+                onRoomSummarize = onRoomSummarize,
+                onRoomAddParticipant = onRoomAddParticipant,
+                onRoomRemoveParticipant = onRoomRemoveParticipant,
+                onRoomRename = onRoomRename,
                 modifier = body,
             )
         } else {
@@ -319,9 +386,16 @@ fun CompanionShell(
                     loading = state.sessionsLoading,
                     error = state.error,
                     activeProfileId = state.activeProfileId,
+                    sort = state.threadSort,
+                    onSort = onThreadSort,
+                    showArchived = state.showArchived,
+                    onToggleArchived = onToggleArchived,
+                    onRefresh = onRetrySessions,
                     pendingDelete = state.pendingDelete,
                     rooms = state.rooms,
+                    roomsLoading = state.roomsLoading,
                     roomsError = state.roomsError,
+                    unreadRooms = state.unreadRooms,
                     onOpenRoom = onOpenRoom,
                     onNewRoom = onNewRoom,
                     onDeleteRoom = onDeleteRoom,
@@ -333,11 +407,47 @@ fun CompanionShell(
                     onCancelDelete = onCancelDelete,
                     modifier = body,
                 )
-                MainTab.CONSOLE -> ConsoleScreen(
-                    logs = state.terminalLogs,
-                    isExecuting = state.terminalExecuting,
-                    onExecute = onExecuteTerminal,
-                    onClear = onClearTerminal,
+                MainTab.CONSOLE -> AgentConsoleScreen(
+                    sessions = state.agentSessions,
+                    tools = state.agentTools,
+                    tmux = state.agentTmux,
+                    defaultCwd = state.agentDefaultCwd,
+                    sessionsLoading = state.agentSessionsLoading,
+                    toolsLoading = state.agentToolsLoading,
+                    starting = state.agentStarting,
+                    newOpen = state.agentNewOpen,
+                    openSession = state.openAgent,
+                    pane = state.agentPane,
+                    paneLoading = state.agentPaneLoading,
+                    cols = state.agentCols,
+                    input = state.agentInput,
+                    error = state.agentError,
+                    transcript = state.agentTranscript,
+                    dirs = state.agentDirs,
+                    dirsLoading = state.agentDirsLoading,
+                    dirsError = state.agentDirsError,
+                    onBrowse = onAgentBrowse,
+                    onSubmit = onAgentSubmit,
+                    onApprove = onAgentApprove,
+                    onRefresh = onAgentRefresh,
+                    onToggleNew = onAgentToggleNew,
+                    onStart = onAgentStart,
+                    onOpen = onAgentOpen,
+                    onClose = onAgentClose,
+                    onInput = onAgentInput,
+                    onSendText = onAgentSendText,
+                    onKey = onAgentKey,
+                    onKill = onAgentKill,
+                    onForget = onAgentForget,
+                    onCols = onAgentCols,
+                    quickShell = {
+                        ConsoleScreen(
+                            logs = state.terminalLogs,
+                            isExecuting = state.terminalExecuting,
+                            onExecute = onExecuteTerminal,
+                            onClear = onClearTerminal,
+                        )
+                    },
                     modifier = body,
                 )
                 MainTab.REVIEW -> CodeReviewScreen(
@@ -364,6 +474,8 @@ fun CompanionShell(
                     profiles = state.profiles,
                     activeId = state.activeProfileId,
                     onSelect = onSelectProfile,
+                    switching = state.sessionsLoading,
+                    hostName = state.hostName,
                     modifier = body,
                 )
                 MainTab.GATEWAY -> GatewayScreen(
@@ -389,6 +501,12 @@ fun CompanionShell(
                     hostLoading = state.hostLoading,
                     modelLoading = state.modelLoading,
                     updateLoading = state.updateLoading,
+                    switchingOrigin = if (state.loading) state.originInput else null,
+                    peers = state.peers,
+                    peersLoading = state.peersLoading,
+                    peerLinking = state.peerLinking,
+                    onLinkHost = onLinkHost,
+                    onUnlinkPeer = onUnlinkPeer,
                     modifier = body,
                 )
                 MainTab.DEVICE -> DeviceScreen(
@@ -574,23 +692,36 @@ private fun Header(
             )
         }
         val hostPrefix = if (inChat || state.hostName.isBlank()) "" else "${state.hostName} · "
-        Text(
-            text = hostPrefix + when {
-                inChat -> state.openRoom?.let { r -> "${r.title} · " + r.participants.joinToString(" ") { it.glyph } }
-                    ?: state.openSession?.title ?: "chat"
-                state.tab == MainTab.THREADS -> "threads"
-                state.tab == MainTab.CONSOLE -> "console"
-                state.tab == MainTab.REVIEW -> "code review"
-                state.tab == MainTab.REMINDERS -> "cron & reminders"
-                state.tab == MainTab.PROFILES -> "profiles"
-                state.tab == MainTab.GATEWAY -> "gateway"
-                else -> "device"
-            },
-            style = CompanionType.Body,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        val title = hostPrefix + when {
+            inChat -> state.openRoom?.let { r -> "${r.title} · " + r.participants.joinToString(" ") { it.glyph } }
+                ?: state.openSession?.title ?: "chat"
+            state.tab == MainTab.THREADS -> "threads"
+            state.tab == MainTab.CONSOLE -> state.openAgent?.let { "agent · ${it.title.ifBlank { it.id }}" } ?: "agent console"
+            state.tab == MainTab.REVIEW -> "code review"
+            state.tab == MainTab.REMINDERS -> "cron & reminders"
+            state.tab == MainTab.PROFILES -> "profiles"
+            state.tab == MainTab.GATEWAY -> "gateway"
+            else -> "device"
+        }
+        val meta = if (inChat && state.openRoom == null) threadMeta(state.openSession) else ""
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = CompanionType.Body,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (meta.isNotBlank()) {
+                Text(
+                    text = meta,
+                    style = CompanionType.MonoSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("chat.meta"),
+                )
+            }
+        }
+        LinkPill(state)
         HudGlyph("GW", state.hud.gateway)
         HudGlyph("TG", state.hud.telegram)
         HudGlyph("DC", state.hud.discord)
@@ -607,6 +738,56 @@ private fun Header(
                 style = CompanionType.Mono.copy(color = CompanionColor.Signal, fontSize = 16.sp),
             )
         }
+    }
+}
+
+/** Profiles (local and on linked peers) that are not yet in the open room, as (participant id, label). */
+internal fun roomCandidates(state: CompanionState): List<Pair<String, String>> {
+    val room = state.openRoom ?: return emptyList()
+    val present = room.participants.map { it.id }.toSet()
+    val local = state.profiles.map { it.id to it.displayName.ifBlank { it.id } }
+    val remote = state.peerProfiles.flatMap { (peer, profiles) -> profiles.map { "${it.id}@$peer" to "${it.displayName.ifBlank { it.id }} · $peer" } }
+    return (local + remote).filter { it.first !in present }
+}
+
+/**
+ * One mono line under the chat title: when the thread started, how much is in it, where it came
+ * from, whether it has ended. Drafts say so — a new thread is not on the host until the first send.
+ */
+internal fun threadMeta(session: SessionRef?, nowMs: Long = System.currentTimeMillis()): String {
+    if (session == null) return ""
+    if (DraftThread.isDraft(session)) return "draft · saved on first send"
+    val parts = mutableListOf<String>()
+    val created = SessionLists.createdKey(session)
+    if (created > 0L) parts += "started ${ThreadTime.relative(created, nowMs)}"
+    if (session.messageCount > 0) parts += "${session.messageCount} msgs"
+    if (session.source.isNotBlank()) parts += session.source.lowercase()
+    if (session.archived) parts += "ARCHIVED" else if (session.ended) parts += "ENDED"
+    return parts.joinToString(" · ")
+}
+
+/**
+ * Operator-link state next to the HUD: `SYNC` (blinking) while the host or the profile's thread
+ * list is being rebuilt, `LINK ↓` (warn) when the gateway socket is down and reconnecting, nothing when live.
+ */
+@Composable
+private fun LinkPill(state: CompanionState) {
+    val syncing = state.loading || state.sessionsLoading
+    val down = !syncing && state.gatewayHello == null
+    if (!syncing && !down) return
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier
+            .border(CompanionSpace.Hairline, if (syncing) CompanionColor.Signal else CompanionColor.Warn)
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .testTag(if (syncing) "header.sync" else "header.linkdown"),
+    ) {
+        if (syncing) LiveDot(size = 5.dp) else LiveDot(size = 5.dp, color = CompanionColor.Warn)
+        Text(
+            text = if (syncing) "SYNC" else "LINK",
+            style = CompanionType.MonoSmall.copy(color = if (syncing) CompanionColor.Signal else CompanionColor.Warn),
+        )
     }
 }
 

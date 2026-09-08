@@ -151,9 +151,9 @@ Also reuse / extend `mobile.controller.status` for stream meta:
 }
 ```
 
-### Host → phone (optional P1)
+### Host → phone (REJECTED / Phone Switch Only — 2026-09-08)
 
-`device.notifications_pause` / resume as commands — nice-to-have; v1 can be phone-side toggle only.
+No host commands (`device.stream_on/off`, `device.notifications_pause`/resume). Not like arm/disarm. STREAM is strictly a phone switch in Companion → Device tab → NLS + STREAM. The host cannot grant NLS, and there are no host stream commands. Toggled on and off exclusively via STREAM on the phone.
 
 ### Relay storage
 
@@ -267,7 +267,7 @@ Also reuse / extend `mobile.controller.status` for stream meta:
 - [ ] **P2.1** Optional mute list (beyond protected) / rate-limit per package.
 - [ ] **P2.2** Persist jsonl audit; operator UI strip for recent notifs.
 - [ ] **P2.3** `onNotificationRemoved`; coalescing (same key updates).
-- [ ] **P2.4** Pause/resume command from agent; battery / DND respect notes in README.
+- [x] **P2.4** ~~Pause/resume command from agent~~ (REJECTED 2026-09-08: STREAM is phone-switch only, not like arm/disarm; no host control). Battery / DND respect notes in README.
 - [ ] **P2.5** Cross-link WORK_ITEMS A13.2 → this plan; mark deliverable done when P1 lands.
 
 ---

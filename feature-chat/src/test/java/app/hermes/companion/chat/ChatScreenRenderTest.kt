@@ -16,6 +16,8 @@ import androidx.compose.ui.unit.dp
 import app.hermes.companion.design.CompanionTheme
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
+import app.hermes.companion.model.RoomRef
+import androidx.compose.ui.test.assertTextEquals
 import app.hermes.companion.model.RoomParticipant
 import androidx.compose.ui.test.onAllNodesWithText
 import java.io.File
@@ -55,6 +57,7 @@ class ChatScreenRenderTest {
         streaming: Boolean,
         participants: List<RoomParticipant> = emptyList(),
         pendingSpeaker: String? = null,
+        roomRef: RoomRef? = null,
     ) {
         rule.mainClock.autoAdvance = false
         rule.setContent {
@@ -73,6 +76,8 @@ class ChatScreenRenderTest {
                         threadId = "s1",
                         participants = participants,
                         pendingSpeaker = pendingSpeaker,
+                        room = roomRef,
+                        roomCandidates = if (roomRef != null) listOf("knight" to "knight") else emptyList(),
                     )
                 }
             }
@@ -81,6 +86,33 @@ class ChatScreenRenderTest {
     }
 
     private val room = listOf(RoomParticipant("coder", "COD"), RoomParticipant("ops", "OPS"), RoomParticipant("ash", "ASH"))
+
+    @Test
+    fun roomBarShowsFloorStateAndActions() {
+        val live = RoomRef(id = "r-1", title = "triage", participants = room, state = "running", turnsUsed = 3, budget = 12, speaking = "ops", hands = "coder")
+        mount(emptyList(), streaming = true, participants = room, pendingSpeaker = "ops", roomRef = live)
+        rule.onNodeWithTag("room.bar").assertIsDisplayed()
+        rule.onNodeWithText("R 3/12").assertIsDisplayed()
+        rule.onNodeWithTag("room.pause").assertIsDisplayed()
+        rule.onNodeWithTag("room.stop").assertIsDisplayed()
+        rule.onNodeWithTag("room.add").assertIsDisplayed()
+        rule.onAllNodesWithTag("room.floor").assertCountEquals(0)
+        snap("06-room-bar-live")
+    }
+
+    @Test
+    fun pausedRoomOffersContinueUnderTheTranscript() {
+        val paused = RoomRef(id = "r-1", title = "triage", participants = room, state = "paused", pauseReason = "budget", turnsUsed = 12, budget = 12, summary = "TTL is the cause")
+        mount(emptyList(), streaming = false, participants = room, roomRef = paused)
+        rule.onNodeWithText("PAUSED · budget").assertIsDisplayed()
+        rule.onNodeWithTag("room.continue").assertIsDisplayed()
+        rule.onNodeWithTag("room.summarize").assertIsDisplayed()
+        rule.onNodeWithTag("room.summary.toggle").assertIsDisplayed()
+        rule.onNodeWithTag("room.floor").assertIsDisplayed()
+        rule.onNodeWithText("paused · budget of 12 turns reached").assertIsDisplayed()
+        rule.onNodeWithTag("room.floor.continue").assertIsDisplayed()
+        snap("07-room-paused")
+    }
 
     @Test
     fun roomModeLabelsSpeakersAndOffersMentions() {
@@ -99,7 +131,9 @@ class ChatScreenRenderTest {
         rule.onNodeWithTag("chat.cursor").assertIsDisplayed()
         rule.onNodeWithTag("chat.mentions").assertIsDisplayed()
         rule.onNodeWithTag("chat.mention.OPS").assertIsDisplayed()
-        rule.onNodeWithText("INTERRUPT ALL").assertIsDisplayed()
+        // v2: the operator is never locked out of a room; SEND stays, STOP lives in the room bar.
+        rule.onNodeWithText("SEND").assertIsDisplayed()
+        rule.onAllNodesWithText("INTERRUPT ALL").assertCountEquals(0)
         rule.onAllNodesWithTag("chat.attach").assertCountEquals(0)
         rule.onAllNodesWithText("HERMES").assertCountEquals(0)
         snap("05-room-streaming")

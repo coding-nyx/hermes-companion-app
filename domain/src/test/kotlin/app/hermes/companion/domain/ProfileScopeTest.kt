@@ -82,6 +82,19 @@ class ProfileScopeTest {
         assertEquals("renamed", updated.first { it.id == coder.id }.title)
     }
 
+    @Test
+    fun sparseUpsertPatchKeepsTitleAndTimestamps() {
+        val known = coder.copy(title = "real title", updatedAtEpochMs = 500L, createdAtEpochMs = 100L)
+        // `sessions.changed` often carries only id + profile + op; the parser echoes the id as title.
+        val sparse = SessionChange("upsert", session(coder.id, "coder").copy(unread = true))
+        val next = ProfileScope.applyChange(listOf(known), sparse, "coder")
+        val row = next.single()
+        assertEquals("real title", row.title)
+        assertEquals(500L, row.updatedAtEpochMs)
+        assertEquals(100L, row.createdAtEpochMs)
+        assertTrue(row.unread)
+    }
+
     private fun session(id: String, profile: String) = SessionRef(
         id = id,
         profileId = profile,

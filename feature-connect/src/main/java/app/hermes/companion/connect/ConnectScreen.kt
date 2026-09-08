@@ -39,6 +39,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.hermes.companion.design.RobotMark
+import app.hermes.companion.design.ActionButton
+import app.hermes.companion.design.ActionKind
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
@@ -83,6 +86,8 @@ fun ConnectScreen(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
+                RobotMark(size = 56.dp, awake = true)
+                Spacer(Modifier.height(CompanionSpace.Md))
                 Text(text = "HERMES", style = CompanionType.Display)
                 Spacer(Modifier.height(CompanionSpace.Md))
                 Hairline(Modifier.width(96.dp))
@@ -103,7 +108,11 @@ fun ConnectScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+        RobotMark(size = 56.dp, awake = false)
+        Spacer(Modifier.height(CompanionSpace.Md))
         Text(text = "HERMES", style = CompanionType.Display)
+        Spacer(Modifier.height(CompanionSpace.Xs))
+        Text(text = "companion", style = CompanionType.MonoSmall)
         Spacer(Modifier.height(CompanionSpace.Md))
         Hairline(Modifier.width(96.dp))
         Spacer(Modifier.height(CompanionSpace.Xl))
@@ -170,14 +179,12 @@ fun ConnectScreen(
             )
         }
         Spacer(Modifier.height(CompanionSpace.Lg))
-        Text(
-            text = "CONNECT",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-            modifier = Modifier
-                .testTag("connect.go")
-                .border(CompanionSpace.Hairline, CompanionColor.Signal)
-                .clickable(onClick = onConnect)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+        ActionButton(
+            label = "CONNECT",
+            kind = ActionKind.PRIMARY,
+            enabled = origin.isNotBlank(),
+            onClick = onConnect,
+            modifier = Modifier.testTag("connect.go"),
         )
         if (!error.isNullOrBlank()) {
             Spacer(Modifier.height(CompanionSpace.Lg))

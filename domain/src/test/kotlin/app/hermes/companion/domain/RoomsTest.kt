@@ -8,6 +8,20 @@ import org.junit.Test
 
 class RoomsTest {
     @Test
+    fun remoteSpeakersAreNamedWithTheirHost() {
+        val parts = listOf(RoomParticipant("coder", "COD"), RoomParticipant("bishop", "BIS", host = "Hub11"))
+        assertEquals("bishop · Hub11", Rooms.displayName("bishop@Hub11", parts))
+        assertEquals("coder", Rooms.displayName("coder", parts))
+        assertEquals("Hub11", Rooms.hostOf("bishop@Hub11"))
+        assertEquals(null, Rooms.hostOf("coder"))
+        assertEquals("paused · budget of 6 turns reached", Rooms.stateLabel("paused", "budget", 6, 6))
+        assertEquals("room quiet · 4 turns", Rooms.stateLabel("quiet", "", 4, 12))
+        assertEquals("", Rooms.stateLabel("running", "", 1, 12))
+        assertEquals(true, Rooms.mentionsOperator("waiting on @YOU for the symptom"))
+        assertEquals(false, Rooms.mentionsOperator("email you@example.com"))
+    }
+
+    @Test
     fun glyphMirrorsHost() {
         assertEquals("COD", Rooms.glyph("coder"))
         assertEquals("OP", Rooms.glyph("op"))

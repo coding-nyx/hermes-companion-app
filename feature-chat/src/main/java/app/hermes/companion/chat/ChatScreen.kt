@@ -59,6 +59,14 @@ import app.hermes.companion.design.WalkingEllipsis
 import app.hermes.companion.model.ApprovalPrompt
 import app.hermes.companion.model.ChatAttachment
 import app.hermes.companion.model.ChatBlock
+import app.hermes.companion.model.RoomRef
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import app.hermes.companion.design.HairlineField
+import androidx.compose.ui.text.input.KeyboardType
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
 import app.hermes.companion.model.ProfileRef
@@ -113,6 +121,15 @@ fun ChatScreen(
     pendingSpeaker: String? = null,
     onMention: (String) -> Unit = {},
     profiles: List<ProfileRef> = emptyList(),
+    /** Room v2 (A22.10): floor state, participants, actions. Null outside a room. */
+    room: RoomRef? = null,
+    roomCandidates: List<Pair<String, String>> = emptyList(),
+    onRoomPause: () -> Unit = {},
+    onRoomContinue: (Int) -> Unit = {},
+    onRoomSummarize: () -> Unit = {},
+    onRoomAddParticipant: (String) -> Unit = {},
+    onRoomRemoveParticipant: (String) -> Unit = {},
+    onRoomRename: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val roomMode = participants.isNotEmpty()
@@ -188,11 +205,33 @@ fun ChatScreen(
             .imePadding()
             .testTag("chat.surface"),
     ) {
+        if (roomMode && room != null) {
+            RoomBar(
+                room = room,
+                streaming = streaming,
+                profiles = profiles,
+                candidates = roomCandidates,
+                onMention = onMention,
+                onPause = onRoomPause,
+                onStop = onInterrupt,
+                onContinue = onRoomContinue,
+                onSummarize = onRoomSummarize,
+                onAdd = onRoomAddParticipant,
+                onRemove = onRoomRemoveParticipant,
+                onRename = onRoomRename,
+            )
+            Hairline()
+        }
         if (!loading && messages.isEmpty()) {
             val draft = DraftThread.isDraft(threadId)
             FetchPane(
                 label = if (!error.isNullOrBlank()) "history failed" else if (draft) "new" else "no messages",
-                hint = if (!error.isNullOrBlank()) error else if (historySource.isNotBlank()) "// $historySource" else "// idle",
+                hint = when {
+                    !error.isNullOrBlank() -> error
+                    draft -> "// host thread is created on first send"
+                    historySource.isNotBlank() -> "// $historySource"
+                    else -> "// idle"
+                },
                 scanning = false,
                 retryLabel = if (!error.isNullOrBlank()) "RETRY" else null,
                 onRetry = if (!error.isNullOrBlank()) onRetryHistory else null,
@@ -300,6 +339,9 @@ fun ChatScreen(
         }
         if (approval != null) {
             ApprovalStrip(approval, onApproval)
+        }
+        if (roomMode && room != null && !streaming) {
+            RoomFloorStrip(room, onRoomContinue)
         }
         if (rewindTargetId != null) {
             RewindStrip(onCancelRewind)
@@ -456,7 +498,7 @@ fun ChatScreen(
             MarkdownComposer(
                 value = draft,
                 onValueChange = onDraftChange,
-                onSend = { if (!streaming) onSend() },
+                onSend = { if (!streaming || roomMode) onSend() },
                 modifier = Modifier.weight(1f),
             )
             if (!roomMode) {
@@ -479,12 +521,12 @@ fun ChatScreen(
             )
             }
             Spacer(Modifier.width(CompanionSpace.Sm))
-            val stopLabel = if (roomMode) "INTERRUPT ALL" else "INTERRUPT"
-            val action = if (streaming) stopLabel to onInterrupt else "SEND" to onSend
+            val interrupting = streaming && !roomMode
+            val action = if (interrupting) "INTERRUPT" to onInterrupt else "SEND" to onSend
             Text(
                 text = action.first,
                 style = CompanionType.MonoSmall.copy(
-                    color = if (streaming) CompanionColor.Warn else CompanionColor.Signal,
+                    color = if (interrupting) CompanionColor.Warn else CompanionColor.Signal,
                 ),
                 maxLines = 1,
                 softWrap = false,
@@ -492,7 +534,7 @@ fun ChatScreen(
                     .testTag("chat.send")
                     .border(
                         CompanionSpace.Hairline,
-                        if (streaming) CompanionColor.Warn else CompanionColor.Signal,
+                        if (interrupting) CompanionColor.Warn else CompanionColor.Signal,
                     )
                     .clickable(onClick = action.second)
                     .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -620,6 +662,12 @@ private fun AssistantRow(
                 if (message.passed) {
                     Text(text = "passed", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute))
                 }
+                if (message.summary) {
+                    Text(text = "summary", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal), modifier = Modifier.testTag("chat.summary"))
+                }
+                if (message.speaker != null && Rooms.mentionsOperator(message.text)) {
+                    Text(text = "@YOU", style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn), modifier = Modifier.testTag("chat.mention.you"))
+                }
                 if (error.isNotBlank()) {
                     Text(
                         text = Rooms.turnErrorLabel(error),
@@ -736,8 +784,9 @@ private fun ApprovalStrip(prompt: ApprovalPrompt, onApproval: (String) -> Unit) 
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
             .testTag("chat.approval"),
     ) {
+        val who = prompt.speaker?.let { Rooms.glyph(it) + " wants " } ?: ""
         Text(
-            text = "$kind · ${prompt.command}",
+            text = "$who$kind · ${prompt.command}",
             style = CompanionType.Mono.copy(color = CompanionColor.Warn),
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -938,6 +987,244 @@ private fun ChatScrollTrack(listState: LazyListState, modifier: Modifier = Modif
                 .height(with(density) { thumbPx.toDp() })
                 .fillMaxWidth()
                 .background(CompanionColor.Signal),
+        )
+    }
+}
+
+
+/**
+ * Room header (A22.10 / A22.3): participant chips (tap = mention, long-press = remove), `+` to add,
+ * the floor pill (`R 7/12` · `QUIET` · `PAUSED · budget`), PAUSE / STOP while live, CONTINUE when not,
+ * SUMMARIZE, a pinned summary, and rename by tapping the title.
+ */
+@Composable
+private fun RoomBar(
+    room: RoomRef,
+    streaming: Boolean,
+    profiles: List<ProfileRef>,
+    candidates: List<Pair<String, String>>,
+    onMention: (String) -> Unit,
+    onPause: () -> Unit,
+    onStop: () -> Unit,
+    onContinue: (Int) -> Unit,
+    onSummarize: () -> Unit,
+    onAdd: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onRename: (String) -> Unit,
+) {
+    var adding by remember(room.id) { mutableStateOf(false) }
+    var renaming by remember(room.id) { mutableStateOf(false) }
+    var titleDraft by remember(room.id) { mutableStateOf(room.title) }
+    var showSummary by remember(room.id) { mutableStateOf(false) }
+    var removeTarget by remember(room.id) { mutableStateOf<String?>(null) }
+    val live = streaming || room.state == "running"
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(CompanionColor.VoidElevated)
+            .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm)
+            .testTag("room.bar"),
+        verticalArrangement = Arrangement.spacedBy(CompanionSpace.Xs),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
+            Row(
+                modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                room.participants.forEach { p ->
+                    val speaking = room.speaking == p.id || room.speaking == p.profile
+                    val hands = room.hands == p.id
+                    val mod = room.moderator == p.id
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier
+                            .testTag("room.participant.${p.id}")
+                            .border(CompanionSpace.Hairline, if (speaking) CompanionColor.Signal else CompanionColor.LineStrong)
+                            .pointerInput(p.id) {
+                                detectTapGestures(
+                                    onTap = { onMention(p.glyph) },
+                                    onLongPress = { removeTarget = p.id },
+                                )
+                            }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        if (speaking) LiveDot(size = 5.dp)
+                        Text(
+                            text = p.glyph + (if (hands) " ✋" else "") + (if (mod) " ★" else ""),
+                            style = CompanionType.MonoSmall.copy(color = if (speaking) CompanionColor.Signal else CompanionColor.TextDim),
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                        if (!p.host.isNullOrBlank()) {
+                            Text(text = p.host!!, style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute, fontSize = 9.sp), maxLines = 1)
+                        }
+                    }
+                }
+                if (candidates.isNotEmpty()) {
+                    Text(
+                        text = "+",
+                        style = CompanionType.Mono.copy(color = CompanionColor.Signal),
+                        modifier = Modifier
+                            .testTag("room.add")
+                            .border(CompanionSpace.Hairline, CompanionColor.LineStrong)
+                            .clickable { adding = !adding }
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
+            }
+            FloorPill(room, live)
+        }
+        if (removeTarget != null) {
+            val target = removeTarget!!
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Md)) {
+                Text(
+                    text = "REMOVE ${Rooms.glyph(target)} from the room?",
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = "REMOVE",
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger),
+                    modifier = Modifier.testTag("room.remove.confirm").clickable { onRemove(target); removeTarget = null }.padding(CompanionSpace.Xs),
+                )
+                Text(
+                    text = "CANCEL",
+                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                    modifier = Modifier.clickable { removeTarget = null }.padding(CompanionSpace.Xs),
+                )
+            }
+        }
+        if (adding) {
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(text = "ADD", style = CompanionType.MonoSmall)
+                candidates.forEach { (id, label) ->
+                    Text(
+                        text = "${Rooms.glyph(id)} $label",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                        modifier = Modifier
+                            .testTag("room.add.$id")
+                            .border(CompanionSpace.Hairline, CompanionColor.LineStrong)
+                            .clickable { onAdd(id); adding = false }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
+            if (live) {
+                BarAction("PAUSE", CompanionColor.TextDim, "room.pause", onPause)
+                BarAction("STOP", CompanionColor.Warn, "room.stop", onStop)
+            } else {
+                BarAction("CONTINUE +6", CompanionColor.Signal, "room.continue") { onContinue(6) }
+                BarAction("SUMMARIZE", CompanionColor.TextDim, "room.summarize", onSummarize)
+            }
+            if (room.summary.isNotBlank()) {
+                BarAction(if (showSummary) "SUMMARY ▴" else "SUMMARY ▾", CompanionColor.TextDim, "room.summary.toggle") { showSummary = !showSummary }
+            }
+            Spacer(Modifier.weight(1f))
+            BarAction(if (renaming) "CANCEL" else "RENAME", CompanionColor.TextMute, "room.rename") {
+                renaming = !renaming
+                titleDraft = room.title
+            }
+        }
+        if (renaming) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
+                HairlineField(
+                    value = titleDraft,
+                    onValueChange = { titleDraft = it },
+                    keyboardType = KeyboardType.Text,
+                    placeholder = "room title",
+                    modifier = Modifier.weight(1f).testTag("room.rename.field"),
+                    onDone = { onRename(titleDraft); renaming = false },
+                )
+                BarAction("SAVE", CompanionColor.Signal, "room.rename.save") { onRename(titleDraft); renaming = false }
+            }
+        }
+        if (showSummary && room.summary.isNotBlank()) {
+            Text(
+                text = room.summary,
+                style = CompanionType.Mono.copy(color = CompanionColor.Text),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(CompanionSpace.Hairline, CompanionColor.Line)
+                    .padding(CompanionSpace.Sm)
+                    .testTag("room.summary"),
+            )
+        }
+    }
+}
+
+@Composable
+private fun FloorPill(room: RoomRef, live: Boolean) {
+    val (text, color) = when {
+        live -> Rooms.budgetPill(room.turnsUsed, room.budget) to CompanionColor.Signal
+        room.state == "quiet" -> "QUIET" to CompanionColor.TextMute
+        room.state == "paused" -> "PAUSED · ${room.pauseReason.ifBlank { "" }}".trimEnd(' ', '·') to CompanionColor.Warn
+        else -> room.mode.uppercase() to CompanionColor.TextMute
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier
+            .border(CompanionSpace.Hairline, color)
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .testTag("room.pill"),
+    ) {
+        if (live) LiveDot(size = 5.dp)
+        Text(text = text, style = CompanionType.MonoSmall.copy(color = color), maxLines = 1, softWrap = false)
+    }
+}
+
+@Composable
+private fun BarAction(label: String, color: Color, tag: String, onClick: () -> Unit) {
+    Text(
+        text = label,
+        style = CompanionType.MonoSmall.copy(color = color),
+        maxLines = 1,
+        softWrap = false,
+        modifier = Modifier
+            .testTag(tag)
+            .clickable(onClick = onClick)
+            .padding(horizontal = CompanionSpace.Xs, vertical = CompanionSpace.Xs),
+    )
+}
+
+/** Under the transcript when the floor is closed: why, and how to give it back. */
+@Composable
+private fun RoomFloorStrip(room: RoomRef, onContinue: (Int) -> Unit) {
+    val label = Rooms.stateLabel(room.state, room.pauseReason, room.turnsUsed, room.budget)
+    if (label.isBlank()) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(CompanionColor.VoidElevated)
+            .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm)
+            .testTag("room.floor"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
+    ) {
+        Text(
+            text = label,
+            style = CompanionType.MonoSmall.copy(color = if (room.state == "paused") CompanionColor.Warn else CompanionColor.TextMute),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = "CONTINUE +6",
+            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+            modifier = Modifier
+                .testTag("room.floor.continue")
+                .border(CompanionSpace.Hairline, CompanionColor.Signal)
+                .clickable { onContinue(6) }
+                .padding(horizontal = 8.dp, vertical = 4.dp),
         )
     }
 }

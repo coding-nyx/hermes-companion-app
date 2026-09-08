@@ -1,7 +1,7 @@
 # Hermes Companion — Work Item Management & Engineering Backlog
 
 **Repository**: `hermes-companion-app`  
-**Updated**: 2026-09-05 (A12.3 biometric lock)  
+**Updated**: 2026-09-08 (P28 Hermes ↔ OpenClaw agent room bridge added)
 **Status**: Active Living Roadmap  
 **Target Platform**: Android 12+ (minSdk 31, targetSdk 35) & Python 3.10+ Host Plugin  
 
@@ -20,7 +20,7 @@
 | **P6** | Hands Rollout & Multi-Device Control | A6.1 – A6.7 | ⚠️ **80%** (A6.1–A6.5 done, A6.6 pending check, A6.7 planned) | P1 | M2 Hands |
 | **P7** | Production Hardening, Security & Architecture | A7.1 – A7.12 | ✅ **100%** (A7.11 done 2026-09-05) | **P0 (Critical)** | Production Beta |
 | **P8** | Multi-Host Gateway Book & Switching + host-scoped everything | A8.1 – A8.5 | ⚠️ **80%** (A8.4 done; A8.3 leftover isolation pending) | **P0** | v0.3.0 |
-| **P9** | Model Inspector & Dynamic Model Switching | A9.1 – A9.4 | ⚠️ **75%** (3/4 done) | P1 | v0.3.0 |
+| **P9** | Model Inspector & Dynamic Model Switching | A9.1 – A9.5 | ⚠️ **60%** (3/5 done) | P1 | v0.3.0 |
 | **P10** | Reminders & Scheduled Tasks Surface (Hermes Cron) | A10.1 – A10.5 | ⚠️ **40%** (2/5 done) | P1 | v0.4.0 |
 | **P11** | Voice & Wake-On-Voice (Hands-Free Hermes) | A11.1 – A11.5 | ⚠️ **30%** (1.5/5 done) | P1 | v0.5.0 |
 | **P12** | Locked Device Access & Secure Ambient Control | A12.1 – A12.5 | ⚠️ **50%** (A12.3 done; A12.1 partial) | P2 | v0.6.0 |
@@ -29,10 +29,17 @@
 | **P15** | Code Review, Diff Inspector & Git Workspace | A15.1 – A15.5 | ⚠️ **45%** (1 done, 3 partial) | P1 | v0.8.0 |
 | **P16** | Host Workspace Files, Artifacts & Skill Hub | A16.1 – A16.4 | ⚠️ **10%** (0.5/4 done) | P2 | v0.9.0 |
 | **P17** | App & Host Update Lifecycle | A17.1 – A17.3 | ⚠️ **65%** (2/3 done) | P1 | v0.3.0 |
-| **P18** | Threads & Chat Polish (keyboard, history bug, loading, rich text, bottom bar, delete, gateway picker) | A18.1 – A18.8 | ✅ **100%** | P1 | v0.3.0 |
+| **P18** | Threads & Chat Polish (keyboard, history bug, loading, rich text, bottom bar, delete, gateway picker, rail ordering + sort/filter) | A18.1 – A18.13 | ⚠️ **95%** (A18.9–A18.13 done 2026-09-08; S22 pass on lab + hub-11 + raj-13766) | P1 | v0.3.0 |
 | **P20** | Dashboard-Independent Operator Lane (plugin serves the operator API) | A20.1 – A20.3 | ✅ **100%** (A20.1–A20.3 done 2026-09-05; standalone default ON) | P2 | v0.9.0 |
 | **P19** | OpenClaw Gateway Support (second host kind) | A19.1 – A19.4 | 🔲 **Planned (last)** | P2 | v1.0.0 |
 | **P21** | Agent Rooms — multi-profile group chat (plan: `docs/superpowers/plans/2026-09-07-agent-group-chat.md`) | A21.1 – A21.6 | ✅ **v1 code done (2026-09-07)** — A21.1–A21.5 landed, S22 pass vs mock dashboard; A21.6 later | P1 | v0.3.0 |
+| **P22** | Rooms v2 — approvals in rooms, resync/unread, **conversation policy** (converse/moderated, budgets not round caps, operator interleaving), participants & rename in-room, standalone (text-only) rooms, **cross-host participants** (peer links, ASH@lab + BISHOP@hub-11), operator wake, summaries, templates, hands participant (plan: `docs/superpowers/plans/2026-09-08-rooms-v2-and-agent-sessions.md` §1) | A22.1 – A22.11 | ✅ **Done + S22 pass (2026-09-08)** — lab room ASH+COD conversed 6 turns → quiet; operator interleaved posts and added KNI live; cross-host room COD@lab + BIS@hub-11 (text-only) ran to the budget pause; peer link brokered from the phone after pairing with hub-11. **Awaiting Nyx approval before P23.** | P1 | v0.4.0 |
+| **P23** | Coding-Agent Sessions — run Claude Code / Codex (PTY via tmux first, structured adapters second) from the phone; Agent console in the `term` tab; rooms convergence (plan: same file §2) | A23.1 – A23.7 | ⚠️ **A23.1–A23.4 done (2026-09-08), S22 pass** — `agents.py`: discovery, cwd allow-list, tmux runner, **structured runners** (`StructuredProcess` = Claude `-p --input-format stream-json --output-format stream-json --permission-prompt-tool stdio`, `can_use_tool` → phone approval; `CodexStructuredProcess` = per-turn `codex exec --json` + `exec resume <thread>`), routes `prompt`/`approval`/`transcript`, replay ws; phone `AgentTranscript` reducer + chat view (CHAT/TERMINAL mode chips), **directory picker** (`GET /companion/agents/dirs`, BROWSE → roots/recents/`..`/rows/USE; S22 pass). S22: Write approval ALLOW → file created; Bash `rm` DENY → survived; cost/idle/needs-you pills. Left: A23.5 safety, A23.6 wake pings, A23.7 rooms convergence. hub-11 lacks tmux (chat mode works without it) and has no claude/codex. | P1 | v0.4.0 |
+| **P24** | Workspace Resolution — per-profile workspace (`profile config cwd → <profile>/workspace → profile home → HERMES_WORKSPACE`), `profile=`/`cwd=` on git/terminal/fs routes, workspace picker on Review/Console (plan: same file §4) | A24.1 – A24.3 | 🔲 **Planned (2026-09-08)** — today the relay uses one `HERMES_WORKSPACE=/home/nyx` for every profile | P1 | v0.4.0 |
+| **P25** | Plugin Web Console — single static page at `/companion/ui/`: health, pairing approvals, devices, peers, rooms live view, agent sessions, audit, workspace map (plan: same file §5) | A25.1 – A25.3 | 🔲 **Planned (2026-09-08)** | P2 | v0.4.0 |
+| **P26** | Agent Memory Maintenance & Modifications Module — mobile memory inspector (search, view, edit, prune, add), memory dream consolidation, agent persona (`SOUL.md`), prompt directives, skill toggles (plan: `docs/superpowers/plans/2026-09-08-rooms-v2-and-agent-sessions.md` §6) | A26.1 – A26.4 | 🔲 **Planned (2026-09-08)** | P1 | v0.4.0 |
+| **P27** | Notification System v2 — notification enrichment (MessagingStyle, direct reply, inline approvals), thread subscriptions & muting, host & agent routing matrix in settings (plan: `docs/superpowers/plans/2026-09-08-rooms-v2-and-agent-sessions.md` §7) | A27.1 – A27.4 | 🔲 **Planned (2026-09-08)** | P1 | v0.4.0 |
+| **P28** | Hermes ↔ OpenClaw Agent Room Bridge — native OpenClaw peer plugin, persistent room participants, reciprocal room tools and protocol v2 (plan: `docs/superpowers/plans/2026-09-08-openclaw-hermes-room-bridge.md`) | A28.1 – A28.4 | 🔲 **Planned (2026-09-08)** | P1 | v0.5.0 |
 
 ---
 
@@ -212,10 +219,22 @@ Enables operators to inspect the active LLM model and switch models per profile 
 - **Resolution**: Optional `model` on `DashboardClient.createSession` / `streamTurn` (RPC `session.create` + `prompt.submit`, REST create, SSE `chat/stream`). `CompanionState.modelOverride` seeds from the active profile (catalog current as fallback); HOST chips set it immediately and still call host `switchModel`. Create/send/rewind/outbox flush pass it when non-blank. Chat composer shows `model · id`. Tests assert JSON payloads.
 - **Estimate**: 1 day | **Dependencies**: A9.2 ✅
 
-#### A9.4 · Model Sampling Parameters Drawer 🔲 PENDING
-- **Deliverable**: Optional settings drawer for adjusting temperature, top_p, and max tokens per session.
-- **Acceptance Criteria**: Parameters are persisted in Room and passed to Hermes host.
-- **Estimate**: 1.5 days | **Dependencies**: A9.3
+#### A9.4 · Model Reasoning Toggle & Sampling Parameters 🔲 PENDING
+- **Deliverable**:
+  - Interactive **reasoning toggle** near the model list (in `ModelBottomSheet`, `SettingsBottomSheet`, and `GatewayScreen` model switcher) for reasoning-capable models (`model.reasoning == true`).
+  - Allows operator to toggle reasoning on/off (or cycle effort: low/medium/high) alongside model selection instead of displaying only a static amber `REASONING` badge.
+  - Wire toggle state through `CompanionState.reasoningOverride` / `DashboardClient` session creation and turn stream parameters (`reasoning` / `reasoning_effort`), persisting user preference in `StickyStore`.
+  - Optional settings drawer for adjusting temperature, top_p, and max tokens per session.
+- **Acceptance Criteria**: Toggling reasoning near model list reflects in turn stream payloads; active model indicator reflects reasoning state; persists across relaunch.
+- **Estimate**: 1.5 days | **Dependencies**: A9.3 ✅
+
+#### A9.5 · Profile Global Model Toggle in Profile List 🔲 PENDING
+- **Deliverable**:
+  - Interactive **global model toggle** per profile row in `ProfilesScreen.kt` and `ProfileBottomSheet.kt` to toggle between inheriting the host's global default model and locking to a profile-scoped model override.
+  - Toggling to `GLOBAL` clears the profile's specific model override via `POST /api/profiles/<id>/model` (`{"model": ""}`) so it dynamically tracks the host default model.
+  - UI: Row meta line shows `global (<model>)` when inheriting vs the custom profile model when overridden; interactive `GLOBAL` chip/toggle.
+- **Acceptance Criteria**: Toggling global model on a profile switches it between the host default model and custom model; UI clearly indicates inheritance; persists on host and phone.
+- **Estimate**: 0.5 day | **Dependencies**: A9.2 ✅, A9.3 ✅
 
 ---
 
@@ -338,6 +357,7 @@ Expands power-user and multimodal features.
 
 #### A13.2 · Notification Listener Service ✅ P0+P1 (see `docs/superpowers/plans/2026-09-06-live-notification-stream.md`)
 - **Deliverable**: Opt-in `NotificationListenerService`. Forwards selected incoming Android notifications to Hermes agent memory or wake bus.
+- **STREAM switch semantics (2026-09-08)**: STREAM is strictly a phone-side switch in Companion → Device tab → NLS + STREAM (pointed at gateway/profile). Not like arm/disarm: host cannot grant NLS, and there are no host `device.stream_on/off` commands. When on, agent reads ring via `mobile_notifications` (works while disarmed) and gets woken on shade events (Telegram and Gmail silenced so we don't echo). Want it on, tap STREAM; want it off, same place.
 - **Acceptance Criteria**: Agent can monitor SMS, messaging, or system alerts when explicitly enabled by user.
 - **Estimate**: 3 days | **Dependencies**: None
 
@@ -482,6 +502,61 @@ Operator-side polish requested after the first P7 device pass: the thread rail g
 **Order (2026-09-05):** ~~A18.4 keyboard handling~~ ✅ → ~~A8.5 host-scoped everything~~ ✅ → ~~A18.1 loading states~~ ✅ → ~~A18.2 markdown~~ ✅ → ~~A18.3 delete threads~~ ✅ → ~~A13.1 images/video/docs~~ ✅ → ~~A7.11 relay 502~~ ✅ → ~~A20.1–A20.3 standalone operator~~ ✅ → ~~A18.8 chats-not-loading fix~~ ✅ → ~~A18.7 bottom bar~~ ✅ → ~~A18.5 gateway picker~~ ✅.
 
 ### Work Items
+
+#### A18.9 · Thread Rail Is Unstable, Unordered and Not Exhaustive ✅ CODE DONE (2026-09-08) — S22 check pending
+- **Problem** (reported 2026-09-08): the rail shows a seemingly random subset of threads in a seemingly random order, and the order flips between the cached paint and the remote refresh. Root causes found in the data path, none in Compose:
+  1. **Timestamps parsed as 0.** Hermes stores `started_at` / `last_activity_at` as `REAL` seconds (`1756750000.5`); `JsonObject.long()` uses `longOrNull`, which is `null` for a float, so every real-dashboard row sorted as `updatedAt = 0` and fell through to the id tie-break.
+  2. **Opposite tie-breaks.** Room ordered `updatedAt DESC, id DESC`; `SessionLists.normalize` ordered `updatedAt DESC, id ASC`. With all timestamps 0 the cache painted newest-first and the remote page repainted oldest-first — the visible "flip".
+  3. **Not exhaustive.** The dashboard's `GET /api/sessions` returns only the 20 most recent rows; the gateway's `session.list` knows live/lazy sessions but not archives. `listSessions` picked one list or the other by length instead of merging. The standalone store also applied the archived/hidden filter *after* `LIMIT`, so pages came back short.
+  4. **Sparse bus patches replaced whole rows.** `sessions.changed` carries `id/profile/op` and sometimes `updated_at`; `applyChange` overwrote the known row, so a thread lost its title (id echo) and dropped to the bottom (`updatedAt = 0`) the moment it got activity.
+  5. **Every live row lit as unread.** `parseSessions` treated a missing `ended_at` as unread; the standalone relay never sends `ended_at`.
+- **Resolution**:
+  - `SessionRef` gains `createdAtEpochMs`, `messageCount`, `source`. `ProfileJson.epochMs()` accepts int ms, int/float seconds and ISO-8601; `started_at`/`created_at` → created, `updated_at`/`last_activity_at`/`last_active_at` → updated (falls back to created). Unread only from explicit `unread` / `unread_count`.
+  - `ThreadSort { CREATED (default), ACTIVE, TITLE }` + one `SessionLists.comparator`: chosen key desc → other timestamp desc → **id desc** (Hermes ids are `YYYYMMDD_HHMMSS_hash`, so id-desc is still newest-first). Room `ORDER BY` uses the same keys and direction. `SessionLists.merge` folds duplicates and bus patches without losing title / timestamps / count; timestamps never move backwards. `CompanionState.visibleSessions` sorts by `threadSort`; sticky per phone (`StickyStore.threadSort`).
+  - `DashboardClient.listSessions` returns the **union** of RPC and REST keyed by id (richer fields merged). RPC asks `limit=500`; REST walks `limit=100&offset=…` (the dashboard 422s above 100 and reports `total`) until the page is short, `total` is reached, 500 rows are in hand, or a host that ignores `offset` repeats itself. REST failure still surfaces when RPC is unavailable. Room v5 (destructive, cache only).
+  - **Found on lab (S22, 2026-09-08):** coder shows 53 of 114 `state.db` rows. That is Hermes' own definition of the list: `list_sessions_rich(include_children=False)` hides the 60 `subagent` child sessions (all untitled, `parent_session_id` set) on **both** the gateway and the dashboard REST path, and the phone hides the one `room:` backer. The Hermes web dashboard shows the same 53. ASH shows 348 of 349 (room backer). The rail is now as exhaustive as the host itself. The dashboard REST 422'd on `limit=500` until the paging fix, which is why ENDED badges (REST-only `end_reason`) appeared only after it.
+  - Plugin: `hermes_store.list_sessions` filters archived/hidden in SQL, orders by `started_at` then activity then id, default page 500, includes `source`; standalone rows carry `started_at`, honour `limit` on REST + RPC, and `sessions.changed` includes `started_at`. Mock dashboard seeds float-second timestamps like the real one.
+- **Verified**: `SessionListsTest` (13, incl. shuffle-stability and merge), `ThreadTimeTest`, `ProfileScopeTest.sparseUpsertPatchKeepsTitleAndTimestamps`, `DashboardClientTest.parseSessionsReadsFloatSecondsIsoAndActivityFields` / `listSessionsUnionsRpcAndRestById` / `restSessionsPageThroughOffsetUntilTotal` / `restSessionsStopWhenHostIgnoresOffset`, `test_standalone` (started_at + limit/offset/total + archived-before-limit). **S22 (2026-09-08, lab proxy + raj-13766 standalone)**: CREATED order matches `state.db ORDER BY started_at DESC` row for row; ↻ leaves the order untouched; ACTIVE / A–Z / filter / count all behave; ASH 348 = 349 minus the hidden room backer. Coder count re-check after the paging fix is the remaining item.
+- **Estimate**: 1 day | **Dependencies**: None
+
+#### A18.10 · Threads & Chat Rail UX (sort, filter, grouping, meta) ✅ CODE DONE (2026-09-08) — S22 check pending
+- **Problem**: the rail was a flat list of titles + the profile id (redundant, the rail is profile-scoped) with no time cue, no way to reorder, no way to find a thread among 200, and no refresh.
+- **Resolution** (`ThreadsScreen`):
+  - Toolbar: `NEW · NEW ROOM … count ↻`. `↻` re-fetches (same path as RETRY); dimmed while loading.
+  - `SORT  CREATED ▾  ACTIVE  A–Z` chips (`threads.sort.<name>`), default CREATED newest-first per the operator request.
+  - `filter threads` hairline field (`threads.filter`): title / id / source contains, count shows `shown/total`, `NO MATCH // q` pane. Screen-local, never persisted.
+  - Time-sorted rails get group headers `TODAY / YESTERDAY / THIS WEEK / SEP 2026 / 2025` (`threads.group.<label>`); A–Z has none.
+  - Row: unread rail, title, meta line `12 msgs · telegram · ENDED`, right-aligned relative stamp (`now / 5m / 3h / 2d / Sep 4 / 2025-12-01`) — creation time for CREATED / A–Z, last activity for ACTIVE. Profile id removed.
+  - Chat header: second mono line under the title — `started 3h · 12 msgs · telegram · ENDED`; drafts read `draft · saved on first send`. Empty draft pane hint now says the host thread is created on first send.
+- **Verified**: `ThreadsScreenRenderTest` (Robolectric: order per sort, group headers, stamps, chips, filter, refresh). **S22**: eyeball density on 360 dp, long titles, 200+ rows scroll, sort persists across relaunch.
+- **Estimate**: 1 day | **Dependencies**: A18.9
+
+#### A18.11 · Standalone Relay Hid the `default` Profile ✅ DONE (2026-09-08)
+- **Problem** (reported 2026-09-08, raj-13766): the profile picker showed only `coder`. `hermes_store.discover_profile_dirs()` returned *only* `HERMES_HOME/profiles/*` whenever any named profile existed, so the root profile (HERMES_HOME itself, which Hermes calls `default`) vanished — its threads were unreachable from the phone. `_profile_id(home)` also returned the directory basename (`.hermes`), never `default`.
+- **Resolution**: `hermes_store.hermes_root()` mirrors `hermes_cli.profiles`: when `HERMES_HOME` is `<root>/profiles/<name>` (hub-11's relay unit runs as `profiles/bishop`) the root is two levels up. The root is listed first as `default`, then every `<root>/profiles/*`; an explicit `profiles/default` directory wins over the root when both exist (lab). `profile_dir("default")` resolves to the root. Tests: `test_root_profile_listed_as_default_next_to_named_profiles`, `test_relay_started_inside_a_named_profile_still_lists_root_and_siblings`, `test_named_default_profile_dir_wins_over_root`; the two state.db tests now expect `default` instead of the temp dir's basename.
+- **Deploy**: plugin rsynced + relay restarted on lab and hub-11 (2026-09-08); hub-11 `/api/profiles` now returns `default` + `bishop`. **raj-13766 refuses ssh** — run `hermes-plugin/install.sh` there by hand (or `rsync` the `hermes-plugin/` tree into `~/.hermes/plugins/hermes-companion` and restart the relay), then the picker shows `default` + `coder`.
+- **Estimate**: 0.25 day | **Dependencies**: None
+
+#### A18.12 · ARCHIVED + TELEGRAM Chips on the Thread Rail ✅ CODE DONE (2026-09-08) — S22 check pending
+- **Problem** (raj-13766, 2026-09-08): `default` showed 6 threads. The store holds 282; Hermes had auto-archived 276 (84 Telegram, 151 subagent, 21 kanban, …) and every Hermes surface hides archived rows, so the phone matched the host but not the operator's expectation.
+- **Resolution**: sort row ends with `│ □ TELEGRAM  □ ARCHIVED`.
+  - **ARCHIVED** is host state: `SessionRef.archived` (dashboard bools or SQLite 0/1), `listSessions(includeArchived)` sends `archived=include` on REST and `include_archived` on RPC, `StickyStore.showArchived` persists it, toggling refetches; `visibleSessions` hides archived rows while off so the cache can hold them. Rows and the chat header show `ARCHIVED` (mute) instead of `ENDED`. Room v6.
+  - **TELEGRAM** is a view filter (screen-local like the text filter): `SessionLists.bySource(rows, "telegram")`; count shows `shown/total`; NO MATCH hint names the active filters.
+  - Plugin: `hermes_store.list_sessions/count_sessions(include_archived)`, rows carry `archived`; standalone honours `archived=include|only|1|true` on REST and `include_archived` on RPC. Hidden rows stay hidden.
+- **Verified**: `SessionListsTest.bySourceAndArchivedVisibility` / `mergeArchivedFollowsTheNewerRow`, `DashboardClientTest.includeArchivedAddsQueryAndParsesFlag`, `ThreadsScreenRenderTest.telegramChipFiltersLocallyAndArchivedChipReportsToHost`, `test_standalone` archived-include page. Deployed to lab + hub-11; raj-13766 needs the manual rsync + `install.sh` again.
+- **Estimate**: 0.5 day | **Dependencies**: A18.9
+
+#### A18.13 · UX Review Pass — robot icon, host-switch state, loading/error chrome ✅ CODE DONE (2026-09-08) — S22 check pending
+- **Problem**: switching hosts from the gateway tab kept painting the previous host's threads under the new host name until the new list landed; several fetches had no visible state (rooms, model catalog in the sheets, profile switch on the profiles tab, pairing wait, device lane reconnect); host errors on the console/review/cron/gateway/profiles tabs were swallowed; the launcher icon was an abstract diamond.
+- **Resolution**:
+  - **Icon**: adaptive launcher is now the companion robot face (`ic_launcher_foreground` + `ic_launcher_monochrome` for themed icons). The same face is `RobotMark` in `core-design`, used on Boot, Connect (eyes dim until connected) and the switching pane.
+  - **Host switch**: `CompanionShell` swaps the body for `SwitchingPane` (`shell.switching`: robot, target host name, `SWITCHING HOST // probe · auth · profiles · threads`) while `state.loading`; the gateway fleet row being switched to reads `SWITCHING` with a live dot and the other rows lock. Header gets a `LinkPill`: `SYNC` while the host or a profile's threads load, `LINK` (warn) when the gateway socket is down.
+  - **Loading states added**: rooms (`threads.rooms.loading`), model catalog in both sheets (`model.sheet.loading`, `settings.model.loading`), profile switch (`profiles.switching` + blinking ACTIVE row, taps locked), pairing wait (scanline under the code), device lane `connecting` with cursor until the lane opens, empty fleet copy.
+  - **Errors**: `StatusStrip` (`shell.error`) under the header with DISMISS for every tab that lacked an error slot (console, review, cron, profiles, gateway).
+  - **Controls**: `ActionButton` (primary/ghost/danger, busy label), `ToggleRow`, `SectionHeader`, `KeyValueRow` in `core-design`; gateway screen and connect use them (CONNECT disabled until an origin is typed; UPDATE shows `UPDATING`).
+  - **Profiles tab**: rows instead of a glyph strip — glyph, name, `id · model · N threads · gw`, ACTIVE badge, count in the header.
+- **Verified**: full unit suite green; S22 eyeball pass pending for the switching pane and the new icon.
+- **Estimate**: 0.5 day | **Dependencies**: A18.10
 
 #### A18.8 · ~~Chats Not Loading (history path)~~ ✅ DONE (2026-09-05)
 - **Problem**: Opening many threads on the S22 shows an empty or stuck transcript. RPC `session.history` returning `[]` was treated as success, so REST never ran. `session.resume` on ended Telegram sessions could spawn a fresh live id.
@@ -660,6 +735,169 @@ Addresses host-side multi-device routing for the "Hands" control plane. While th
 
 ---
 
+## 16b. Phase P26 — Agent Memory Maintenance & Modifications Module (P1) ✨ NEW (2026-09-08)
+
+Delivers a dedicated mobile-first surface to inspect and curate agent long-term memories and customize agent behaviors per profile. Eliminates the need to SSH into the host or edit host YAML files to correct hallucinations, prune duplicate facts, trigger consolidation (`memory-dream`), or modify personas (`SOUL.md`), prompt directives, and skill toggles. Full design in `docs/superpowers/plans/2026-09-08-rooms-v2-and-agent-sessions.md` §6.
+
+### Work Items
+
+#### A26.1 · Host Protocol: Profile Memory & Agent Configuration Endpoints 🔲 PENDING
+- **Problem**: Host memory storage (`state.db`, SQLite memories table, or memory JSON stores) and agent configuration files (`SOUL.md`, `config.yaml`, skill enablements) have no authenticated remote inspection or mutation endpoints on the companion relay. Operators cannot view or fix memories or adjust agent personas without SSH access.
+- **Deliverable**:
+  1. **Memory REST Endpoints** (`hermes-plugin/relay.py`, `hermes_store.py`):
+     - `GET /companion/profiles/{id}/memory?q=&type=&limit=`: Query and filter profile memories (content, type, tags, timestamps, source session, confidence).
+     - `POST /companion/profiles/{id}/memory`: Manually create a memory entry (`{content, type?, tags?}`).
+     - `PATCH /companion/profiles/{id}/memory/{mem_id}`: Edit memory text or tags inline (correct errors / hallucinations).
+     - `DELETE /companion/profiles/{id}/memory/{mem_id}`: Prune obsolete or erroneous memory entry.
+  2. **Memory Consolidation / Dream Task Endpoint**:
+     - `POST /companion/profiles/{id}/memory/dream`: Trigger background memory consolidation / dreaming pipeline. Returns `202 Accepted {job_id, status: "running"}`.
+     - `GET /companion/profiles/{id}/memory/dream/status`: Return dream task state (`idle`, `running`, `completed`), last run timestamp, and stats (`consolidated`, `pruned`).
+  3. **Agent Modifications Endpoints**:
+     - `GET /companion/profiles/{id}/agent`: Return persona (`SOUL.md` content), custom system prompt directives, installed skills with enablement booleans, and model config.
+     - `PATCH /companion/profiles/{id}/agent`: Atomically update soul markdown, system prompt directives, skill toggles, and model selection.
+  4. **Security & Audit**:
+     - Enforce loopback or paired device token auth (`Authorization: Companion <device_id>:<token>`).
+     - Audit log all memory edits, deletions, and agent persona modifications via `audit.py`.
+- **Estimate**: 1.0 day | **Dependencies**: A20.1 ✅, A8.5 ✅
+
+#### A26.2 · Phone UI: Memory Maintenance Inspector (View, Search, Edit, Prune, Add) 🔲 PENDING
+- **Problem**: The companion app has no interface to inspect or maintain agent memory. When an agent hallucinates or stores contradictory context, the operator cannot see what was remembered.
+- **Deliverable**:
+  1. **Memory Studio Screen / Sheet** (`feature-profiles` / `feature-memory`):
+     - Monospace search bar (`filter memories`) + filter chips (`ALL`, `FACTS`, `PREFERENCES`, `EPISODIC`, `RECENT`).
+     - Memory card list: card with monospace memory body, relative timestamp (`2d ago`), source pill (e.g. `chat:sess-123`, `manual`), confidence rating badge.
+  2. **Memory Editing & Mutation**:
+     - Tap to open inline edit modal: edit memory content, adjust tags.
+     - Swipe-to-delete or explicit `DELETE` action with confirmation prompt.
+     - `+ ADD MEMORY` floating/header action to directly insert curated facts or preferences into the agent's memory store.
+  3. **Data Integration**:
+     - `DashboardClient` methods: `getMemories()`, `createMemory()`, `updateMemory()`, `deleteMemory()`.
+     - Offline caching in Room DB (`MemoryEntity`, `MemoryDao`).
+- **Estimate**: 1.5 days | **Dependencies**: A26.1
+
+#### A26.3 · Memory Maintenance Operations: Dream / Consolidate Trigger & Cleanup 🔲 PENDING
+- **Problem**: Periodic memory consolidation ("dreaming") reduces duplication and synthesizes episodic memories into semantic knowledge. Currently this requires host CLI invocations.
+- **Deliverable**:
+  1. Header action in Memory Studio: `DREAM NOW` button.
+  2. Asynchronous job status tracking: poll `/companion/profiles/{id}/memory/dream/status` while running; display animated status pill (`DREAMING · consolidating 12 memories...`).
+  3. Completion report card: display summary of consolidation (e.g. "18 memories synthesized into 4 facts, 6 stale memories pruned").
+  4. Error handling with retry toast if consolidation fails.
+- **Estimate**: 0.5 day | **Dependencies**: A26.1, A26.2
+
+#### A26.4 · Agent Modifications UI: Soul, Prompt Directives & Skill Toggles 🔲 PENDING
+- **Problem**: Tweaking an agent's persona (`SOUL.md`), adding custom instructions, or toggling installed skills requires modifying files on the host filesystem.
+- **Deliverable**:
+  1. **AGENT Tab in Profile Studio** (`ProfilesScreen.kt` / `AgentStudioSheet.kt`):
+     - **Soul Editor**: Monospace markdown editor for the profile's `SOUL.md`, with tabbed Edit/Preview modes.
+     - **Directives & Constraints**: Multiline text area for custom system prompt constraints and instructions.
+     - **Skill Toggles**: Interactive list of installed skills on the host with instant toggle switches to enable/disable skills for the active profile.
+     - **Model & Reasoning**: Integrated model picker with reasoning toggle (`A9.4`) and profile global model inheritance toggle (`A9.5`).
+  2. **Dirty-State Management**:
+     - Track unsaved modifications; show `SAVE CHANGES` action with dirty indicator (`*`).
+     - Confirmation prompt if navigating away with uncommitted edits.
+  3. **Verification**:
+     - Robolectric tests for state handling, dirty detection, and toggle dispatch.
+     - S22 physical verification editing soul, directives, and skill toggles against live host profile.
+- **Estimate**: 1.0 day | **Dependencies**: A26.1
+
+---
+
+## 16c. Phase P27 — Notification System v2: Enrichment, Thread Subscriptions & Host/Agent Routing (P1) ✨ NEW (2026-09-08)
+
+Transforms notifications from passive, flat pings into an actionable, enriched, multi-channel communication layer. Enables operators to preview real conversation snippets, reply inline from the shade (`RemoteInput`), approve/deny tool executions with a single tap, customize thread notification preferences (`WATCH`, `ACTIONS_ONLY`, `MUTED`, `SNOOZE`), and configure multi-host/multi-agent notification allowlists in settings to prevent notification spam across fleet hosts. Full design in `docs/superpowers/plans/2026-09-08-rooms-v2-and-agent-sessions.md` §7.
+
+### Work Items
+
+#### A27.1 · Multi-Channel Stratification & Notification Enrichment 🔲 PENDING
+- **Problem**: All companion notifications route through a single high-priority `"wake"` channel using Android's default system info icon. Text is uninformative (`coder · sess-123`), with no speaker avatar, message preview, or priority stratification.
+- **Deliverable**:
+  1. **Notification Channels**:
+     - `hermes.approvals`: `IMPORTANCE_HIGH` (heads-up banner, double-pulse haptic).
+     - `hermes.mentions`: `IMPORTANCE_DEFAULT` (sound, standard alert).
+     - `hermes.turns`: `IMPORTANCE_LOW` (silent, in-shade watch mode).
+     - `hermes.cron`: `IMPORTANCE_HIGH` (alarm chime).
+     - `hermes.health`: `IMPORTANCE_MIN` (silent background).
+  2. **Enriched Notification Builder** (`WakeNotifier.kt`):
+     - `NotificationCompat.MessagingStyle`: Agent glyph mark, profile name, host name (e.g. `[K] knight · lab`), and real snippet body.
+     - Visual priority pill badges: `APPROVAL`, `MENTION`, `QUESTION`, `CRON`, `ROOM`, `ERROR`.
+     - Grouping by host with dynamic summary notification (`setGroup(hostId)`).
+  3. **Privacy-Safe Snippet Fetch**:
+     - Keep public ntfy payload metadata-only (zero transcript leakage).
+     - Phone performs quick authenticated GET to `/companion/notifications/{id}/snippet` over LAN/Tailscale when ping lands, falling back safely to a generic headline if offline.
+- **Estimate**: 1.0 day | **Dependencies**: A20.1 ✅, A8.5 ✅
+
+#### A27.2 · Shade Actionability: Direct Reply & Inline Approvals 🔲 PENDING
+- **Problem**: Answering an agent's question or approving a tool call requires tapping the notification, waiting for cold launch and WebSocket reconnection, and navigating to the prompt.
+- **Deliverable**:
+  1. **Direct Reply (`RemoteInput`)**:
+     - Inline text input on message/mention notifications.
+     - Background `DirectReplyReceiver` extracts input and dispatches `POST /api/sessions/{id}/turn` via `DashboardClient` without opening the app.
+     - Notification updates in-place to show `Sent: "<text>"`.
+  2. **One-Tap Inline Approvals**:
+     - Action buttons on `approval.request` and `room.approval`: `[✓ APPROVE]` and `[✕ DENY]`.
+     - Dispatches decision directly to `/companion/device/approve` or `/companion/rooms/{id}/approval`.
+     - Safety gate: Actions matching protected denylist require device unlock / biometric verification (`PrivilegePolicy`).
+- **Estimate**: 1.0 day | **Dependencies**: A27.1, A22.1
+
+#### A27.3 · Thread-Level Notification Subscriptions & Muting 🔲 PENDING
+- **Problem**: Background subagents, group chat rooms, and long-running coding loops fire alerts indiscriminately. Operators cannot mute noisy threads or put an important thread in "watch mode".
+- **Deliverable**:
+  1. **Subscription Modes**:
+     - `ACTIONS_ONLY` (default): Alerts only on clarifications, tool approvals, uncaught errors, or mentions.
+     - `WATCH`: Alerts on every assistant turn completion.
+     - `MUTED`: Completely suppresses notifications for this thread.
+     - `SNOOZE`: Temporary mute for 30m, 2h, or until tomorrow.
+  2. **UI Surfaces**:
+     - Chat header bell action (`ChatScreen.kt`): Icon states `🔔` (watch), `🔔·` (actions), `🔕` (muted). Tap opens quick subscription & snooze picker.
+     - Thread rail (`ThreadsScreen.kt`): Swipe-to-mute or long-press context menu; muted indicator icon `🔕` on thread rows.
+  3. **Persistence**:
+     - Room DB table `thread_notification_prefs` (keyed by `host + profile + session_id`).
+     - Syncs preference to host session metadata.
+- **Estimate**: 1.0 day | **Dependencies**: A27.1
+
+#### A27.4 · Gateway Host & Agent Notification Routing in Settings 🔲 PENDING
+- **Problem**: When managing a multi-host fleet (`lab`, `hub-11`, `raj-13766`), all hosts and agents ping the phone unconditionally. No UI exists to silence specific hosts or filter background profiles.
+- **Deliverable**:
+  1. **Settings Notification Hub** (`SettingsBottomSheet.kt` / `NotificationSettingsSheet.kt`):
+     - Master notifications switch (Global DND).
+     - Host-level toggles in Gateway Book: `[x] Allow Notifications from this Host`.
+     - Agent allowlist matrix: Per-profile toggle grouped by host (`knight: ON`, `coder: APPROVALS ONLY`, `scraper: OFF`).
+     - Quick link to Android system notification channel settings.
+  2. **Dual-Layer Enforcement**:
+     - Host-side filter: Companion app registers policy via `POST /companion/device/notification-policy` on pairing/sync; host relay drops pings before publishing.
+     - Client-side filter: `WakePolicy.kt` and `WakeNotifier.kt` check `StickyStore` allowlists as a fail-safe before showing any notification.
+- **Estimate**: 1.0 day | **Dependencies**: A27.1, A8.5 ✅
+
+---
+
+## 16d. Phase P28 — Hermes ↔ OpenClaw Agent Room Bridge (P1) ✨ NEW (2026-09-08)
+
+Connects OpenClaw agents to Hermes agent rooms without turning the Android companion into an OpenClaw client. Hermes remains the room and floor authority; OpenClaw retains ownership of its agents, tools, sandbox and approvals. This is separate from P19, which adds OpenClaw as a phone/operator host kind and later maps Hands onto an OpenClaw node. Full design: `docs/superpowers/plans/2026-09-08-openclaw-hermes-room-bridge.md`.
+
+### Work Items
+
+#### A28.1 · OpenClaw Native Plugin Scaffold & Security 🔲 PENDING
+- **Deliverable**: Add the `hermes-room-bridge` native TypeScript plugin with `package.json`, `openclaw.plugin.json`, built ESM entrypoint, tests, README and bundled room skill. Pin v0.1 to OpenClaw 2026.8.2; declare startup activation, CLI ownership, strict configuration and tool contracts. Add SecretRef-aware reciprocal peer credentials, explicit allowed-agent mapping, `openclaw hermes-room grant|add|list|check|remove|revoke`, constant-time secret checks and private-host-only origin validation.
+- **Acceptance Criteria**: `openclaw plugins validate`, build, pack/install and `plugins inspect --runtime` pass; no agent is exposed by default; list/check output never reveals a credential; public or DNS-rebound peer origins fail closed.
+- **Estimate**: 1.0 day | **Dependencies**: A22.11 ✅
+
+#### A28.2 · Hermes-to-OpenClaw Room Turns 🔲 PENDING
+- **Deliverable**: Implement peer-authenticated `/companion/peers/turn` NDJSON ingress plus exact-turn interrupt and explicit `approval_owned_by_openclaw` response. Map `agent@openclaw` to a deterministic plugin-owned OpenClaw session, run the configured agent with its normal policy and translate only assistant deltas, sanitized tool lifecycle and terminal state. Add concurrency/body/deadline limits, disconnect cleanup and authenticated `turn_id` idempotency/replay.
+- **Acceptance Criteria**: A Hermes room can hold a multi-turn conversation with an allowed OpenClaw agent; retries never duplicate work; interrupt aborts only the matching run; reasoning, tool arguments/results and credentials never cross the bridge; OpenClaw approvals remain local and cannot be bypassed from Hermes.
+- **Estimate**: 2.0 days | **Dependencies**: A28.1
+
+#### A28.3 · OpenClaw-to-Hermes Room Tools 🔲 PENDING
+- **Deliverable**: Register optional `hermes_rooms_list` and `hermes_room_post` tools. Infer the author from trusted OpenClaw session context, list only rooms joined by that mapped participant, preserve external-agent authorship and reject calls from the participant's currently active bridged turn to prevent duplicate replies/loops.
+- **Acceptance Criteria**: A normal OpenClaw session can list its joined Hermes rooms and mention a Hermes participant; it cannot spoof another participant, post to an unjoined room or create a second contribution during its active room turn.
+- **Estimate**: 1.5 days | **Dependencies**: A28.1, A28.2
+
+#### A28.4 · Hermes Protocol v2 & Reciprocal Integration 🔲 PENDING
+- **Deliverable**: Extend Hermes peer turns with additive `protocol_version`, `room_id` and `participant_id`; authenticate peer health; add peer-scoped room listing and participant-post routes; validate peer suffix/membership and feed accepted external lines through the existing mention/floor scheduler. Keep Hermes peer protocol v1 compatible and document reciprocal setup and failure behavior.
+- **Acceptance Criteria**: A room containing a Hermes profile and `main@openclaw` passes a live reciprocal test for multi-turn context, `PASS`, mentions, tool status, interruption and OpenClaw-initiated posting. Existing Hermes-to-Hermes cross-host rooms remain unchanged.
+- **Estimate**: 1.5 days | **Dependencies**: A28.2, A28.3
+
+---
+
 ## 17. Pending Items Summary (Prioritized Backlog)
 
 ### 🔴 P0 Critical — Must Fix Before Production Beta
@@ -714,8 +952,21 @@ Addresses host-side multi-device routing for the "Hands" control plane. While th
 | A18.5 | Gateway picker on Connect screen (saved + paired, health, last-good origin) | 1d | ✅ |
 | A18.6 | Restore profile switching (header glyph → inline picker + profiles tab) | 0.5d | ✅ |
 | A6.7 | Multi-Device Selection & Targeted Hands Control (Choose Device) | 1.5d | 🔲 |
+| A9.5 | Profile Global Model Toggle in Profile List | 0.5d | 🔲 |
+| A26.1 | Host: Profile Memory & Agent Config Endpoints | 1.0d | 🔲 |
+| A26.2 | Phone: Memory Maintenance UI (View, Search, Edit, Prune, Add) | 1.5d | 🔲 |
+| A26.3 | Memory Dream / Consolidation Trigger & Status | 0.5d | 🔲 |
+| A26.4 | Phone: Agent Modifications UI (Soul, Directives, Skill Toggles) | 1.0d | 🔲 |
+| A27.1 | Multi-Channel Stratification & Notification Enrichment | 1.0d | 🔲 |
+| A27.2 | Shade Actionability: Direct Reply & Inline Approvals | 1.0d | 🔲 |
+| A27.3 | Thread-Level Notification Subscriptions & Muting | 1.0d | 🔲 |
+| A27.4 | Gateway Host & Agent Notification Routing in Settings | 1.0d | 🔲 |
+| A28.1 | OpenClaw native plugin scaffold & security | 1.0d | 🔲 |
+| A28.2 | Hermes-to-OpenClaw room turns | 2.0d | 🔲 |
+| A28.3 | OpenClaw-to-Hermes room tools | 1.5d | 🔲 |
+| A28.4 | Hermes protocol v2 & reciprocal integration | 1.5d | 🔲 |
 
-**P1 Total Remaining**: ~52 days
+**P1 Total Remaining**: ~66.5 days
 
 ### 🔵 P2 Future — Planned Features
 
@@ -823,6 +1074,11 @@ graph TD
     A19.1[A19.1 OpenClaw Spec] --> A19.3[A19.3 OpenClaw Operator Lane]
     A19.2 --> A19.3
     A19.3 --> A19.4[A19.4 OpenClaw Node Lane]
+
+    A22.11[A22.11 Cross-Host Rooms ✅] --> A28.1[A28.1 OpenClaw Plugin]
+    A28.1 --> A28.2[A28.2 Hermes to OpenClaw Turns]
+    A28.2 --> A28.3[A28.3 OpenClaw Room Tools]
+    A28.3 --> A28.4[A28.4 Protocol v2 Integration]
 
     A6.3[A6.3 Plugin Live Broker ✅] --> A6.7[A6.7 Multi-Device Selection]
     A8.5 --> A6.7

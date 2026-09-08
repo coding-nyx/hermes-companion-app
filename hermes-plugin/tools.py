@@ -166,6 +166,48 @@ def _notifications_via_http(
     }
 
 
+_GUARD_CACHE: dict = {"at": 0.0, "value": None}
+
+
+def _current_profile() -> str:
+    try:
+        try:
+            from .hermes_store import _profile_id, hermes_home
+        except ImportError:
+            from hermes_store import _profile_id, hermes_home
+        return _profile_id(hermes_home())
+    except Exception:
+        return ""
+
+
+def _room_guard() -> None:
+    """Rooms (A22.9): while this profile is taking a room turn, only the room's hands holder may drive
+    the phone. Asks the relay; fails open when the relay cannot be reached (mobile control would be
+    dead without it anyway), fails closed when it answers `allowed: false`."""
+    import os
+    import time
+    import urllib.parse
+    import urllib.request
+
+    now = time.monotonic()
+    if _GUARD_CACHE["value"] is not None and now - _GUARD_CACHE["at"] < 2.0:
+        verdict = _GUARD_CACHE["value"]
+    else:
+        profile = _current_profile()
+        if not profile:
+            return
+        base = (os.environ.get("HERMES_COMPANION_RELAY_URL") or "http://127.0.0.1:9120").rstrip("/")
+        try:
+            with urllib.request.urlopen(f"{base}/companion/rooms/guard?{urllib.parse.urlencode({'profile': profile})}", timeout=1.5) as resp:
+                verdict = json.loads(resp.read().decode() or "{}")
+        except Exception:
+            return
+        _GUARD_CACHE.update(at=now, value=verdict)
+    if isinstance(verdict, dict) and verdict.get("in_room_turn") and not verdict.get("allowed", True):
+        holder = verdict.get("hands") or "nobody"
+        raise BrokerError("room_hands", f"you are in a room turn; only {holder} may drive the phone here")
+
+
 def make_handlers(broker: Broker):
     def mobile_status(params, **kwargs):
         del kwargs
@@ -238,6 +280,10 @@ def make_handlers(broker: Broker):
             return _err(BrokerError("unknown_device", str(exc)))
 
     def mobile_arm(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
         del kwargs
         try:
             result = broker.dispatch("device.arm", _with_device(params))
@@ -254,6 +300,10 @@ def make_handlers(broker: Broker):
             return _err(extra)
 
     def mobile_snapshot(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
         del kwargs
         try:
             result = broker.dispatch("device.snapshot", _with_device(params))
@@ -262,6 +312,10 @@ def make_handlers(broker: Broker):
             return _err(exc)
 
     def mobile_click(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
         del kwargs
         args = _with_device(params)
         payload = {}
@@ -328,6 +382,10 @@ def make_handlers(broker: Broker):
             return _err(exc)
 
     def mobile_type(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
         del kwargs
         args = _with_device(params)
         try:
@@ -337,6 +395,10 @@ def make_handlers(broker: Broker):
             return _err(exc)
 
     def mobile_press(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
         del kwargs
         args = _with_device(params)
         try:
@@ -346,6 +408,10 @@ def make_handlers(broker: Broker):
             return _err(exc)
 
     def mobile_swipe(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
         del kwargs
         args = _with_device(params)
         try:
@@ -355,6 +421,10 @@ def make_handlers(broker: Broker):
             return _err(exc)
 
     def mobile_scroll(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
         del kwargs
         args = _with_device(params)
         try:
@@ -364,6 +434,10 @@ def make_handlers(broker: Broker):
             return _err(exc)
 
     def mobile_open_app(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
         del kwargs
         args = _with_device(params)
         pkg = args.get("package", "")
@@ -388,6 +462,10 @@ def make_handlers(broker: Broker):
             return _err(extra)
 
     def mobile_wait(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
         del kwargs
         try:
             result = broker.dispatch("device.wait", _with_device(params))
@@ -396,6 +474,10 @@ def make_handlers(broker: Broker):
             return _err(extra)
 
     def mobile_screenshot(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
         del kwargs
         try:
             result = broker.dispatch("device.screenshot", _with_device(params))

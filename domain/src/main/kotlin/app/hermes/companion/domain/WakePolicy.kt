@@ -1,24 +1,46 @@
 package app.hermes.companion.domain
 
 /** [origin] is the host the ping belongs to: from the payload (`origin` / `host`) or the topic it arrived on. */
-data class WakePing(val type: String, val sessionId: String, val profile: String, val origin: String = "")
+data class WakePing(
+    val type: String,
+    val sessionId: String,
+    val profile: String,
+    val origin: String = "",
+    /** Room pings (A22.5) carry the room instead of a thread. */
+    val roomId: String = "",
+    val title: String = "",
+)
 
 /** Parsed `hermes-companion://open` link. [origin] empty = "whatever host is active" (pre-A8.5 links). */
-data class DeepLink(val sessionId: String, val profile: String, val origin: String = "")
+data class DeepLink(val sessionId: String, val profile: String, val origin: String = "", val roomId: String = "")
 
 /** ntfy/gotify pings. Payload is type + session_id + profile only — never transcript. */
 object WakePolicy {
     const val SCHEME = "hermes-companion"
     val TYPES = setOf("approval.request", "clarify", "run.completed", "error")
+    val ROOM_TYPES = setOf("room.quiet", "room.paused", "room.approval", "room.mention")
 
     fun parse(raw: String, origin: String = ""): WakePing? {
         val blob = unwrap(raw)
         val type = field(blob, "type") ?: return null
-        if (type !in TYPES) return null
+        if (type !in TYPES && type !in ROOM_TYPES) return null
         val session = field(blob, "session_id") ?: return null
         val profile = field(blob, "profile") ?: return null
         val host = field(blob, "origin") ?: field(blob, "host") ?: origin
-        return WakePing(type = type, sessionId = session, profile = profile, origin = host.trim())
+        val room = if (type in ROOM_TYPES) (field(blob, "room_id") ?: session) else ""
+        return WakePing(type = type, sessionId = session, profile = profile, origin = host.trim(), roomId = room,
+            title = field(blob, "title").orEmpty())
+    }
+
+    fun isRoom(type: String): Boolean = type in ROOM_TYPES
+
+    /** Short human label for a wake notification title. */
+    fun label(type: String): String = when (type) {
+        "room.quiet" -> "room went quiet"
+        "room.paused" -> "room paused"
+        "room.approval" -> "room needs approval"
+        "room.mention" -> "you were mentioned"
+        else -> type
     }
 
     fun sseUrl(topic: String): String? {
@@ -28,8 +50,9 @@ object WakePolicy {
         return if (t.endsWith("/sse")) t else "$t/sse"
     }
 
-    fun deepLink(sessionId: String, profile: String, origin: String = ""): String {
-        val base = "$SCHEME://open?session=${enc(sessionId.trim())}&profile=${enc(profile.trim())}"
+    fun deepLink(sessionId: String, profile: String, origin: String = "", roomId: String = ""): String {
+        var base = "$SCHEME://open?session=${enc(sessionId.trim())}&profile=${enc(profile.trim())}"
+        if (roomId.isNotBlank()) base += "&room=${enc(roomId.trim())}"
         return if (origin.isBlank()) base else "$base&host=${enc(origin.trim())}"
     }
 
@@ -43,7 +66,7 @@ object WakePolicy {
         }.toMap()
         val session = parts["session"]?.takeIf { it.isNotBlank() } ?: return null
         val profile = parts["profile"]?.takeIf { it.isNotBlank() } ?: return null
-        return DeepLink(sessionId = session, profile = profile, origin = parts["host"].orEmpty().trim())
+        return DeepLink(sessionId = session, profile = profile, origin = parts["host"].orEmpty().trim(), roomId = parts["room"].orEmpty().trim())
     }
 
     private fun enc(v: String): String =

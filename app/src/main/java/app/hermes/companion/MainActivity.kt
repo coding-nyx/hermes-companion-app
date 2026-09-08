@@ -139,8 +139,10 @@ class MainActivity : FragmentActivity() {
 
                 LaunchedEffect(reconnect, intent.dataString, intent.action) {
                     WakePolicy.parseDeepLink(intent.dataString.orEmpty())?.let { link ->
-                        if (trusted(intent, app)) vm.openWake(link.origin, link.profile, link.sessionId)
-                        else vm.requestDeepLink(link.origin, link.profile, link.sessionId)
+                        if (trusted(intent, app)) {
+                            if (link.roomId.isNotBlank()) vm.openRoomWake(link.origin, link.roomId)
+                            else vm.openWake(link.origin, link.profile, link.sessionId)
+                        } else vm.requestDeepLink(link.origin, link.profile, link.sessionId, link.roomId)
                         // Consume so a config change does not replay the request.
                         intent.data = null
                     }
@@ -252,6 +254,9 @@ class MainActivity : FragmentActivity() {
                     onOpenSession = vm::openSession,
                     onNewThread = vm::newThread,
                     onRetrySessions = vm::reloadSessions,
+                    onThreadSort = vm::setThreadSort,
+                    onToggleArchived = vm::setShowArchived,
+                    onDismissError = { vm.noteError(null) },
                     onRequestDelete = vm::requestDelete,
                     onConfirmDelete = vm::confirmDelete,
                     onCancelDelete = vm::cancelDelete,
@@ -259,6 +264,28 @@ class MainActivity : FragmentActivity() {
                     onOpenRoom = vm::openRoom,
                     onNewRoom = { vm.toggleRoomCreate(true) },
                     onCreateRoom = vm::createRoom,
+                    onRoomPause = vm::pauseRoom,
+                    onRoomContinue = vm::continueRoom,
+                    onRoomSummarize = { vm.summarizeRoom() },
+                    onRoomAddParticipant = vm::addRoomParticipant,
+                    onRoomRemoveParticipant = vm::removeRoomParticipant,
+                    onRoomRename = vm::renameRoom,
+                    onLinkHost = vm::linkHost,
+                    onUnlinkPeer = vm::unlinkPeer,
+                    onAgentRefresh = { vm.refreshAgentSessions(); vm.refreshAgentTools(force = true) },
+                    onAgentToggleNew = vm::toggleAgentNew,
+                    onAgentStart = { tool, cwd, prompt, mode -> vm.startAgent(tool, cwd, prompt, mode) },
+                    onAgentSubmit = vm::agentSubmit,
+                    onAgentBrowse = { path, hidden -> vm.browseAgentDirs(path, hidden) },
+                    onAgentApprove = vm::agentApprove,
+                    onAgentOpen = vm::openAgent,
+                    onAgentClose = vm::closeAgent,
+                    onAgentInput = vm::setAgentInput,
+                    onAgentSendText = vm::agentSendText,
+                    onAgentKey = vm::agentSendKey,
+                    onAgentKill = vm::killAgent,
+                    onAgentForget = vm::forgetAgent,
+                    onAgentCols = vm::setAgentCols,
                     onDismissRoomCreate = { vm.toggleRoomCreate(false) },
                     onDeleteRoom = vm::deleteRoom,
                     onMention = vm::mentionRoom,

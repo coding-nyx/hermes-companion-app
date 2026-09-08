@@ -71,7 +71,8 @@ object ProfileScope {
         }
         val idx = sessions.indexOfFirst { it.id == change.session.id }
         return if (idx >= 0) {
-            sessions.toMutableList().also { it[idx] = change.session }
+            // Patches are sparse: fold into the known row instead of replacing it (A18.9).
+            sessions.toMutableList().also { it[idx] = SessionLists.merge(it[idx], change.session) }
         } else {
             SessionLists.prepend(change.session, sessions)
         }

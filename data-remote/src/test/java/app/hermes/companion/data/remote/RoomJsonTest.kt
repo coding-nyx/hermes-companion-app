@@ -31,6 +31,30 @@ class RoomJsonTest {
     }
 
     @Test
+    fun roomParsesV2FieldsAndRemoteParticipants() {
+        val body = """
+            {"id":"r-2","title":"x","participants":[{"id":"coder","profile":"coder","host":null,"glyph":"COD"},{"id":"bishop@hub-11","profile":"bishop","host":"hub-11","glyph":"BIS"}],
+             "policy":{"mode":"moderated","max_turns":16,"max_rounds":2,"moderator":"coder","hands":"bishop@hub-11"},"mode":"moderated",
+             "state":"paused","pause_reason":"stall","turns_used":5,"budget":22,"hands":"bishop@hub-11","moderator":"coder",
+             "approval":{"request_id":"apr-2","kind":"clarify","speaker":"coder","command":"which env?","choices":["ok","deny"]},
+             "summary":{"seq":4,"speaker":"coder","text":"TTL is the cause","kind":"summary"},"seq":6,"message_count":6,"busy":false}
+        """.trimIndent()
+        val r = RoomJson.room(kotlinx.serialization.json.Json.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject)!!
+        assertEquals(listOf("coder", "bishop@hub-11"), r.participants.map { it.id })
+        assertEquals("hub-11", r.participants[1].host)
+        assertEquals(("moderated" to "paused"), r.mode to r.state)
+        assertEquals(("stall" to 5), r.pauseReason to r.turnsUsed)
+        assertEquals(22, r.budget)
+        assertEquals(16, r.maxTurns)
+        assertEquals("bishop@hub-11", r.hands)
+        assertEquals("coder", r.moderator)
+        assertEquals("apr-2", r.approval?.requestId)
+        assertEquals("clarify", r.approval?.kind)
+        assertEquals("TTL is the cause", r.summary)
+        assertEquals("converse", RoomJson.room(kotlinx.serialization.json.Json.parseToJsonElement("""{"id":"r-3","participants":[]}""") as kotlinx.serialization.json.JsonObject)!!.mode)
+    }
+
+    @Test
     fun historyExpandsToolsAndMapsRoles() {
         val body = """
             {"room":$roomJson,"seq":3,"messages":[
@@ -64,7 +88,15 @@ class RoomJsonTest {
         assertEquals(ChatEvent.RoomPost(7, "hi"), RoomJson.event("""{"type":"room.post","message":{"seq":7,"speaker":"operator","text":"hi"}}"""))
         assertEquals(ChatEvent.Completed, RoomJson.event("""{"type":"room.idle","room_id":"r-1","seq":5}"""))
         assertNull(RoomJson.event("""{"type":"room.heartbeat"}"""))
-        assertNull(RoomJson.event("""{"type":"room.ready","room_id":"r-1"}"""))
+        assertEquals(ChatEvent.RoomReady(9, null), RoomJson.event("""{"type":"room.ready","room_id":"r-1","seq":9}"""))
+        assertEquals(ChatEvent.RoomState("paused", "budget", 12, 18, 40), RoomJson.event("""{"type":"room.state","room_id":"r-1","state":"paused","reason":"budget","turns_used":12,"max_turns":12,"budget":18,"seq":40}"""))
+        val approval = RoomJson.event("""{"type":"room.approval","room_id":"r-1","speaker":"coder","turn_id":"t-1","request_id":"apr-1","kind":"approval","command":"rm -rf build","choices":["once","deny"]}""") as ChatEvent.Approval
+        assertEquals("apr-1", approval.prompt.requestId)
+        assertEquals("coder", approval.prompt.speaker)
+        assertEquals(listOf("once", "deny"), approval.prompt.choices)
+        assertEquals(ChatEvent.PromptExpired("apr-1"), RoomJson.event("""{"type":"room.approval.resolved","request_id":"apr-1","decision":"once"}"""))
+        val updated = RoomJson.event("""{"type":"room.updated","room_id":"r-1","room":{"id":"r-1","title":"renamed","participants":[],"policy":{}}}""") as ChatEvent.RoomUpdated
+        assertEquals("renamed", updated.room.title)
         assertNull(RoomJson.event("not json"))
         assertFalse(RoomJson.event("""{"type":"room.delta","speaker":"coder","text":""}""") is ChatEvent.AssistantDelta)
     }

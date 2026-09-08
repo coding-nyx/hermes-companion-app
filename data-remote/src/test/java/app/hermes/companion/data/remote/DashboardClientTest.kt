@@ -40,7 +40,7 @@ class DashboardClientTest {
             val sessions = client.listSessions(origin, "coder")
             assertEquals(listOf("a"), sessions.map { it.id })
             val recorded = server.takeRequest()
-            assertEquals("/api/sessions?profile=coder", recorded.path)
+            assertEquals("/api/sessions?profile=coder&limit=100&offset=0", recorded.path)
             assertTrue(sessions.none { it.profileId != "coder" })
         }
     }
@@ -257,6 +257,42 @@ class DashboardClientTest {
         assertEquals("Nyx", rows.single().title)
         assertEquals(1756750000_000L, rows.single().updatedAtEpochMs)
         assertFalse(rows.single().ended)
+    }
+
+    @Test
+    fun parseSessionsReadsFloatSecondsIsoAndActivityFields() {
+        val rows = parseSessions(
+            """{"sessions":[
+              {"id":"float","profile":"knight","title":"tg","started_at":1756750000.5,"last_activity_at":1756753600.25,"message_count":24,"source":"telegram"},
+              {"id":"iso","profile":"knight","title":"iso","created_at":"2026-09-01T10:00:00Z","updated_at":"2026-09-02T10:00:00+00:00"},
+              {"id":"ms","profile":"knight","title":"ms","started_at":1756750000000,"updated_at":1756760000000},
+              {"id":"none","profile":"knight","title":"none"}
+            ]}""",
+        )
+        val float = rows.first { it.id == "float" }
+        assertEquals(1756750000_500L, float.createdAtEpochMs)
+        assertEquals(1756753600_250L, float.updatedAtEpochMs)
+        assertEquals(24, float.messageCount)
+        assertEquals("telegram", float.source)
+        val iso = rows.first { it.id == "iso" }
+        assertEquals(1788256800_000L, iso.createdAtEpochMs)
+        assertEquals(1788343200_000L, iso.updatedAtEpochMs)
+        val ms = rows.first { it.id == "ms" }
+        assertEquals(1756750000_000L, ms.createdAtEpochMs)
+        assertEquals(1756760000_000L, ms.updatedAtEpochMs)
+        val none = rows.first { it.id == "none" }
+        assertEquals(0L, none.createdAtEpochMs)
+        assertEquals(0L, none.updatedAtEpochMs)
+        // Live rows without ended_at are no longer "unread" by default.
+        assertFalse(none.unread)
+        assertFalse(float.unread)
+    }
+
+    @Test
+    fun parseSessionsUpdatedFallsBackToStartedAt() {
+        val rows = parseSessions("""{"sessions":[{"id":"a","profile":"p","started_at":1756750000}]}""")
+        assertEquals(1756750000_000L, rows.single().createdAtEpochMs)
+        assertEquals(1756750000_000L, rows.single().updatedAtEpochMs)
     }
 
     @Test
@@ -1020,7 +1056,8 @@ class DashboardClientTest {
             client.wsHello(origin, "default")
             server.takeRequest()
             val sessions = client.listSessions(origin, "default")
-            assertEquals(listOf("s-rest-1", "s-rest-2"), sessions.map { it.id })
+            // No timestamps → newest-first by id (Hermes ids sort chronologically).
+            assertEquals(listOf("s-rest-2", "s-rest-1"), sessions.map { it.id })
             assertTrue(methods.contains("session.list"))
             val rest = server.takeRequest()
             assertTrue(rest.path.orEmpty().contains("/api/sessions"))
@@ -1049,9 +1086,7 @@ class DashboardClientTest {
                             val method = obj["method"]!!.jsonPrimitive.content
                             if (method == "session.list") {
                                 webSocket.send(
-                                    """{"jsonrpc":"2.0","id":"$id","result":{"sessions":[
-                                      {"id":"only-rpc","profile":"coder","title":"short"}
-                                    ]}}""",
+                                    """{"jsonrpc":"2.0","id":"$id","result":{"sessions":[{"id":"only-rpc","profile":"coder","title":"short"}]}}""",
                                 )
                             }
                         }
@@ -1078,6 +1113,117 @@ class DashboardClientTest {
             client.closeRpc()
             http.dispatcher.executorService.shutdown()
             http.connectionPool.evictAll()
+        }
+    }
+
+    @Test
+    fun listSessionsUnionsRpcAndRestById() = runBlocking {
+        MockWebServer().use { server ->
+            val rpcRequests = java.util.concurrent.CopyOnWriteArrayList<String>()
+            server.enqueue(
+                MockResponse().withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onOpen(webSocket: WebSocket, response: Response) {
+                            webSocket.send(
+                                """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"change_events":false,"heartbeat":false,"instance_id":"sess-union"}}}""",
+                            )
+                        }
+
+                        override fun onMessage(webSocket: WebSocket, text: String) {
+                            val obj = Json.parseToJsonElement(text).jsonObject
+                            val id = obj["id"]!!.jsonPrimitive.content
+                            val method = obj["method"]!!.jsonPrimitive.content
+                            if (method == "session.list") {
+                                rpcRequests += text
+                                // One line: the socket splits frames on newlines.
+                                webSocket.send(
+                                    """{"jsonrpc":"2.0","id":"$id","result":{"sessions":[{"id":"live-only","profile":"coder","title":"lazy live","started_at":1756760000.0},{"id":"shared","profile":"coder","title":"shared","started_at":1756750000.0}]}}""",
+                                )
+                            }
+                        }
+                    },
+                ),
+            )
+            // REST is the dashboard's 20-row page: has one the gateway does not, and richer fields on the shared row.
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"sessions":[
+                      {"id":"shared","profile":"coder","title":"shared","started_at":1756750000.0,"last_activity_at":1756770000.0,"message_count":9},
+                      {"id":"rest-only","profile":"coder","title":"older archive","started_at":1756740000.0}
+                    ]}""",
+                ),
+            )
+            val http = server.toOkHttp()
+            val client = DashboardClient(http)
+            val origin = server.url("/").toString().trimEnd('/')
+            client.wsHello(origin, "coder")
+            server.takeRequest()
+            val sessions = client.listSessions(origin, "coder")
+            assertEquals(listOf("live-only", "shared", "rest-only"), sessions.map { it.id })
+            val shared = sessions.first { it.id == "shared" }
+            assertEquals(9, shared.messageCount)
+            assertEquals(1756770000_000L, shared.updatedAtEpochMs)
+            val rest = server.takeRequest()
+            assertTrue(rest.path.orEmpty().contains("limit=100&offset=0"))
+            assertTrue(rpcRequests.single().contains("\"limit\":500"))
+            client.closeRpc()
+            http.dispatcher.executorService.shutdown()
+            http.connectionPool.evictAll()
+        }
+    }
+
+    @Test
+    fun restSessionsPageThroughOffsetUntilTotal() = runBlocking {
+        MockWebServer().use { server ->
+            fun page(from: Int, n: Int, total: Int) = MockResponse().setBody(
+                buildString {
+                    append("""{"sessions":[""")
+                    append((from until from + n).joinToString(",") { i -> """{"id":"s$i","profile":"coder","title":"t$i","started_at":${1_788_000_000 + i}}""" })
+                    append("""],"total":$total,"limit":100,"offset":$from}""")
+                },
+            )
+            server.enqueue(page(0, 100, 105))
+            server.enqueue(page(100, 5, 105))
+            val client = DashboardClient(server.toOkHttp())
+            val origin = server.url("/").toString().trimEnd('/')
+            val sessions = client.listSessions(origin, "coder")
+            assertEquals(105, sessions.size)
+            assertEquals("s104", sessions.first().id)
+            assertEquals("/api/sessions?profile=coder&limit=100&offset=0", server.takeRequest().path)
+            assertEquals("/api/sessions?profile=coder&limit=100&offset=100", server.takeRequest().path)
+            assertEquals(2, server.requestCount)
+        }
+    }
+
+    @Test
+    fun includeArchivedAddsQueryAndParsesFlag() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"sessions":[{"id":"a","profile":"coder","title":"live","archived":false},{"id":"b","profile":"coder","title":"old","archived":true},{"id":"c","profile":"coder","title":"sqlite","archived":1}],"total":3}""",
+                ),
+            )
+            val client = DashboardClient(server.toOkHttp())
+            val origin = server.url("/").toString().trimEnd('/')
+            val sessions = client.listSessions(origin, "coder", includeArchived = true)
+            assertEquals("/api/sessions?profile=coder&limit=100&offset=0&archived=include", server.takeRequest().path)
+            assertFalse(sessions.first { it.id == "a" }.archived)
+            assertTrue(sessions.first { it.id == "b" }.archived)
+            assertTrue(sessions.first { it.id == "c" }.archived)
+        }
+    }
+
+    @Test
+    fun restSessionsStopWhenHostIgnoresOffset() = runBlocking {
+        MockWebServer().use { server ->
+            // A host that ignores offset and has no `total` repeats the same full page forever.
+            val same = (0 until 100).joinToString(",") { i -> """{"id":"s$i","profile":"coder","title":"t$i"}""" }
+            repeat(3) { server.enqueue(MockResponse().setBody("""{"sessions":[$same]}""")) }
+            val client = DashboardClient(server.toOkHttp())
+            val origin = server.url("/").toString().trimEnd('/')
+            val sessions = client.listSessions(origin, "coder")
+            assertEquals(100, sessions.size)
+            assertEquals(2, server.requestCount)
         }
     }
 

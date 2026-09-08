@@ -591,6 +591,8 @@ class DeviceNodeCoordinator(
                         osVersion = "Android ${Build.VERSION.RELEASE}",
                         protectedPackages = sticky.protectedPackages,
                         capabilities = laneCapabilities(),
+                        // Room wake (A22.5): the relay pings this topic when a room needs the operator.
+                        wakeTopic = sticky.ntfyTopicFor(laneOrigin).orEmpty(),
                     )
                     // After lane is up, push stream status + flush buffered notifs for this target.
                     if (HostClientPool.key(laneOrigin) == HostClientPool.key(sticky.notifStreamTargetOrigin().orEmpty())) {

@@ -8,6 +8,12 @@ import app.hermes.companion.domain.OriginPolicy
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.RewindPolicy
 import app.hermes.companion.domain.RewindSubmit
+import app.hermes.companion.domain.SessionLists
+import app.hermes.companion.model.AgentDirListing
+import app.hermes.companion.model.AgentEvent
+import app.hermes.companion.model.AgentPane
+import app.hermes.companion.model.AgentSession
+import app.hermes.companion.model.AgentTool
 import app.hermes.companion.model.ApprovalPrompt
 import app.hermes.companion.model.BusFrame
 import app.hermes.companion.model.ChatEvent
@@ -22,6 +28,8 @@ import app.hermes.companion.model.HistoryPage
 import app.hermes.companion.model.GatewayHello
 import app.hermes.companion.model.PairingStatus
 import app.hermes.companion.model.ProfileRef
+import app.hermes.companion.model.RoomPolicySpec
+import app.hermes.companion.model.PeerLink
 import app.hermes.companion.model.RoomRef
 import app.hermes.companion.model.SessionRef
 import java.util.concurrent.ConcurrentHashMap
@@ -236,6 +244,7 @@ class DashboardClient internal constructor(
         osVersion: String = "",
         protectedPackages: Collection<String> = emptyList(),
         capabilities: List<String> = DeviceLanePolicy.CAPABILITIES,
+        wakeTopic: String = "",
     ): DeviceTicket {
         companionAuth = "${cred.deviceId}:${cred.credential}"
         val payload = DeviceLanePolicy.registerJson(
@@ -248,6 +257,7 @@ class DashboardClient internal constructor(
             manufacturer = manufacturer,
             osVersion = osVersion,
             protectedPackages = protectedPackages,
+            wakeTopic = wakeTopic,
         )
         return post(DashboardUrls.machine(origin, "/companion/device/register"), payload) { parseDeviceTicket(it) }
     }
@@ -266,6 +276,7 @@ class DashboardClient internal constructor(
         osVersion: String = "",
         protectedPackages: Collection<String> = emptyList(),
         capabilities: List<String> = DeviceLanePolicy.CAPABILITIES,
+        wakeTopic: String = "",
     ) {
         companionAuth = "${cred.deviceId}:${cred.credential}"
         deviceLock.withLock {
@@ -278,6 +289,7 @@ class DashboardClient internal constructor(
                 osVersion = osVersion,
                 protectedPackages = protectedPackages,
                 capabilities = capabilities,
+                wakeTopic = wakeTopic,
             )
             if (ticket.ticket.isBlank()) throw DashboardException("device_ticket", "empty device ticket")
             val socket = DeviceSocket(wsHttp)
@@ -340,23 +352,21 @@ class DashboardClient internal constructor(
     /**
      * Catch-up. Always scoped. Client still filters by profileId.
      *
-     * Empty/null RPC → REST (mirrors [pageMessages] A18.8). Non-empty RPC that is
-     * shorter than REST → prefer REST: lab proxy `session.list` can return a short
-     * page while REST still has the full sticky-profile set.
+     * The two host paths disagree on coverage: the dashboard's `GET /api/sessions` returns only
+     * the 20 most recent rows, while the gateway's `session.list` knows the live/lazy sessions and
+     * honours `limit`. Neither alone is exhaustive, so the rail takes the **union** keyed by id
+     * (richer fields merged per row) instead of guessing which page is "better" (A18.9).
+     * Ordering is not decided here — `SessionLists.normalize` does that once, in the domain.
      */
-    suspend fun listSessions(origin: String, profileId: String): List<SessionRef> {
+    suspend fun listSessions(origin: String, profileId: String, includeArchived: Boolean = false): List<SessionRef> {
         val socket = rpc
-        if (socket != null && socket.isOpen) {
-            val rpcRows = runCatching { listSessionsRpc(socket, profileId) }.getOrNull()
-            if (rpcRows != null && rpcRows.isNotEmpty()) {
-                val restRows = runCatching { listSessionsRest(origin, profileId) }.getOrNull()
-                if (restRows != null && restRows.size > rpcRows.size) {
-                    return restRows.distinctBy { it.id }
-                }
-                return rpcRows.distinctBy { it.id }
-            }
-        }
-        return listSessionsRest(origin, profileId).distinctBy { it.id }
+        val rpcRows = if (socket != null && socket.isOpen) {
+            runCatching { listSessionsRpc(socket, profileId, includeArchived) }.getOrNull()
+        } else null
+        val rest = runCatching { listSessionsRest(origin, profileId, includeArchived) }
+        // No RPC page → REST is the only source; its failure (auth, 502, cleartext …) must surface.
+        if (rpcRows == null) return SessionLists.normalize(rest.getOrThrow())
+        return SessionLists.normalize(rpcRows + rest.getOrDefault(emptyList()))
     }
 
     suspend fun listMessages(origin: String, sessionId: String, profileId: String): List<ChatMessage> =
@@ -650,12 +660,165 @@ class DashboardClient internal constructor(
     suspend fun listRooms(origin: String): List<RoomRef> =
         get(DashboardUrls.machine(origin, "/companion/rooms")) { RoomJson.rooms(it) }
 
-    suspend fun createRoom(origin: String, title: String, participants: List<String>, maxRounds: Int = 2): RoomRef {
+    suspend fun createRoom(
+        origin: String,
+        title: String,
+        participants: List<String>,
+        policy: RoomPolicySpec = RoomPolicySpec(),
+    ): RoomRef {
         val parts = participants.joinToString(",") { it.json() }
-        val payload = """{"title":${title.json()},"participants":[$parts],"policy":{"max_rounds":$maxRounds}}"""
+        val payload = """{"title":${title.json()},"participants":[$parts],"policy":${policyJson(policy)}}"""
         return post(DashboardUrls.machine(origin, "/companion/rooms"), payload) {
             RoomJson.roomEnvelope(it) ?: throw DashboardException("room_parse", "room missing in reply")
         }
+    }
+
+    private fun policyJson(p: RoomPolicySpec): String = buildString {
+        append("""{"mode":${p.mode.json()},"max_turns":${p.maxTurns},"max_rounds":${p.maxRounds}""")
+        if (p.moderator.isNotBlank()) append(""","moderator":${p.moderator.json()}""")
+        append(""","hands":${p.hands.json()}""")
+        append("}")
+    }
+
+    suspend fun patchRoom(origin: String, roomId: String, title: String? = null, policy: RoomPolicySpec? = null): RoomRef {
+        val fields = buildList {
+            if (title != null) add(""""title":${title.json()}""")
+            if (policy != null) add(""""policy":${policyJson(policy)}""")
+        }
+        return patch(DashboardUrls.machine(origin, "/companion/rooms/$roomId"), "{${fields.joinToString(",")}}") {
+            RoomJson.roomEnvelope(it) ?: throw DashboardException("room_parse", "room missing in reply")
+        }
+    }
+
+    suspend fun setRoomParticipants(origin: String, roomId: String, add: List<String>, remove: List<String>): RoomRef {
+        val payload = """{"add":[${add.joinToString(",") { it.json() }}],"remove":[${remove.joinToString(",") { it.json() }}]}"""
+        return post(DashboardUrls.machine(origin, "/companion/rooms/$roomId/participants"), payload) {
+            RoomJson.roomEnvelope(it) ?: throw DashboardException("room_parse", "room missing in reply")
+        }
+    }
+
+    suspend fun pauseRoom(origin: String, roomId: String) {
+        post(DashboardUrls.machine(origin, "/companion/rooms/$roomId/pause"), "{}") { }
+    }
+
+    suspend fun continueRoom(origin: String, roomId: String, turns: Int = 6): RoomRef? =
+        post(DashboardUrls.machine(origin, "/companion/rooms/$roomId/continue"), """{"turns":$turns}""") { RoomJson.roomEnvelope(it) }
+
+    suspend fun summarizeRoom(origin: String, roomId: String, by: String = ""): RoomRef? =
+        post(DashboardUrls.machine(origin, "/companion/rooms/$roomId/summarize"), """{"by":${by.json()}}""") { RoomJson.roomEnvelope(it) }
+
+    suspend fun respondRoomApproval(origin: String, roomId: String, requestId: String, decision: String) {
+        post(DashboardUrls.machine(origin, "/companion/rooms/$roomId/approval"), """{"request_id":${requestId.json()},"decision":${decision.json()}}""") { }
+    }
+
+    // ---- Coding-agent sessions (P23) --------------------------------------------------------------
+    suspend fun agentTools(origin: String, refresh: Boolean = false): Triple<List<AgentTool>, Boolean, String> =
+        get(DashboardUrls.machine(origin, "/companion/agents/tools" + if (refresh) "?refresh=1" else "")) { AgentJson.tools(it) }
+
+    suspend fun agentSessions(origin: String): List<AgentSession> =
+        get(DashboardUrls.machine(origin, "/companion/agents/sessions")) { AgentJson.sessions(it) }
+
+    suspend fun startAgentSession(
+        origin: String,
+        tool: String,
+        cwd: String = "",
+        prompt: String = "",
+        title: String = "",
+        cols: Int = 100,
+        rows: Int = 40,
+        mode: String = "pty",
+    ): AgentSession {
+        val payload = """{"tool":${tool.json()},"mode":${mode.json()},"cwd":${cwd.json()},"prompt":${prompt.json()},"title":${title.json()},"cols":$cols,"rows":$rows}"""
+        return post(DashboardUrls.machine(origin, "/companion/agents/sessions"), payload) {
+            AgentJson.sessionEnvelope(it) ?: throw DashboardException("agent_parse", "session missing in reply")
+        }
+    }
+
+    suspend fun agentPane(origin: String, sessionId: String, cols: Int = 0, rows: Int = 0): Pair<AgentPane, AgentSession?> {
+        val q = if (cols > 0 && rows > 0) "?cols=$cols&rows=$rows" else ""
+        return get(DashboardUrls.machine(origin, "/companion/agents/sessions/$sessionId/pane$q")) { AgentJson.paneBody(it) }
+    }
+
+    suspend fun agentKeys(origin: String, sessionId: String, text: String = "", keys: List<String> = emptyList()) {
+        val payload = """{"text":${text.json()},"keys":[${keys.joinToString(",") { it.json() }}]}"""
+        post(DashboardUrls.machine(origin, "/companion/agents/sessions/$sessionId/keys"), payload) { }
+    }
+
+    /** Structured sessions: one prompt = one turn. 409 while a turn is running. */
+    /** Directory picker listing under the host's allowed roots. Empty [path] = host default. */
+    suspend fun agentDirs(origin: String, path: String = "", hidden: Boolean = false): AgentDirListing {
+        val q = "?path=${java.net.URLEncoder.encode(path, "UTF-8")}" + if (hidden) "&hidden=1" else ""
+        return get(DashboardUrls.machine(origin, "/companion/agents/dirs$q")) { AgentJson.dirs(it) }
+    }
+
+    suspend fun agentPrompt(origin: String, sessionId: String, text: String) {
+        post(DashboardUrls.machine(origin, "/companion/agents/sessions/$sessionId/prompt"), """{"text":${text.json()}}""") { }
+    }
+
+    suspend fun agentApproval(origin: String, sessionId: String, requestId: String, decision: String) {
+        val payload = """{"request_id":${requestId.json()},"decision":${decision.json()}}"""
+        post(DashboardUrls.machine(origin, "/companion/agents/sessions/$sessionId/approval"), payload) { }
+    }
+
+    suspend fun agentTranscript(origin: String, sessionId: String, after: Int = 0): Triple<List<AgentEvent>, ApprovalPrompt?, AgentSession?> =
+        get(DashboardUrls.machine(origin, "/companion/agents/sessions/$sessionId/transcript?after=$after")) { AgentJson.transcriptBody(it) }
+
+    suspend fun killAgentSession(origin: String, sessionId: String, forget: Boolean = false) {
+        delete(DashboardUrls.machine(origin, "/companion/agents/sessions/$sessionId" + if (forget) "?forget=1" else ""))
+    }
+
+    /**
+     * Live pane stream for one session: `agent.pane` on every screen change, `agent.status` on
+     * transitions. Completes when the socket closes or the session exits; caller reconnects.
+     */
+    fun agentEvents(origin: String, sessionId: String, cols: Int, rows: Int): Flow<AgentJson.Event> = callbackFlow {
+        val url = DashboardUrls.machine(origin, "/companion/agents/events?session_id=$sessionId&cols=$cols&rows=$rows")
+        val auth = companionAuth
+        val request = Request.Builder().url(url).apply { if (!auth.isNullOrBlank()) header("Authorization", "Companion $auth") }.build()
+        val socket = wsHttp.newWebSocket(
+            request,
+            object : okhttp3.WebSocketListener() {
+                override fun onMessage(webSocket: okhttp3.WebSocket, text: String) {
+                    text.split('\n').forEach { line -> AgentJson.event(line)?.let { trySend(it) } }
+                }
+
+                override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: Response?) {
+                    val code = response?.code ?: 0
+                    close(
+                        if (code == 401) DashboardException("agent_unauthorized", "pair this phone to use agent sessions")
+                        else DashboardException("agent_events", t.message ?: "agent events socket failed"),
+                    )
+                }
+
+                override fun onClosed(webSocket: okhttp3.WebSocket, code: Int, reason: String) {
+                    close()
+                }
+            },
+        )
+        awaitClose { socket.cancel() }
+    }
+
+    // ---- Peer links (A22.11) --------------------------------------------------------------------
+    suspend fun listPeers(origin: String): List<PeerLink> =
+        get(DashboardUrls.machine(origin, "/companion/peers")) { RoomJson.peers(it) }
+
+    /** Mint a credential on [origin] that another relay (named [forName]) may use to run turns there. */
+    suspend fun grantPeer(origin: String, forName: String): Triple<String, String, String> =
+        post(DashboardUrls.machine(origin, "/companion/peers/grant"), """{"name":${forName.json()}}""") { body ->
+            val g = (Json.parseToJsonElement(body).jsonObject["grant"] as? JsonObject)
+            val hostId = g?.get("host_id")?.jsonPrimitive?.contentOrNull.orEmpty()
+            val secret = g?.get("secret")?.jsonPrimitive?.contentOrNull.orEmpty()
+            if (hostId.isBlank() || secret.isBlank()) throw DashboardException("peer_grant", "grant missing in reply")
+            Triple(hostId, secret, g?.get("name")?.jsonPrimitive?.contentOrNull.orEmpty())
+        }
+
+    suspend fun addPeer(origin: String, name: String, peerOrigin: String, hostId: String, secret: String) {
+        val payload = """{"name":${name.json()},"origin":${peerOrigin.json()},"host_id":${hostId.json()},"secret":${secret.json()}}"""
+        post(DashboardUrls.machine(origin, "/companion/peers"), payload) { }
+    }
+
+    suspend fun removePeer(origin: String, name: String) {
+        delete(DashboardUrls.machine(origin, "/companion/peers/$name"))
     }
 
     suspend fun roomHistory(origin: String, roomId: String, after: Int = 0): Pair<RoomRef?, List<ChatMessage>> =
@@ -732,15 +895,44 @@ class DashboardClient internal constructor(
             next
         }
 
-    private suspend fun listSessionsRest(origin: String, profileId: String): List<SessionRef> {
-        val raw = get(DashboardUrls.rest(origin, "/api/sessions", profileId)) { parseSessions(it) }
-        return stampProfile(raw, profileId)
+    /**
+     * The dashboard pages `GET /api/sessions` at `limit ≤ 100` (422 above) and reports `total`;
+     * default is 20 rows. Walk `offset` until the page is short, `total` is reached, or
+     * [SESSION_PAGE] rows are in hand. Hosts that ignore `offset` (mock, older relay) return the
+     * same page again — the "nothing new" guard stops that loop.
+     */
+    private suspend fun listSessionsRest(origin: String, profileId: String, includeArchived: Boolean): List<SessionRef> {
+        val seen = LinkedHashMap<String, SessionRef>()
+        var offset = 0
+        var total = -1
+        while (offset < SESSION_PAGE) {
+            val url = DashboardUrls.rest(
+                origin,
+                "/api/sessions",
+                profileId,
+                buildMap {
+                    put("limit", REST_PAGE.toString())
+                    put("offset", offset.toString())
+                    // Dashboard: exclude (default) | include | only. Standalone relay mirrors it.
+                    if (includeArchived) put("archived", "include")
+                },
+            )
+            val (rows, pageTotal) = get(url) { body -> stampProfile(parseSessions(body), profileId) to parseSessionTotal(body) }
+            if (pageTotal > 0) total = pageTotal
+            val fresh = rows.count { !seen.containsKey(it.id) }
+            rows.forEach { seen[it.id] = it }
+            if (rows.size < REST_PAGE || fresh == 0) break
+            offset += REST_PAGE
+            if (total in 0..offset) break
+        }
+        return seen.values.toList()
     }
 
-    private suspend fun listSessionsRpc(socket: GatewaySocket, profileId: String): List<SessionRef> {
+    private suspend fun listSessionsRpc(socket: GatewaySocket, profileId: String, includeArchived: Boolean): List<SessionRef> {
+        val archived = if (includeArchived) ""","include_archived":true""" else ""
         val result = socket.request(
             "session.list",
-            """{"profile":${profileId.json()},"limit":200}""",
+            """{"profile":${profileId.json()},"limit":$SESSION_PAGE$archived}""",
         )
         return stampProfile(parseSessions(result.toString()), profileId)
     }
@@ -886,6 +1078,21 @@ class DashboardClient internal constructor(
         val request = Request.Builder()
             .url(url)
             .post(json.toRequestBody(JSON))
+            .header("Accept", "application/json")
+            .build()
+        http.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw httpError(response.code, body, url)
+            }
+            parse(body)
+        }
+    }
+
+    private suspend fun <T> patch(url: String, json: String, parse: (String) -> T): T = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(url)
+            .patch(json.toRequestBody(JSON))
             .header("Accept", "application/json")
             .build()
         http.newCall(request).execute().use { response ->
@@ -1093,6 +1300,11 @@ class DashboardClient internal constructor(
     }
 
     companion object {
+        /** Most rows the rail pulls from one host per refresh (either path). Hermes caps history at 500; lists follow suit. */
+        const val SESSION_PAGE = 500
+        /** Dashboard `GET /api/sessions` refuses `limit > 100`. */
+        const val REST_PAGE = 100
+
         private val JSON = "application/json; charset=utf-8".toMediaType()
         private val sseJson = Json { ignoreUnknownKeys = true }
         private val TOKEN_RE = Regex("""__HERMES_SESSION_TOKEN__\s*=\s*"([^"]+)"""")

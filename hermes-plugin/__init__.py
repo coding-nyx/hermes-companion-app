@@ -61,8 +61,10 @@ def _prompt(_info=None) -> str:
         "Status/devices/select/notifications stay allowed while disarmed; control "
         f"ops refuse with disarmed until armed. {hint}{stream_hint} Never use banking/authenticator/Settings. "
         "Fail closed: no_device, disarmed, a11y_unavailable, protected_package, stale_ref, no_match, no_focus. "
-        "Rooms: a user turn starting with `[room` puts you in a group chat with other profiles — reply to the "
-        "room in plain text, `@GLYPH` hands off, exactly `PASS` stays silent, no mobile_* control tools."
+        "Rooms: a user turn starting with `[room` puts you in a live group chat with other profiles — reply in "
+        "plain text when you have something to add, ask others with `@GLYPH`, reach the operator with `@YOU`, reply "
+        "exactly `PASS` when you have nothing to add; the room goes quiet when everyone passes. Only the room's "
+        "hands holder may use mobile_* control tools during a room turn (the relay refuses others with room_hands)."
     )
 
 

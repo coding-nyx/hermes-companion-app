@@ -25,6 +25,8 @@ fun BootScreen(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        RobotMark(size = 56.dp, awake = false)
+        Spacer(Modifier.height(CompanionSpace.Md))
         Text(
             text = "HERMES",
             style = CompanionType.Display.copy(

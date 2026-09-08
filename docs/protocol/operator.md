@@ -70,7 +70,7 @@ Do **not** call from the phone in v1: `cli.exec`, `config.set`, `reload.env`, an
 | `message.delta` / `message.complete` | Transcript |
 | `tool.start` / `tool.progress` / `tool.complete` | Tool rows |
 | `approval.request` / `clarify.request` / `sudo.request` / `secret.request` | Strip. Expiry events clear only the matching `request_id` |
-| `sessions.changed` | Reconcile thread list. Expected payload fields: `id`, `profile`, `op` (`upsert`/`delete`), `updated_at`. If a field is missing, full REST refetch (H4). |
+| `sessions.changed` | Reconcile thread list. Expected payload fields: `id`, `profile`, `op` (`upsert`/`delete`), `updated_at`, optional `started_at`/`title`. Without `id` or `profile` → full refetch (H4). Patches are **merged** into the known row (`SessionLists.merge`): a missing title or timestamp never erases what the rail already knows. |
 
 ## REST we call (v1)
 
@@ -82,7 +82,7 @@ Do **not** call from the phone in v1: `cli.exec`, `config.set`, `reload.env`, an
 | `GET /api/sessions` | Catch-up / search pagination |
 | `GET /api/sessions/{id}/messages` | History page (`limit` ≤ 500, optional `before`) |
 | `GET /api/profiles` | Machine roster for the switcher. **No** `?profile=` — that would hide the other agents. |
-| `GET /api/sessions?profile=` | Catch-up. Required. Client also filters by `profileId`. |
+| `GET /api/sessions?profile=&limit=100&offset=[&archived=include]` | Catch-up (`archived=include` only while the ARCHIVED chip is on). Required. Client also filters by `profileId`. Dashboard: default 20 rows, `limit ≤ 100` (422 above), returns `total`; the client pages `offset` until `total` / short page / 500 rows. The standalone relay mirrors the shape. The rail is the **union** of this and `session.list` keyed by id — the gateway hides `subagent` rows, REST has them; neither alone is exhaustive. |
 | `GET /api/sessions/{id}/messages?profile=` | History. 403 if the session is not in that profile. |
 | `POST /api/sessions/{id}/chat/stream?profile=` | SSE turn: `assistant.delta`, `tool.started`/`completed`, `run.completed`. |
 | `POST /api/sessions?profile=` | New thread under the active profile. |
@@ -91,6 +91,10 @@ Do **not** call from the phone in v1: `cli.exec`, `config.set`, `reload.env`, an
 | `GET /api/ws?profile=` | JSON-RPC. First event `gateway.ready` (`change_events`, `heartbeat`, `instance_id`). Gated mode: mint `POST /api/auth/ws-ticket` and pass `?ticket=`. |
 
 Gateway start/stop is **not** M1.
+
+## Session timestamps
+
+Hosts disagree on units: Hermes `state.db` is `REAL` seconds (`1756750000.5`), the standalone relay sends int ms, the mock sends int seconds, some payloads are ISO-8601. The client accepts all four (`ProfileJson.epochMs`). `started_at`/`created_at` is the creation instant, `updated_at`/`last_activity_at`/`last_active_at` the activity instant; each falls back to the other. Rail order is decided once in the domain (`SessionLists.comparator`): chosen key desc → other timestamp desc → id desc. Room uses the same `ORDER BY` so cache and remote never disagree.
 
 ## Profile rule
 

@@ -14,24 +14,47 @@ def hermes_home() -> Path:
     return Path.home() / ".hermes"
 
 
+def hermes_root() -> Path:
+    """
+    The install root that owns ``profiles/``. Mirrors ``hermes_cli.profiles``: a gateway or relay
+    started with ``HERMES_HOME=<root>/profiles/<name>`` still belongs to ``<root>`` — the root is the
+    ``default`` profile and every sibling under ``profiles/`` is a named one.
+    """
+    home = hermes_home()
+    return home.parent.parent if home.parent.name == "profiles" else home
+
+
 def is_profile_dir(path: Path) -> bool:
     return path.is_dir() and any((path / name).exists() for name in ("config.yaml", "state.db", "profile.yaml"))
 
 
+# Hermes calls the root profile (HERMES_HOME itself) "default"; named ones live in HERMES_HOME/profiles/<name>.
+DEFAULT_PROFILE = "default"
+
+
 def _profile_id(path: Path) -> str:
+    if path.resolve() == hermes_root().resolve():
+        return DEFAULT_PROFILE
     return path.name
 
 
 def discover_profile_dirs() -> list[Path]:
-    home = hermes_home()
-    nested = home / "profiles"
+    """
+    Root profile first (as ``default``), then ``<root>/profiles/<name>`` alphabetically.
+    Before 2026-09-08 any nested profile hid the root one, so a host with ``profiles/coder``
+    listed only ``coder`` and the default profile's threads were unreachable from the phone;
+    a relay running as ``HERMES_HOME=…/profiles/bishop`` saw only itself.
+    An explicit ``profiles/default`` directory wins over the root when both exist.
+    """
+    root = hermes_root()
+    nested = root / "profiles"
+    found: list[Path] = []
     if nested.is_dir():
         found = [child for child in sorted(nested.iterdir()) if is_profile_dir(child)]
-        if found:
-            return found
-    if is_profile_dir(home):
-        return [home]
-    return []
+    has_named_default = any(child.name == DEFAULT_PROFILE for child in found)
+    if is_profile_dir(root) and not has_named_default:
+        return [root] + found
+    return found
 
 
 def profile_dir(profile_id: str) -> Path | None:
@@ -41,9 +64,6 @@ def profile_dir(profile_id: str) -> Path | None:
     for path in discover_profile_dirs():
         if _profile_id(path) == wanted:
             return path
-    home = hermes_home()
-    if is_profile_dir(home) and (not wanted or _profile_id(home) == wanted):
-        return home
     return None
 
 
@@ -108,7 +128,11 @@ _SESSION_COLS = (
     "hidden",
     "archived",
     "message_count",
+    "source",
 )
+
+# Rows the phone can ask for in one page. Matches the app's SESSION_PAGE / Hermes' history cap.
+SESSION_PAGE = 500
 
 
 def _table_columns(con: sqlite3.Connection, table: str) -> set[str]:
@@ -128,7 +152,17 @@ def _select_existing(names: set[str], wanted: tuple[str, ...]) -> str:
     return ", ".join(bits)
 
 
-def list_sessions(profile_id: str, limit: int = 200) -> list[dict]:
+def _session_where(names: set[str], include_archived: bool) -> str:
+    where = []
+    if "archived" in names and not include_archived:
+        where.append("COALESCE(archived, 0) = 0")
+    if "hidden" in names:
+        where.append("COALESCE(hidden, 0) = 0")
+    return f" WHERE {' AND '.join(where)}" if where else ""
+
+
+def list_sessions(profile_id: str, limit: int = SESSION_PAGE, offset: int = 0, include_archived: bool = False) -> list[dict]:
+    """Newest-started first. Hidden (and, by default, archived) rows are excluded *before* LIMIT/OFFSET so a page is never short."""
     path = profile_dir(profile_id)
     if path is None:
         return []
@@ -140,15 +174,24 @@ def list_sessions(profile_id: str, limit: int = 200) -> list[dict]:
         if "id" not in names:
             return []
         order = "id DESC"
-        if "last_activity_at" in names and "started_at" in names:
-            order = "COALESCE(last_activity_at, started_at) DESC"
-        elif "last_activity_at" in names:
-            order = "last_activity_at DESC"
+        if "started_at" in names and "last_activity_at" in names:
+            order = "COALESCE(started_at, last_activity_at) DESC, COALESCE(last_activity_at, started_at) DESC, id DESC"
         elif "started_at" in names:
-            order = "started_at DESC"
+            order = "started_at DESC, id DESC"
+        elif "last_activity_at" in names:
+            order = "last_activity_at DESC, id DESC"
+        where_sql = _session_where(names, include_archived)
+        try:
+            n = int(limit)
+        except (TypeError, ValueError):
+            n = SESSION_PAGE
+        try:
+            skip = max(0, int(offset or 0))
+        except (TypeError, ValueError):
+            skip = 0
         rows = con.execute(
-            f"SELECT {_select_existing(names, _SESSION_COLS)} FROM sessions ORDER BY {order} LIMIT ?",
-            (max(1, int(limit)),),
+            f"SELECT {_select_existing(names, _SESSION_COLS)} FROM sessions{where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
+            (max(1, n), skip),
         ).fetchall()
     except sqlite3.Error:
         return []
@@ -156,7 +199,8 @@ def list_sessions(profile_id: str, limit: int = 200) -> list[dict]:
         con.close()
     out = []
     for row in rows:
-        if int(row["archived"] or 0) or int(row["hidden"] or 0):
+        archived = bool(int(row["archived"] or 0))
+        if (archived and not include_archived) or int(row["hidden"] or 0):
             continue
         sid = str(row["id"] or "")
         if not sid:
@@ -174,6 +218,8 @@ def list_sessions(profile_id: str, limit: int = 200) -> list[dict]:
             "ended": ended,
             "end_reason": row["end_reason"] or "",
             "message_count": int(row["message_count"] or 0),
+            "source": str(row["source"] or ""),
+            "archived": archived,
         })
     return out
 
@@ -231,6 +277,26 @@ def list_messages(session_id: str, profile_id: str, limit=None, before=None) -> 
     if n and n > 0:
         items = items[-n:]
     return items
+
+
+def count_sessions(profile_id: str, include_archived: bool = False) -> int:
+    """Non-hidden (and, by default, non-archived) rows — the `total` a paging client expects."""
+    path = profile_dir(profile_id)
+    if path is None:
+        return 0
+    con = _connect(path / "state.db")
+    if con is None:
+        return 0
+    try:
+        names = _table_columns(con, "sessions")
+        if "id" not in names:
+            return 0
+        where_sql = _session_where(names, include_archived)
+        return int(con.execute(f"SELECT COUNT(*) FROM sessions{where_sql}").fetchone()[0] or 0)
+    except sqlite3.Error:
+        return 0
+    finally:
+        con.close()
 
 
 def profiles() -> list[dict]:

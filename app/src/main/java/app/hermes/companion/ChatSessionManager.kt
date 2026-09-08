@@ -474,7 +474,7 @@ class ChatSessionManager(
             try {
                 client(origin).deleteSession(origin, owned.id, profile)
             } catch (t: Throwable) {
-                val restored = runCatching { client(origin).listSessions(origin, profile) }
+                val restored = runCatching { client(origin).listSessions(origin, profile, _state.value.showArchived) }
                     .getOrDefault(previous)
                 runCatching { cache.replaceSessions(origin, profile, restored) }
                 _state.update { it.copy(sessions = SessionLists.normalize(restored), error = t.toMonoError()) }
@@ -739,9 +739,12 @@ internal fun applyEvent(state: CompanionState, event: ChatEvent, assistantId: St
             val shot = ChatContent.screenshotBlocks(event.name, event.detail, event.detail)
             if (idx >= 0) {
                 val dur = if (event.durationMs > 0) " · ${event.durationMs / 1000.0}s" else ""
+                // A blank completion (room summaries, hosts that only send `name`) must not wipe the
+                // command line that tool.start carried — that is what the expanded box shows.
+                val detail = event.detail.ifBlank { updated[idx].toolDetail?.substringBefore(" · ").orEmpty() }
                 updated[idx] = updated[idx].copy(
-                    toolDetail = event.detail + dur,
-                    text = event.detail + dur,
+                    toolDetail = detail + dur,
+                    text = detail + dur,
                     blocks = shot.ifEmpty { updated[idx].blocks },
                     toolRunning = false,
                 )
@@ -762,7 +765,8 @@ internal fun applyEvent(state: CompanionState, event: ChatEvent, assistantId: St
             )
         }
         // Room-only events are reduced by RoomSessionManager; a single-agent thread never sees them.
-        is ChatEvent.TurnStarted, is ChatEvent.TurnEnded, is ChatEvent.RoomPost -> state
+        is ChatEvent.TurnStarted, is ChatEvent.TurnEnded, is ChatEvent.RoomPost,
+        is ChatEvent.RoomState, is ChatEvent.RoomReady, is ChatEvent.RoomUpdated -> state
     }
 
 internal fun finishStream(state: CompanionState, assistantId: String): CompanionState =

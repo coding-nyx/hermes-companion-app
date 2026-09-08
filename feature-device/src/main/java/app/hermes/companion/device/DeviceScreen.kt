@@ -31,6 +31,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.sp
+import app.hermes.companion.design.Scanline
+import app.hermes.companion.design.SignalCursor
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
@@ -152,6 +154,8 @@ fun DeviceScreen(
                     modifier = Modifier.testTag("device.status"),
                 )
                 Spacer(Modifier.height(CompanionSpace.Sm))
+                Scanline(Modifier.width(160.dp), active = true)
+                Spacer(Modifier.height(CompanionSpace.Sm))
                 Text(
                     text = "hermes companion approve $code",
                     style = CompanionType.MonoSmall,
@@ -210,13 +214,19 @@ fun DeviceScreen(
                     Text(text = deviceProfileId, style = CompanionType.MonoSmall)
                 }
                 Spacer(Modifier.height(CompanionSpace.Sm))
-                Text(
-                    text = if (laneOpen) "LANE  live" else "LANE  down",
-                    style = CompanionType.Mono.copy(
-                        color = if (laneOpen) CompanionColor.Signal else CompanionColor.TextMute,
-                    ),
-                    modifier = Modifier.testTag("device.lane"),
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (laneOpen) "LANE  live" else "LANE  connecting",
+                        style = CompanionType.Mono.copy(
+                            color = if (laneOpen) CompanionColor.Signal else CompanionColor.TextDim,
+                        ),
+                        modifier = Modifier.testTag("device.lane"),
+                    )
+                    if (!laneOpen) {
+                        Spacer(Modifier.width(CompanionSpace.Sm))
+                        SignalCursor()
+                    }
+                }
                 Text(
                     text = if (a11yBound) "A11Y     on" else "A11Y     off",
                     style = CompanionType.Mono.copy(

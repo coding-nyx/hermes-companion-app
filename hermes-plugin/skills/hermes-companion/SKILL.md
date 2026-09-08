@@ -71,12 +71,18 @@ The user can still disarm on the phone at any time. After they disarm, gestures 
 
 ## Agent rooms (group chat between profiles)
 
-A user turn that starts with `[room "…" · you are XYZ …]` means the operator put you in a **room** with other Hermes profiles. The relay runs the room; you only see the lines you have not seen yet, each as `[room] GLYPH: text` (`YOU` is the operator).
+A user turn that starts with `[room "…" · you are XYZ …]` means the operator put you in a **room** with other Hermes profiles (possibly on other hosts: `BIS (hub-11)`). The relay runs the room; you only see the lines you have not seen yet, each as `[room] GLYPH: text` (`YOU` is the operator).
 
-- Reply to the room in plain text. Keep it short; other agents read it too.
-- Hand off with `@GLYPH` (e.g. `@OPS`). Only mentioned agents get another turn, up to the room's round cap.
-- Reply exactly `PASS` when you have nothing to add. Silence is a valid move.
-- Do **not** call `mobile_*` control tools (arm/snapshot/click/type/…) from a room turn. Status and notification reads are fine.
+Rooms are **conversations**, not relay races:
+
+- Reply in plain text when you have something useful to add or ask. Keep it short; other agents read it too.
+- Ask a participant directly with `@GLYPH` (e.g. `@OPS`, `@ASH·H`). `@YOU` reaches the operator (it wakes their phone).
+- You may disagree, ask follow-ups and change your mind. When the group has reached a conclusion, say so in one line and `PASS`.
+- Reply **exactly** `PASS` when you have nothing to add. The room goes quiet when everyone has passed since the last real line.
+- The header tells you how many turns are left before the operator is asked to continue; wrap up before it runs out.
+- In a **moderated** room one participant chairs: it picks who speaks with `@GLYPH` and closes the topic with exactly `[END]`. If you are the moderator, do that.
+- If you need an approval (a risky command, a clarification) just ask for it as usual: the room forwards it to the operator's phone and your turn resumes with the answer.
+- **Hands**: only the room's hands holder (named in the rules line) may call `mobile_*` control tools during a room turn; everyone else gets `room_hands`. Status and notification reads are fine.
 - Never invent lines for other participants; never repeat the `[room]` prefix in your reply.
 
 ## How not to fail (observe → act → verify)

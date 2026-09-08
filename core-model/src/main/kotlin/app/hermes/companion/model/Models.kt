@@ -44,9 +44,17 @@ data class SessionRef(
     val id: String,
     val profileId: String,
     val title: String,
+    /** Last activity (host `updated_at` / `last_activity_at`); falls back to [createdAtEpochMs]. */
     val updatedAtEpochMs: Long,
     val unread: Boolean = false,
     val ended: Boolean = false,
+    /** Host `started_at` / `created_at`. 0 when the host did not say; sorting then uses [updatedAtEpochMs]. */
+    val createdAtEpochMs: Long = 0L,
+    val messageCount: Int = 0,
+    /** Origin platform (`telegram`, `cli`, `dashboard`, …) when the host reports one. */
+    val source: String = "",
+    /** Host `archived` flag. Hidden from the rail unless the operator turns ARCHIVED on. */
+    val archived: Boolean = false,
 )
 
 enum class MessageRole { USER, ASSISTANT, TOOL }
@@ -92,13 +100,33 @@ data class ChatMessage(
     val speaker: String? = null,
     /** Room turn where the agent replied PASS (rendered muted, no text). */
     val passed: Boolean = false,
+    /** Room summary turn (pinned at the top of the room). */
+    val summary: Boolean = false,
 )
 
 /** One profile taking part in a room. */
 @Serializable
-data class RoomParticipant(val profile: String, val glyph: String)
+data class RoomParticipant(
+    val profile: String,
+    val glyph: String,
+    /** Peer relay the participant lives on (cross-host rooms, A22.11); null = this host. */
+    val host: String? = null,
+) {
+    /** Wire id: `profile` or `profile@host`. Speakers in events use this form. */
+    val id: String get() = if (host.isNullOrBlank()) profile else "$profile@$host"
+}
 
-/** A host-side group chat between the operator and several profiles (P21). */
+/** Turn policy requested at create / PATCH time (A22.10). */
+@Serializable
+data class RoomPolicySpec(
+    val mode: String = "converse",
+    val maxTurns: Int = 12,
+    val maxRounds: Int = 2,
+    val moderator: String = "",
+    val hands: String = "",
+)
+
+/** A host-side group chat between the operator and several profiles (P21, v2 in P22). */
 @Serializable
 data class RoomRef(
     val id: String,
@@ -108,11 +136,30 @@ data class RoomRef(
     val seq: Int = 0,
     val messageCount: Int = 0,
     val busy: Boolean = false,
-    /** Profile currently taking a turn, when [busy]. */
+    /** Participant id currently taking a turn, when [busy]. */
     val speaking: String? = null,
     val updatedAtEpochMs: Long = 0L,
     val lastText: String = "",
+    val lastSpeaker: String = "",
+    // v2
+    val mode: String = "converse",
+    /** `idle` · `running` · `quiet` · `paused`. */
+    val state: String = "idle",
+    /** `budget` · `time` · `stall` · `operator` while [state] is `paused`. */
+    val pauseReason: String = "",
+    val turnsUsed: Int = 0,
+    val maxTurns: Int = 12,
+    val budget: Int = 12,
+    val hands: String = "",
+    val moderator: String = "",
+    /** Agent approval waiting on the operator, if any. */
+    val approval: ApprovalPrompt? = null,
+    val summary: String = "",
 )
+
+/** A peer relay this host can ask for turns (cross-host rooms). */
+@Serializable
+data class PeerLink(val name: String, val origin: String, val hostId: String = "", val reachable: Boolean? = null)
 
 @Serializable
 data class OutboxItem(
@@ -150,6 +197,8 @@ data class ApprovalPrompt(
     val kind: String = "approval",
     val command: String,
     val choices: List<String> = listOf("once", "deny"),
+    /** Room turns: the participant that raised it. Null in a single-agent thread. */
+    val speaker: String? = null,
 )
 
 @Serializable
@@ -175,6 +224,12 @@ sealed class ChatEvent {
     data class TurnEnded(val speaker: String, val turnId: String, val seq: Int, val passed: Boolean, val error: String) : ChatEvent()
     /** Another client posted as the operator (echo); dedupe by [seq]. */
     data class RoomPost(val seq: Int, val text: String) : ChatEvent()
+    /** The room's floor state changed: `running` · `quiet` · `paused` (+ reason) · `idle`. */
+    data class RoomState(val state: String, val reason: String, val turnsUsed: Int, val budget: Int, val seq: Int) : ChatEvent()
+    /** Socket (re)connected; the host is at [seq] — replay `history?after=<local seq>` if behind. */
+    data class RoomReady(val seq: Int, val room: RoomRef?) : ChatEvent()
+    /** Rename / policy / participants changed on the host. */
+    data class RoomUpdated(val room: RoomRef) : ChatEvent()
 }
 
 sealed class BusFrame {
@@ -417,3 +472,85 @@ data class GatewayChoice(
     val health: String = "",
 )
 
+
+
+// ---- Coding-agent sessions (P23) --------------------------------------------------------------
+
+/** A CLI the host was probed for (`/companion/agents/tools`). Nothing is assumed installed. */
+@Serializable
+data class AgentTool(
+    val id: String,
+    val label: String,
+    val glyph: String,
+    val installed: Boolean,
+    val path: String = "",
+    val version: String = "",
+    val modes: List<String> = listOf("pty"),
+    val installHint: String = "",
+    val loginHint: String = "",
+)
+
+/**
+ * One coding-agent session on the host. `mode` is `pty` (tmux pane) or `structured` (stream-json
+ * chat). `status`: `starting` · `running` · `waiting_input` · `waiting_approval` · `exited`.
+ */
+@Serializable
+data class AgentSession(
+    val id: String,
+    val tool: String,
+    val mode: String = "pty",
+    val cwd: String = "",
+    val title: String = "",
+    val command: String = "",
+    val status: String = "starting",
+    val exitCode: Int? = null,
+    val lastLine: String = "",
+    val cols: Int = 100,
+    val rows: Int = 40,
+    val createdAtEpochMs: Long = 0L,
+    val updatedAtEpochMs: Long = 0L,
+    val attach: String = "",
+)
+
+/**
+ * One normalised event from a structured (stream-json) coding-agent session (A23.3/A23.4). The host
+ * maps Claude Code / Codex wire formats onto these; the phone reduces them into chat rows.
+ */
+sealed class AgentEvent {
+    data class Ready(val agentSessionId: String, val model: String) : AgentEvent()
+    data class User(val text: String) : AgentEvent()
+    data class Delta(val text: String) : AgentEvent()
+    data class ToolStart(val toolId: String, val name: String, val detail: String) : AgentEvent()
+    data class ToolComplete(val toolId: String, val name: String, val detail: String, val error: Boolean, val durationMs: Long) : AgentEvent()
+    data class Approval(val prompt: ApprovalPrompt) : AgentEvent()
+    data class ApprovalResolved(val requestId: String, val decision: String) : AgentEvent()
+    data object TurnStart : AgentEvent()
+    data class TurnEnd(val text: String, val isError: Boolean, val costUsd: Double?, val durationMs: Long?) : AgentEvent()
+    data class Error(val message: String) : AgentEvent()
+    data class Exit(val exitCode: Int?, val stderr: String) : AgentEvent()
+}
+
+/** One row of the host directory picker (`GET /companion/agents/dirs`). */
+data class AgentDir(val name: String, val path: String, val git: Boolean = false, val project: Boolean = false)
+
+data class AgentRoot(val path: String, val label: String)
+
+/** A directory listing for the new-session picker: where we are, how to go up, roots, recents. */
+data class AgentDirListing(
+    val path: String = "",
+    val parent: String? = null,
+    val roots: List<AgentRoot> = emptyList(),
+    val dirs: List<AgentDir> = emptyList(),
+    val recent: List<String> = emptyList(),
+    val truncated: Boolean = false,
+    val git: Boolean = false,
+)
+
+/** A screen snapshot: raw ANSI text plus cursor, parsed on the phone by `AnsiText`. */
+data class AgentPane(
+    val ansi: String = "",
+    val cursorX: Int = 0,
+    val cursorY: Int = 0,
+    val cols: Int = 100,
+    val rows: Int = 40,
+)

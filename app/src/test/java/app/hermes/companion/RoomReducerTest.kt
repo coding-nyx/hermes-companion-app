@@ -1,6 +1,8 @@
 package app.hermes.companion
 
 import app.hermes.companion.data.remote.HostClientPool
+import app.hermes.companion.model.ApprovalPrompt
+import app.hermes.companion.model.RoomRef
 import app.hermes.companion.model.ChatEvent
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
@@ -16,7 +18,7 @@ import org.junit.Test
 /** Room event reducer: per-turn segments keyed by turn id, speaker stamping, PASS and idle. */
 class RoomReducerTest {
     private fun manager(state: MutableStateFlow<CompanionState>) =
-        RoomSessionManager(HostClientPool(), state, CoroutineScope(Dispatchers.Unconfined))
+        RoomSessionManager(HostClientPool(), RoomSeenStore.inMemory(), state, CoroutineScope(Dispatchers.Unconfined))
 
     private fun run(vararg events: ChatEvent): CompanionState {
         val flow = MutableStateFlow(CompanionState(openRoomId = "r-1"))
@@ -104,6 +106,54 @@ class RoomReducerTest {
         val st = manager(flow).applyRoomEvent(flow.value, ChatEvent.RoomPost(1, "who owns it?"))
         assertEquals(listOf("rm-1"), st.messages.map { it.id })
         assertEquals(1, st.messages.size)
+    }
+
+    @Test
+    fun floorStateEventsCloseAndReopenTheFloor() {
+        val flow = MutableStateFlow(CompanionState(openRoomId = "r-1", openRoom = RoomRef(id = "r-1", title = "t", maxTurns = 12, budget = 12)))
+        val m = manager(flow)
+        var st = m.applyRoomEvent(flow.value, ChatEvent.TurnStarted("coder", "t1", 1))
+        assertTrue(st.streaming)
+        assertEquals("running", st.openRoom?.state)
+        st = m.applyRoomEvent(st, ChatEvent.TurnEnded("coder", "t1", 2, false, ""))
+        assertEquals(1, st.openRoom?.turnsUsed)
+        st = m.applyRoomEvent(st, ChatEvent.RoomState("paused", "budget", 12, 12, 9))
+        assertFalse(st.streaming)
+        assertEquals("paused" to "budget", st.openRoom?.state to st.openRoom?.pauseReason)
+        assertEquals(9, st.openRoom?.seq)
+        st = m.applyRoomEvent(st, ChatEvent.RoomState("running", "", 12, 18, 9))
+        assertTrue(st.streaming)
+        assertEquals(18, st.openRoom?.budget)
+        st = m.applyRoomEvent(st, ChatEvent.RoomState("quiet", "", 15, 18, 12))
+        assertEquals("quiet", st.openRoom?.state)
+        assertFalse(st.streaming)
+    }
+
+    @Test
+    fun roomApprovalLandsInTheSharedSlotAndClearsOnResolve() {
+        val prompt = ApprovalPrompt(requestId = "apr-1", command = "rm -rf build", speaker = "coder")
+        var st = run(ChatEvent.TurnStarted("coder", "t1", 1), ChatEvent.Approval(prompt))
+        assertEquals("coder", st.approval?.speaker)
+        st = manager(MutableStateFlow(st)).applyRoomEvent(st, ChatEvent.PromptExpired("apr-1"))
+        assertNull(st.approval)
+    }
+
+    @Test
+    fun roomUpdatedReplacesTheOpenRoomButKeepsLiveState() {
+        val open = RoomRef(id = "r-1", title = "old", state = "running")
+        val flow = MutableStateFlow(CompanionState(openRoomId = "r-1", openRoom = open, rooms = listOf(open)))
+        val st = manager(flow).applyRoomEvent(flow.value, ChatEvent.RoomUpdated(RoomRef(id = "r-1", title = "new", state = "idle")))
+        assertEquals("new", st.openRoom?.title)
+        assertEquals("running", st.openRoom?.state)
+        assertEquals("new", st.rooms.single().title)
+    }
+
+    @Test
+    fun operatorPostResetsTheTurnCounter() {
+        val flow = MutableStateFlow(CompanionState(openRoomId = "r-1", openRoom = RoomRef(id = "r-1", title = "t", turnsUsed = 7)))
+        val st = manager(flow).applyRoomEvent(flow.value, ChatEvent.RoomPost(3, "new topic"))
+        assertEquals(0, st.openRoom?.turnsUsed)
+        assertEquals(3, st.openRoom?.seq)
     }
 
     @Test

@@ -20,6 +20,7 @@ import app.hermes.companion.domain.GatewayHudMap
 import app.hermes.companion.domain.OriginPolicy
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.SessionLists
+import app.hermes.companion.domain.ThreadSort
 import app.hermes.companion.domain.WakePing
 import app.hermes.companion.model.ChatAttachment
 import app.hermes.companion.model.ChatBlockKind
@@ -27,6 +28,8 @@ import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.DeviceArm
 import app.hermes.companion.model.GatewayChoice
 import app.hermes.companion.model.SavedGateway
+import app.hermes.companion.model.RoomPolicySpec
+import app.hermes.companion.model.AgentSession
 import app.hermes.companion.model.RoomRef
 import app.hermes.companion.model.SessionRef
 import app.hermes.companion.voice.VoiceStreamEngine
@@ -66,6 +69,8 @@ class CompanionViewModel(
             username = initialOrigin?.let { operatorCreds.load(it)?.username }.orEmpty(),
             ntfyTopic = initialOrigin?.let { sticky.ntfyTopicFor(it) }.orEmpty(),
             stayConnected = sticky.stayConnected,
+            threadSort = ThreadSort.parse(sticky.threadSort),
+            showArchived = sticky.showArchived,
             biometricLock = sticky.biometricLock,
             appLocked = sticky.biometricLock,
             loading = !initialOrigin.isNullOrBlank(),
@@ -76,7 +81,10 @@ class CompanionViewModel(
     private var connectJob: Job? = null
     private var probeJob: Job? = null
     private val chat = ChatSessionManager(clients, cache, outbox, _state, viewModelScope)
-    private val rooms = RoomSessionManager(clients, _state, viewModelScope)
+    private val agents = AgentSessionManager(clients, _state, viewModelScope)
+    private val rooms = RoomSessionManager(clients, RoomSeenStore.of(sticky), _state, viewModelScope) { origin ->
+        deviceCreds.load(origin)?.let { "${it.deviceId}:${it.credential}" }
+    }
     private val voiceStream = VoiceStreamEngine(
         context = runtime,
         scope = viewModelScope,
@@ -95,7 +103,7 @@ class CompanionViewModel(
     )
     private val host = HostToolsController(clients, operatorCreds, _state, viewModelScope) { origin -> connect(origin) }
     private val sync = SyncManager(clients, cache, sticky, operatorCreds, runtime, chat, _state, viewModelScope) { ping ->
-        openWake(ping.origin, ping.profile, ping.sessionId)
+        if (ping.roomId.isNotBlank()) openRoomWake(ping.origin, ping.roomId) else openWake(ping.origin, ping.profile, ping.sessionId)
     }
 
     init {
@@ -153,7 +161,7 @@ class CompanionViewModel(
             if (_state.value.activeProfileId != profileId) {
                 sticky.setProfile(origin, profileId)
                 val sessions = runCatching {
-                    cache.readSessions(origin, profileId) { client(origin).listSessions(origin, profileId) }
+                    cache.readSessions(origin, profileId) { client(origin).listSessions(origin, profileId, _state.value.showArchived) }
                 }.getOrDefault(emptyList())
                 _state.update {
                     it.copy(
@@ -178,15 +186,31 @@ class CompanionViewModel(
     }
 
     /** Deep link from another app: park it until the user confirms. Own notifications call [openWake]. */
-    fun requestDeepLink(origin: String, profileId: String, sessionId: String) {
-        _state.update { it.copy(pendingDeepLink = DeepLinkRequest(profileId, sessionId, origin)) }
+    fun requestDeepLink(origin: String, profileId: String, sessionId: String, roomId: String = "") {
+        _state.update { it.copy(pendingDeepLink = DeepLinkRequest(profileId, sessionId, origin, roomId)) }
     }
 
     fun confirmDeepLink() {
         val req = _state.value.pendingDeepLink ?: return
         _state.update { it.copy(pendingDeepLink = null) }
-        openWake(req.origin, req.profileId, req.sessionId)
+        if (req.roomId.isNotBlank()) openRoomWake(req.origin, req.roomId) else openWake(req.origin, req.profileId, req.sessionId)
     }
+
+    /** Room wake / deep link (A22.5): land on the room, switching host first when needed. */
+    fun openRoomWake(targetOrigin: String, roomId: String) {
+        val active = _state.value.origin
+        val target = targetOrigin.trim().trimEnd('/').ifBlank { active.orEmpty() }
+        if (active.isNullOrBlank() || (target.isNotBlank() && !HostClientPool.key(target).equals(HostClientPool.key(active)))) {
+            pendingRoomWake = target to roomId
+            if (target.isNotBlank()) connect(target)
+            return
+        }
+        chat.cancelTurn()
+        _state.update { it.copy(tab = MainTab.THREADS) }
+        rooms.openRoomById(roomId)
+    }
+
+    private var pendingRoomWake: Pair<String, String>? = null
 
     fun dismissDeepLink() {
         _state.update { it.copy(pendingDeepLink = null) }
@@ -318,6 +342,10 @@ class CompanionViewModel(
 
     fun selectTab(tab: MainTab) {
         _state.update { it.copy(tab = tab) }
+        if (tab == MainTab.CONSOLE) {
+            agents.refreshSessions()
+            if (_state.value.agentTools.isEmpty()) agents.refreshTools()
+        }
         when (tab) {
             // Pairing may have happened since the last fetch; the room list needs the credential.
             MainTab.THREADS -> {
@@ -469,11 +497,36 @@ class CompanionViewModel(
         rooms.openRoom(room)
     }
     fun toggleRoomCreate(open: Boolean) = rooms.toggleCreateSheet(open)
-    fun createRoom(title: String, participants: List<String>, maxRounds: Int) = rooms.createRoom(title, participants, maxRounds)
+    fun createRoom(spec: RoomCreateSpec) = rooms.createRoom(spec)
     fun deleteRoom(room: RoomRef) = rooms.deleteRoom(room)
     fun mentionRoom(glyph: String) = rooms.mention(glyph)
+    fun pauseRoom() = rooms.pause()
+    fun continueRoom(turns: Int = 6) = rooms.continueRoom(turns)
+    fun summarizeRoom(by: String = "") = rooms.summarize(by)
+    fun renameRoom(title: String) = rooms.rename(title)
+    fun setRoomPolicy(policy: RoomPolicySpec) = rooms.setPolicy(policy)
+    fun addRoomParticipant(id: String) = rooms.setParticipants(listOf(id), emptyList())
+    fun removeRoomParticipant(id: String) = rooms.setParticipants(emptyList(), listOf(id))
+    fun refreshPeers() = rooms.refreshPeers()
+    fun refreshAgentTools(force: Boolean = false) = agents.refreshTools(force)
+    fun refreshAgentSessions() = agents.refreshSessions()
+    fun startAgent(tool: String, cwd: String, prompt: String, mode: String = "pty", title: String = "") = agents.start(tool, cwd, prompt, title, mode)
+    fun agentSubmit(text: String) = agents.submit(text)
+    fun browseAgentDirs(path: String, hidden: Boolean = false) = agents.browseDirs(path, hidden)
+    fun agentApprove(decision: String) = agents.approve(decision)
+    fun openAgent(session: AgentSession) = agents.open(session)
+    fun closeAgent() = agents.close()
+    fun agentSendText(text: String, enter: Boolean = true) = agents.sendText(text, enter)
+    fun agentSendKey(key: String) = agents.sendKey(key)
+    fun killAgent(session: AgentSession? = null) = agents.kill(session)
+    fun forgetAgent(session: AgentSession) = agents.forget(session)
+    fun setAgentInput(value: String) = agents.setInput(value)
+    fun setAgentCols(cols: Int) = agents.setCols(cols)
+    fun toggleAgentNew(open: Boolean) = agents.toggleNew(open)
+    fun linkHost(gw: SavedGateway) = rooms.linkHost(gw)
+    fun unlinkPeer(name: String) = rooms.unlinkPeer(name)
     fun loadOlder() = chat.loadOlder()
-    fun respondApproval(decision: String) = chat.respondApproval(decision)
+    fun respondApproval(decision: String) = if (_state.value.inRoom) rooms.respondApproval(decision) else chat.respondApproval(decision)
     fun newThread() = chat.newThread()
     fun requestDelete(session: SessionRef) = chat.requestDelete(session)
     fun confirmDelete() = chat.confirmDelete()
@@ -661,7 +714,7 @@ class CompanionViewModel(
                 }
                 val sessions = SessionLists.normalize(
                     cache.readSessions(origin, active.id) {
-                        api.listSessions(origin, active.id)
+                        api.listSessions(origin, active.id, _state.value.showArchived)
                     },
                 )
                 _state.update {
@@ -686,6 +739,7 @@ class CompanionViewModel(
                 sync.startWatch(origin, active.id)
                 deviceNode.bind(origin)
                 rooms.refreshRooms()
+                rooms.refreshPeers()
                 sync.startWake()
                 sync.startFleetHealth()
                 host.refreshHostMetrics()
@@ -693,7 +747,10 @@ class CompanionViewModel(
                 host.loadCronJobs()
                 host.loadSavedGateways()
                 StayConnectedService.refresh(runtime)
-                pendingWake?.let { wake ->
+                pendingRoomWake?.let { (_, roomId) ->
+                    pendingRoomWake = null
+                    rooms.openRoomById(roomId)
+                } ?: pendingWake?.let { wake ->
                     pendingWake = null
                     openWake(wake.origin, wake.profile, wake.sessionId)
                 } ?: chat.newThread()
@@ -745,7 +802,7 @@ class CompanionViewModel(
             try {
                 val sessions = SessionLists.normalize(
                     cache.readSessions(origin, profileId) {
-                        client(origin).listSessions(origin, profileId)
+                        client(origin).listSessions(origin, profileId, _state.value.showArchived)
                     },
                 )
                 _state.update { state ->
@@ -758,7 +815,20 @@ class CompanionViewModel(
         }
     }
 
-    /** Re-fetch the sticky profile's session rail (threads RETRY). */
+    /** Rail order (A18.9). Persisted phone-wide; the list re-sorts in place. */
+    fun setThreadSort(sort: ThreadSort) {
+        sticky.threadSort = sort.name
+        _state.update { it.copy(threadSort = sort) }
+    }
+
+    /** ARCHIVED toggle (A18.12): archived rows need a different host query, so flip then refetch. */
+    fun setShowArchived(on: Boolean) {
+        sticky.showArchived = on
+        _state.update { it.copy(showArchived = on) }
+        reloadSessions()
+    }
+
+    /** Re-fetch the sticky profile's session rail (threads RETRY / refresh). */
     fun reloadSessions() {
         val origin = _state.value.origin ?: return
         val profileId = _state.value.activeProfileId ?: return
@@ -768,7 +838,7 @@ class CompanionViewModel(
             try {
                 val sessions = SessionLists.normalize(
                     cache.readSessions(origin, profileId) {
-                        client(origin).listSessions(origin, profileId)
+                        client(origin).listSessions(origin, profileId, _state.value.showArchived)
                     },
                 )
                 _state.update { state ->

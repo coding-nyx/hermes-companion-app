@@ -136,11 +136,13 @@ fun FetchRow(
     scanning: Boolean = true,
     padded: Boolean = true,
 ) {
+    // Caller modifier first: the outermost testTag wins, so `chat.loading` / `threads.loading`
+    // survive and `fetch.row` is only the fallback tag.
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .testTag("fetch.row")
-            .then(modifier),
+            .then(modifier)
+            .testTag("fetch.row"),
     ) {
         Row(
             modifier = Modifier.padding(
@@ -173,12 +175,13 @@ fun FetchPane(
     retryLabel: String? = null,
     onRetry: (() -> Unit)? = null,
 ) {
+    // Caller modifier first (weight + its own testTag); `fetch.pane` is the fallback tag.
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .then(modifier)
             .padding(CompanionSpace.Xl)
-            .testTag("fetch.pane")
-            .then(modifier),
+            .testTag("fetch.pane"),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {

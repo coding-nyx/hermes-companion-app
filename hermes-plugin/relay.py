@@ -22,6 +22,8 @@ try:
     from .drift import self_test
     from .rooms import RoomController, RoomError, RoomEvents, RoomStore
     from .rooms import default_store_path as default_rooms_path
+    from .peers import PeerStore, RemoteTurnService, default_peers_path
+    from .agents import AgentError, AgentSessions, default_store_path as default_agents_path, default_audit_path as default_agents_audit
     from .fs_explorer import list_dir_tree, read_file_content
     from .git_workspace import commit_git, get_git_branches, get_git_diff, get_git_status, stage_git_file
     from .host_metrics import collect_metrics
@@ -34,6 +36,8 @@ except ImportError:  # script/tests on sys.path
     from drift import self_test
     from rooms import RoomController, RoomError, RoomEvents, RoomStore
     from rooms import default_store_path as default_rooms_path
+    from peers import PeerStore, RemoteTurnService, default_peers_path
+    from agents import AgentError, AgentSessions, list_dirs, default_store_path as default_agents_path, default_audit_path as default_agents_audit
     from fs_explorer import list_dir_tree, read_file_content
     from git_workspace import commit_git, get_git_branches, get_git_diff, get_git_status, stage_git_file
     from host_metrics import collect_metrics
@@ -224,8 +228,12 @@ class RelayState:
         operator: Operator | None = None,
         media: MediaStore | None = None,
         rooms: RoomStore | None = None,
+        peers: PeerStore | None = None,
+        agents: AgentSessions | None = None,
     ):
         self.pairing = pairing or PairingStore()
+        # Coding-agent sessions (P23): tmux-backed, per-host tool discovery.
+        self.agents = agents or AgentSessions()
         self.tickets = tickets or TicketStore()
         self.operator = operator or Operator()
         self.media = media or MediaStore()
@@ -243,13 +251,50 @@ class RelayState:
         # Agent rooms (P21). Upstream is bound in make_server; unavailable in standalone mode.
         self.rooms = rooms or RoomStore()
         self.room_events = RoomEvents()
+        self.peers = peers or PeerStore()
         self.room_controller = RoomController(
             self.rooms,
             self.room_events,
             available=lambda: not standalone_enabled(),
             token_provider=self._dashboard_token,
+            peers=self.peers,
+            wake=self._publish_wake,
+        )
+        # Serving side of cross-host rooms: run one turn for a local profile on behalf of a peer.
+        self.remote_turns = RemoteTurnService(
+            upstream=self.room_controller.upstream,
+            ws_factory=self.room_controller.ws_factory,
+            token_provider=self._dashboard_token,
+            available=lambda: not standalone_enabled(),
+            chatq=self.room_controller.chatq,
         )
         self._dashboard_token_cache: str | None = None
+
+    def _publish_wake(self, room, kind: str, payload: dict) -> None:
+        """Room wake (A22.5): POST a small JSON ping to every paired phone's ntfy topic.
+        Only called when no phone is watching the room. Never carries transcript text."""
+        topics = sorted({d.wake_topic for d in self.pairing.devices.values() if d.wake_topic})
+        if not topics:
+            return
+        first = room.participants[0] if room.participants else ""
+        profile = first.split("@", 1)[0]
+        body = json.dumps({
+            "type": kind, "room_id": room.id, "session_id": room.id, "profile": profile,
+            "title": room.title[:80], **{k: v for k, v in payload.items() if isinstance(v, (str, int, float, bool))},
+        }).encode()
+
+        def _post(url: str) -> None:
+            import urllib.request
+            try:
+                req = urllib.request.Request(url, data=body, method="POST",
+                                             headers={"Content-Type": "application/json", "Title": f"room {room.title[:40]}",
+                                                      "Tags": "speech_balloon", "Priority": "3"})
+                urllib.request.urlopen(req, timeout=6).read()
+            except Exception as exc:
+                print(f"companion relay wake publish failed {url}: {exc}", flush=True)
+
+        for t in topics:
+            threading.Thread(target=_post, args=(t,), name="room-wake", daemon=True).start()
 
     def _dashboard_token(self) -> str | None:
         """Loopback dashboards inject an ephemeral token into the SPA; adopt it for upstream ws."""
@@ -486,6 +531,9 @@ class CompanionHandler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         self._dispatch()
 
+    def do_PATCH(self):
+        self._dispatch()
+
     def do_OPTIONS(self):
         self._dispatch()
 
@@ -561,9 +609,16 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 "warnings": [],
             }
         payload["upstream_url"] = f"http://{host}:{port}"
-        payload["rooms"] = "unavailable_standalone" if standalone_enabled() else (
-            "ok" if upstream == "reachable" else "upstream_down"
-        )
+        ctl_mode = self.state.room_controller.mode()
+        if standalone_enabled():
+            payload["rooms"] = "ok_text_only" if ctl_mode == "ok_text_only" else "unavailable_standalone"
+        else:
+            payload["rooms"] = "ok" if upstream == "reachable" else ("ok_text_only" if self.state.room_controller.chatq.available() else "upstream_down")
+        payload["peers"] = [pr["name"] for pr in self.state.peers.public()["peers"]]
+        try:
+            payload["agents"] = self.state.agents.health()
+        except Exception:
+            payload["agents"] = {"tmux": False, "tools": [], "live": 0}
         return self._json(payload)
 
     def _media_put(self):
@@ -756,6 +811,9 @@ class CompanionHandler(BaseHTTPRequestHandler):
         if path in ("/companion/host/metrics", "/companion/host/status") and self._operator_ok():
             return True
         header = self.headers.get("Authorization") or ""
+        if path.startswith("/companion/peers/turn"):
+            # Relay-to-relay: only a granted peer credential may ask this host for a turn.
+            return self.state.peers.authorized(header) is not None
         scheme, _, value = header.partition(" ")
         if scheme.lower() != "companion" or ":" not in value:
             return False
@@ -772,6 +830,20 @@ class CompanionHandler(BaseHTTPRequestHandler):
             try:
                 return self._rooms(path)
             except RoomError as extra:
+                return self._json({"error": extra.code, "message": extra.message}, extra.status)
+            except Exception:
+                return self._relay_failed(path)
+        if path.startswith("/companion/peers"):
+            try:
+                return self._peers(path)
+            except RoomError as extra:
+                return self._json({"error": extra.code, "message": extra.message}, extra.status)
+            except Exception:
+                return self._relay_failed(path)
+        if path.startswith("/companion/agents"):
+            try:
+                return self._agents(path)
+            except AgentError as extra:
                 return self._json({"error": extra.code, "message": extra.message}, extra.status)
             except Exception:
                 return self._relay_failed(path)
@@ -808,6 +880,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
                         manufacturer=body.get("manufacturer"),
                         os_version=body.get("os_version"),
                         extra_protected=extras,
+                        wake_topic=body.get("wake_topic") if isinstance(body.get("wake_topic"), str) else None,
                     )
                 except PairingError:
                     pass
@@ -817,6 +890,11 @@ class CompanionHandler(BaseHTTPRequestHandler):
             if path == "/companion/device/revoke" and self.command == "POST":
                 body = self._read_json()
                 self.state.pairing.revoke(str(body.get("device_id") or ""))
+                # A revoked phone must not leave coding-agent sessions running (A23.5).
+                try:
+                    self.state.agents.kill_all("device revoked")
+                except Exception:
+                    pass
                 return self._json({"ok": True})
             if path == "/companion/device/default" and self.command == "POST":
                 body = self._read_json()
@@ -950,13 +1028,21 @@ class CompanionHandler(BaseHTTPRequestHandler):
         parts = [p for p in path.split("/") if p]  # companion, rooms, <id>, <action>
         if path == "/companion/rooms/events":
             return self._rooms_events_ws()
+        if path == "/companion/rooms/guard" and self.command == "GET":
+            qs = parse_qs(urlparse(self.path).query)
+            return self._json(ctl.guard((qs.get("profile") or [""])[0]))
         if len(parts) == 2:
             if self.command == "GET":
                 return self._json({"rooms": [ctl.public_room(r) for r in store.list()]})
             if self.command == "POST":
-                if not ctl.available():
-                    raise RoomError("rooms_unavailable", "rooms need the dashboard upstream (proxy mode)", 503)
+                if ctl.mode() == "unavailable":
+                    raise RoomError("rooms_unavailable", "rooms need the dashboard upstream or the hermes CLI", 503)
                 body = self._read_json()
+                for pid in body.get("participants") or []:
+                    if "@" in str(pid):
+                        host = str(pid).split("@", 1)[1]
+                        if host not in self.state.peers.peers:
+                            raise RoomError("peer_unknown", f"no peer link for {host}; link the hosts first", 409)
                 room = store.create(
                     str(body.get("title") or ""),
                     [str(p) for p in (body.get("participants") or []) if p],
@@ -969,6 +1055,11 @@ class CompanionHandler(BaseHTTPRequestHandler):
         action = parts[3] if len(parts) > 3 else ""
         if not action:
             if self.command == "GET":
+                return self._json({"room": ctl.public_room(room)})
+            if self.command == "PATCH":
+                body = self._read_json()
+                room = store.update(room.id, title=body.get("title"), policy=body.get("policy") if isinstance(body.get("policy"), dict) else None)
+                self.state.room_events.emit({"type": "room.updated", "room_id": room.id, "room": ctl.public_room(room)})
                 return self._json({"room": ctl.public_room(room)})
             if self.command == "DELETE":
                 ctl.interrupt(room.id)
@@ -988,15 +1079,281 @@ class CompanionHandler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "seq": msg.seq, "message": msg.public()}, 202)
         if action == "interrupt" and self.command == "POST":
             return self._json({"ok": True, "interrupted": ctl.interrupt(room.id)})
+        if action == "pause" and self.command == "POST":
+            return self._json({"ok": True, "pausing": ctl.pause(room.id), "room": ctl.public_room(room)})
+        if action == "continue" and self.command == "POST":
+            body = self._read_json()
+            try:
+                extra = int(body.get("turns") or 6)
+            except (TypeError, ValueError):
+                extra = 6
+            return self._json({"ok": True, "room": ctl.resume(room.id, extra)}, 202)
+        if action == "summarize" and self.command == "POST":
+            body = self._read_json()
+            return self._json({"ok": True, "room": ctl.summarize(room.id, str(body.get("by") or "") or None)}, 202)
+        if action == "approval" and self.command == "POST":
+            body = self._read_json()
+            ok = ctl.respond_approval(room.id, str(body.get("request_id") or ""), str(body.get("decision") or body.get("choice") or ""))
+            if not ok:
+                raise RoomError("no_pending_approval", "nothing to approve in this room", 409)
+            return self._json({"ok": True})
         if action == "participants" and self.command == "POST":
             body = self._read_json()
+            for pid in body.get("add") or []:
+                if "@" in str(pid) and str(pid).split("@", 1)[1] not in self.state.peers.peers:
+                    raise RoomError("peer_unknown", f"no peer link for {str(pid).split('@', 1)[1]}", 409)
             room = store.set_participants(
                 room.id,
                 [str(p) for p in (body.get("add") or [])],
                 [str(p) for p in (body.get("remove") or [])],
             )
+            self.state.room_events.emit({"type": "room.updated", "room_id": room.id, "room": ctl.public_room(room)})
             return self._json({"room": ctl.public_room(room)})
         return self._json({"error": "not_found"}, 404)
+
+    def _peers(self, path: str):
+        """Peer links (A22.11): grant / add / list / remove, plus the remote-turn service."""
+        peers = self.state.peers
+        parts = [p for p in path.split("/") if p]  # companion, peers, ...
+        if len(parts) == 2:
+            if self.command == "GET":
+                return self._json(peers.public())
+            if self.command == "POST":
+                body = self._read_json()
+                peer = peers.add(str(body.get("name") or ""), str(body.get("origin") or ""),
+                                 str(body.get("host_id") or ""), str(body.get("secret") or ""))
+                return self._json({"peer": peer.public()}, 201)
+            return self._json({"error": "method_not_allowed"}, 405)
+        if parts[2] == "grant" and self.command == "POST":
+            body = self._read_json()
+            g = peers.grant(str(body.get("name") or "peer"))
+            # The secret is returned exactly once; the phone carries it to the other relay.
+            return self._json({"grant": {**g.public(), "secret": g.secret}}, 201)
+        if parts[2] == "grants" and len(parts) == 4 and self.command == "DELETE":
+            peers.revoke_grant(parts[3])
+            return self._json({"ok": True})
+        if parts[2] == "turn":
+            if len(parts) == 3 and self.command == "POST":
+                return self._peer_turn_stream()
+            if len(parts) == 5 and self.command == "POST":
+                turn_id, action = parts[3], parts[4]
+                body = self._read_json()
+                if action == "approval":
+                    ok = self.state.remote_turns.approve(turn_id, str(body.get("request_id") or ""), str(body.get("decision") or ""))
+                    return self._json({"ok": ok}, 200 if ok else 409)
+                if action == "interrupt":
+                    return self._json({"ok": self.state.remote_turns.interrupt(turn_id)})
+            return self._json({"error": "not_found"}, 404)
+        if len(parts) == 3 and self.command == "DELETE":
+            peers.remove(parts[2])
+            return self._json({"ok": True})
+        if len(parts) == 3 and self.command == "GET":
+            peer = peers.get(parts[2])
+            try:
+                from .peers import PeerClient
+            except ImportError:
+                from peers import PeerClient
+            try:
+                health = PeerClient(peer).health()
+                return self._json({"peer": peer.public(), "reachable": True, "health": health})
+            except Exception as exc:
+                return self._json({"peer": peer.public(), "reachable": False, "error": str(exc)[:120]})
+        return self._json({"error": "not_found"}, 404)
+
+    def _agents(self, path: str):
+        """Coding-agent sessions (P23): tools, sessions, pane snapshots, keys, kill, live stream."""
+        ag = self.state.agents
+        parts = [p for p in path.split("/") if p]  # companion, agents, ...
+        qs = parse_qs(urlparse(self.path).query)
+        if len(parts) == 3 and parts[2] == "tools" and self.command == "GET":
+            refresh = (qs.get("refresh") or ["0"])[0] not in ("", "0", "false")
+            return self._json({"tools": ag.discovery.probe(refresh=refresh), "tmux": bool(ag.discovery.tmux()),
+                               "default_cwd": workspace_dir()})
+        if len(parts) == 3 and parts[2] == "dirs" and self.command == "GET":
+            hidden = (qs.get("hidden") or ["0"])[0] not in ("", "0", "false")
+            listing = list_dirs((qs.get("path") or [""])[0] or None, hidden=hidden)
+            listing["recent"] = ag.recent_cwds()
+            return self._json(listing)
+        if len(parts) == 3 and parts[2] == "events":
+            return self._agents_events_ws()
+        if len(parts) == 3 and parts[2] == "sessions":
+            if self.command == "GET":
+                return self._json({"sessions": [s.public() for s in ag.list()]})
+            if self.command == "POST":
+                body = self._read_json()
+                s = ag.start(
+                    str(body.get("tool") or "shell"), str(body.get("mode") or "pty"), body.get("cwd"),
+                    str(body.get("prompt") or ""), [str(a) for a in (body.get("args") or []) if a],
+                    str(body.get("title") or ""), int(body.get("cols") or 0) or 100, int(body.get("rows") or 0) or 40,
+                )
+                return self._json({"session": s.public()}, 201)
+            return self._json({"error": "method_not_allowed"}, 405)
+        if len(parts) >= 4 and parts[2] == "sessions":
+            sid = parts[3]
+            action = parts[4] if len(parts) > 4 else ""
+            if not action:
+                if self.command == "GET":
+                    return self._json({"session": ag.get(sid).public()})
+                if self.command == "DELETE":
+                    forget = (qs.get("forget") or ["0"])[0] not in ("", "0", "false")
+                    if forget:
+                        ag.forget(sid)
+                        return self._json({"ok": True})
+                    return self._json({"session": ag.kill(sid).public()})
+                return self._json({"error": "method_not_allowed"}, 405)
+            if action == "pane" and self.command == "GET":
+                cols = int((qs.get("cols") or ["0"])[0] or 0) or None
+                rows = int((qs.get("rows") or ["0"])[0] or 0) or None
+                return self._json(ag.pane(sid, cols, rows))
+            if action == "keys" and self.command == "POST":
+                body = self._read_json()
+                keys = body.get("keys") if isinstance(body.get("keys"), list) else []
+                s = ag.keys(sid, str(body.get("text") or ""), str(body.get("key") or ""), [str(k) for k in keys])
+                return self._json({"ok": True, "session": s.public()}, 202)
+            if action == "interrupt" and self.command == "POST":
+                s = ag.keys(sid, "", "c-c")
+                return self._json({"ok": True, "session": s.public()}, 202)
+            if action == "kill" and self.command == "POST":
+                return self._json({"session": ag.kill(sid).public()})
+            if action == "prompt" and self.command == "POST":
+                body = self._read_json()
+                return self._json({"ok": True, "session": ag.prompt(sid, str(body.get("text") or "")).public()}, 202)
+            if action == "approval" and self.command == "POST":
+                body = self._read_json()
+                ok = ag.approve(sid, str(body.get("request_id") or ""), str(body.get("decision") or body.get("choice") or ""))
+                if not ok:
+                    raise AgentError("no_pending_approval", "nothing to approve in this session", 409)
+                return self._json({"ok": True})
+            if action == "transcript" and self.command == "GET":
+                after = int((qs.get("after") or ["0"])[0] or 0)
+                return self._json({"events": ag.transcript(sid, after), "approval": ag.pending_approval(sid), "session": ag.get(sid).public()})
+        return self._json({"error": "not_found"}, 404)
+
+    def _agents_events_ws(self):
+        """Server→phone stream for one session: `agent.pane` whenever the screen changes (≤4 Hz),
+        `agent.status` on transitions, `agent.heartbeat` every 15 s of silence."""
+        if self.headers.get("Upgrade", "").lower() != "websocket":
+            return self._json({"error": "upgrade_required"}, 426)
+        key = self.headers.get("Sec-WebSocket-Key", "")
+        if not key:
+            return self._json({"error": "missing_ws_key"}, 400)
+        qs = parse_qs(urlparse(self.path).query)
+        sid = (qs.get("session_id") or [""])[0]
+        try:
+            self.state.agents.get(sid)
+        except AgentError as exc:
+            return self._json({"error": exc.code}, exc.status)
+        try:
+            cols = int((qs.get("cols") or ["0"])[0] or 0) or None
+            rows = int((qs.get("rows") or ["0"])[0] or 0) or None
+        except ValueError:
+            cols, rows = None, None
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", _ws_accept(key))
+        self.end_headers()
+        alive = threading.Event()
+        alive.set()
+
+        def _reader():
+            try:
+                while alive.is_set():
+                    if _ws_recv(self.rfile, self.wfile) is None:
+                        break
+            except OSError:
+                pass
+            finally:
+                alive.clear()
+
+        threading.Thread(target=_reader, name="agent-events-reader", daemon=True).start()
+        session = self.state.agents.get(sid)
+        if session.mode == "structured":
+            return self._agents_structured_ws(sid, alive)
+        last_ansi, last_status, quiet_since = None, None, time.monotonic()
+        try:
+            while alive.is_set():
+                try:
+                    snap = self.state.agents.pane(sid, cols, rows)
+                except AgentError as exc:
+                    self.wfile.write(_ws_text(json.dumps({"type": "agent.error", "error": exc.code})))
+                    self.wfile.flush()
+                    break
+                status = snap["session"]["status"]
+                sent = False
+                if snap["ansi"] != last_ansi:
+                    self.wfile.write(_ws_text(json.dumps({"type": "agent.pane", "session_id": sid, "ansi": snap["ansi"],
+                                                          "cursor": snap["cursor"], "cols": snap["cols"], "rows": snap["rows"]})))
+                    last_ansi, sent = snap["ansi"], True
+                if status != last_status:
+                    self.wfile.write(_ws_text(json.dumps({"type": "agent.status", "session_id": sid, "session": snap["session"]})))
+                    last_status, sent = status, True
+                if sent:
+                    self.wfile.flush()
+                    quiet_since = time.monotonic()
+                elif time.monotonic() - quiet_since > 15:
+                    self.wfile.write(_ws_text(json.dumps({"type": "agent.heartbeat"})))
+                    self.wfile.flush()
+                    quiet_since = time.monotonic()
+                if status == "exited":
+                    break
+                time.sleep(0.25)
+        except OSError:
+            pass
+        finally:
+            alive.clear()
+        self.close_connection = True
+        return None
+
+    def _agents_structured_ws(self, sid: str, alive: threading.Event):
+        """Structured session stream: replay the transcript so far, then live `agent.*` events."""
+        ag = self.state.agents
+        sub = ag.subscribe(sid)
+        try:
+            ready = {"type": "agent.ready.replay", "session_id": sid, "session": ag.get(sid).public(),
+                     "events": ag.transcript(sid), "approval": ag.pending_approval(sid)}
+            self.wfile.write(_ws_text(json.dumps(ready)))
+            self.wfile.flush()
+            while alive.is_set():
+                try:
+                    event = sub.get(timeout=15.0)
+                except queue.Empty:
+                    event = {"type": "agent.heartbeat"}
+                self.wfile.write(_ws_text(json.dumps(event)))
+                self.wfile.flush()
+                if event.get("type") == "agent.exit":
+                    break
+        except OSError:
+            pass
+        finally:
+            alive.clear()
+            ag.unsubscribe(sid, sub)
+        self.close_connection = True
+        return None
+
+    def _peer_turn_stream(self):
+        """NDJSON stream of one remote turn; the connection closes when the turn ends."""
+        body = self._read_json()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        lock = threading.Lock()
+
+        def write(ev: dict) -> None:
+            with lock:
+                try:
+                    self.wfile.write((json.dumps(ev) + "\n").encode())
+                    self.wfile.flush()
+                except OSError:
+                    pass
+
+        try:
+            self.state.remote_turns.run(body, write)
+        finally:
+            self.close_connection = True
+        return None
 
     def _rooms_events_ws(self):
         """Server→phone stream of room.* events. Optional ?room_id= narrows to one room."""
@@ -1029,7 +1386,14 @@ class CompanionHandler(BaseHTTPRequestHandler):
 
         threading.Thread(target=_reader, name="room-events-reader", daemon=True).start()
         try:
-            self.wfile.write(_ws_text(json.dumps({"type": "room.ready", "room_id": room_id})))
+            ready = {"type": "room.ready", "room_id": room_id}
+            if room_id:
+                try:
+                    ready["seq"] = self.state.rooms.get(room_id).seq
+                    ready["room"] = self.state.room_controller.public_room(self.state.rooms.get(room_id))
+                except RoomError:
+                    pass
+            self.wfile.write(_ws_text(json.dumps(ready)))
             self.wfile.flush()
             while alive.is_set():
                 try:
@@ -1191,6 +1555,7 @@ def make_server(
     CompanionHandler.state = state or RelayState()
     CompanionHandler.upstream = parse_upstream(upstream)
     CompanionHandler.state.room_controller.upstream = CompanionHandler.upstream
+    CompanionHandler.state.remote_turns.upstream = CompanionHandler.upstream
     return httpd
 
 
@@ -1198,6 +1563,8 @@ def persistent_state() -> RelayState:
     return RelayState(
         pairing=PairingStore(path=default_store_path()),
         rooms=RoomStore(path=default_rooms_path()),
+        peers=PeerStore(path=default_peers_path()),
+        agents=AgentSessions(path=default_agents_path(), audit_path=default_agents_audit()),
     )
 
 
@@ -1223,8 +1590,24 @@ def serve_forever(bind: str = DEFAULT_BIND, upstream: str = DEFAULT_UPSTREAM) ->
     )
     if report.get("warning"):
         print(f"companion relay warning: {report['warning']}", flush=True)
-    httpd = make_server(bind, upstream, persistent_state())
-    httpd.serve_forever()
+    state = persistent_state()
+    httpd = make_server(bind, upstream, state)
+
+    def _stop(signum, _frame):  # pragma: no cover - signal path
+        raise SystemExit(128 + signum)
+
+    try:
+        import signal as _signal
+        _signal.signal(_signal.SIGTERM, _stop)
+    except (ValueError, OSError):  # not the main thread / unsupported
+        pass
+    try:
+        httpd.serve_forever()
+    finally:
+        try:
+            state.agents.shutdown()
+        except Exception:
+            pass
 
 
 def start_background(

@@ -89,6 +89,24 @@ class StickyStore(context: Context) {
     fun notifStreamTargetOrigin(): String? =
         notifStreamOrigin ?: lastGoodOrigin ?: origin
 
+    /** Thread rail order (A18.9): `CREATED` (default) / `ACTIVE` / `TITLE`. Phone-wide; parsed leniently by the domain. */
+    var threadSort: String?
+        get() = prefs.getString(KEY_THREAD_SORT, null)?.takeIf { it.isNotBlank() }
+        set(value) { prefs.edit().putString(KEY_THREAD_SORT, value?.trim()?.ifBlank { null }).apply() }
+
+    /** Rail shows archived threads too (A18.12). Phone-wide; changes the host fetch, so it is not screen-local. */
+    var showArchived: Boolean
+        get() = prefs.getBoolean(KEY_SHOW_ARCHIVED, false)
+        set(value) { prefs.edit().putBoolean(KEY_SHOW_ARCHIVED, value).apply() }
+
+    /** Last transcript seq the operator has seen per room (A22.2 unread), keyed `<hostKey>/<roomId>`. */
+    fun roomSeen(origin: String, roomId: String): Int =
+        prefs.getInt(KEY_ROOM_SEEN + "." + HostKeys.of(origin) + "/" + roomId, 0)
+
+    fun setRoomSeen(origin: String, roomId: String, seq: Int) {
+        prefs.edit().putInt(KEY_ROOM_SEEN + "." + HostKeys.of(origin) + "/" + roomId, seq).apply()
+    }
+
     /** User-added protected packages (exact ids or `prefix.*`). Phone-wide safety denylist (built-in list is empty). */
     var protectedPackages: Set<String>
         get() = prefs.getStringSet(KEY_PROTECTED, emptySet()).orEmpty().toSet()
@@ -96,6 +114,9 @@ class StickyStore(context: Context) {
 
     companion object {
         private const val KEY_PROTECTED = "protected_packages"
+        private const val KEY_THREAD_SORT = "thread_sort"
+        private const val KEY_SHOW_ARCHIVED = "thread_show_archived"
+        private const val KEY_ROOM_SEEN = "room_seen"
         private const val KEY_ORIGIN = "origin"
         private const val KEY_LAST_GOOD = "last_good_origin"
         private const val KEY_PROFILE = "profile_id"

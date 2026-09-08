@@ -17,7 +17,13 @@ else
 fi
 echo "copied plugin -> $DEST"
 if command -v hermes >/dev/null 2>&1; then
-  hermes plugins enable hermes-companion
+  # Newer hermes asks whether the plugin may override built-in tools; we never do, so answer
+  # without a prompt (and never block a non-interactive install on the question).
+  if hermes plugins enable --help 2>/dev/null | grep -q -- "--no-allow-tool-override"; then
+    hermes plugins enable --no-allow-tool-override hermes-companion </dev/null
+  else
+    hermes plugins enable hermes-companion </dev/null
+  fi
   echo "enabled hermes-companion"
 else
   echo "hermes CLI not on PATH — later run: hermes plugins enable hermes-companion"

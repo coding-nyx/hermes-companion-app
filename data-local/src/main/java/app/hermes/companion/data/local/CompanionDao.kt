@@ -9,8 +9,10 @@ import androidx.room.Transaction
 @Dao
 abstract class CompanionDao {
     @Query(
+        // Same keys and direction as SessionLists.comparator(CREATED) so cache → remote never flips rows.
         "SELECT * FROM sessions WHERE origin = :origin AND profileId = :profileId " +
-            "ORDER BY updatedAtEpochMs DESC, id DESC",
+            "ORDER BY CASE WHEN createdAtEpochMs > 0 THEN createdAtEpochMs ELSE updatedAtEpochMs END DESC, " +
+            "updatedAtEpochMs DESC, id DESC",
     )
     abstract suspend fun sessions(origin: String, profileId: String): List<SessionEntity>
 

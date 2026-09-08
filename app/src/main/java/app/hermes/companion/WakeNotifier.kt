@@ -26,7 +26,7 @@ object WakeNotifier {
             (ping.origin + ping.sessionId).hashCode(),
             Intent(context, MainActivity::class.java)
                 .setAction(Intent.ACTION_VIEW)
-                .setData(Uri.parse(WakePolicy.deepLink(ping.sessionId, ping.profile, ping.origin)))
+                .setData(Uri.parse(WakePolicy.deepLink(ping.sessionId, ping.profile, ping.origin, ping.roomId)))
                 .putExtra(MainActivity.EXTRA_NONCE, (context.applicationContext as CompanionApp).launchNonce)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -36,8 +36,8 @@ object WakeNotifier {
             (ping.origin + ping.sessionId).hashCode(),
             NotificationCompat.Builder(context, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle(if (hostName.isBlank()) ping.type else "${ping.type} · $hostName")
-                .setContentText("${ping.profile} · ${ping.sessionId}")
+                .setContentTitle(if (hostName.isBlank()) WakePolicy.label(ping.type) else "${WakePolicy.label(ping.type)} · $hostName")
+                .setContentText(if (ping.roomId.isNotBlank()) "room · ${ping.title.ifBlank { ping.roomId }}" else "${ping.profile} · ${ping.sessionId}")
                 .setContentIntent(open)
                 .setAutoCancel(true)
                 .setGroup(ping.origin.ifBlank { "hermes" })

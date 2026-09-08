@@ -150,12 +150,106 @@ class StandaloneOperatorTests(unittest.TestCase):
         con.close()
         with patch.dict(os.environ, {"HERMES_HOME": str(home)}, clear=False):
             profiles = self._json("GET", "/api/profiles")["profiles"]
-            self.assertEqual([p["id"] for p in profiles], ["bishop-home"])
-            sessions = self._json("GET", "/api/sessions?profile=bishop-home")["sessions"]
+            # HERMES_HOME itself is Hermes' "default" profile, whatever the directory is called.
+            self.assertEqual([p["id"] for p in profiles], ["default"])
+            sessions = self._json("GET", "/api/sessions?profile=default")["sessions"]
             self.assertEqual(sessions[0]["id"], "20260907_sess")
             self.assertEqual(sessions[0]["title"], "bishop online")
-            msgs = self._json("GET", "/api/sessions/20260907_sess/messages?profile=bishop-home")["messages"]
+            msgs = self._json("GET", "/api/sessions/20260907_sess/messages?profile=default")["messages"]
             self.assertEqual(msgs[0]["content"], "hello bishop")
+
+    def test_list_sessions_newest_started_first_with_started_at_and_limit(self):
+        first = self._json("POST", "/api/sessions?profile=coder", {"title": "first"}, status=201)["session"]
+        op = self.relay.RequestHandlerClass.state.operator
+        with op.lock:
+            # Force distinct, out-of-order creation instants (creation is ms-resolution).
+            for s in op.data["sessions"]:
+                if s["id"] == first["id"]:
+                    s["started_at"] = s["updated_at"] = 1_700_000_000_000
+        second = self._json("POST", "/api/sessions?profile=coder", {"title": "second"}, status=201)["session"]
+        self.assertIn("started_at", second)
+        rows = self._json("GET", "/api/sessions?profile=coder")["sessions"]
+        ids = [r["id"] for r in rows]
+        self.assertLess(ids.index(second["id"]), ids.index(first["id"]))
+        self.assertTrue(all("started_at" in r for r in rows))
+        page = self._json("GET", "/api/sessions?profile=coder&limit=1")
+        self.assertEqual([second["id"]], [r["id"] for r in page["sessions"]])
+        self.assertEqual(page["total"], len(rows))
+        nxt = self._json("GET", "/api/sessions?profile=coder&limit=1&offset=1")["sessions"]
+        self.assertEqual([first["id"]], [r["id"] for r in nxt])
+
+    def test_state_db_list_excludes_archived_before_limit_and_orders_by_started(self):
+        home = Path(self.tmp.name) / "arch-home"
+        home.mkdir()
+        (home / "config.yaml").write_text("model: local\n", encoding="utf-8")
+        con = sqlite3.connect(home / "state.db")
+        con.execute("CREATE TABLE sessions (id TEXT, title TEXT, started_at REAL, last_activity_at REAL, archived INTEGER, hidden INTEGER)")
+        rows = [("s-old", "old", 1788000000.0, 1788900000.0, 0, 0),
+                ("s-new", "new", 1788800000.0, 1788800000.0, 0, 0)]
+        rows += [(f"s-arch-{i}", "archived", 1788850000.0 + i, 1788850000.0 + i, 1, 0) for i in range(5)]
+        rows += [("s-hidden", "hidden", 1788860000.0, 1788860000.0, 0, 1)]
+        con.executemany("INSERT INTO sessions VALUES (?,?,?,?,?,?)", rows)
+        con.commit()
+        con.close()
+        with patch.dict(os.environ, {"HERMES_HOME": str(home)}, clear=False):
+            page = self._json("GET", "/api/sessions?profile=default&limit=2")
+            sessions = page["sessions"]
+            # Archived rows were filtered in SQL, so the 2-row page still holds both live threads,
+            # newest *started* first even though s-old has the later activity.
+            self.assertEqual([s["id"] for s in sessions], ["s-new", "s-old"])
+            self.assertEqual(page["total"], 2)
+            self.assertEqual(self._json("GET", "/api/sessions?profile=default&limit=1&offset=1")["sessions"][0]["id"], "s-old")
+            # ARCHIVED toggle: archived rows come back flagged, hidden rows never do.
+            full = self._json("GET", "/api/sessions?profile=default&archived=include")
+            self.assertEqual(full["total"], 7)
+            ids = [s["id"] for s in full["sessions"]]
+            self.assertNotIn("s-hidden", ids)
+            self.assertEqual(ids[:5], [f"s-arch-{i}" for i in range(4, -1, -1)])
+            self.assertTrue(all(s["archived"] for s in full["sessions"] if s["id"].startswith("s-arch")))
+            self.assertFalse(next(s for s in full["sessions"] if s["id"] == "s-new")["archived"])
+            self.assertEqual(sessions[0]["started_at"], 1788800000000)
+            self.assertEqual(sessions[1]["updated_at"], 1788900000000)
+
+    def test_root_profile_listed_as_default_next_to_named_profiles(self):
+        home = Path(self.tmp.name) / "mac-home"
+        (home / "profiles" / "coder").mkdir(parents=True)
+        (home / "config.yaml").write_text("model: MiniMax-M2.7\n", encoding="utf-8")
+        (home / "profiles" / "coder" / "config.yaml").write_text("model: gpt-5\n", encoding="utf-8")
+        for d, sid in ((home, "root-sess"), (home / "profiles" / "coder", "coder-sess")):
+            con = sqlite3.connect(d / "state.db")
+            con.execute("CREATE TABLE sessions (id TEXT, title TEXT, started_at REAL)")
+            con.execute("INSERT INTO sessions VALUES (?,?,?)", (sid, sid, 1788770000.0))
+            con.commit()
+            con.close()
+        with patch.dict(os.environ, {"HERMES_HOME": str(home)}, clear=False):
+            profiles = self._json("GET", "/api/profiles")["profiles"]
+            self.assertEqual([p["id"] for p in profiles], ["default", "coder"])
+            self.assertEqual(profiles[0]["model"], "MiniMax-M2.7")
+            root = self._json("GET", "/api/sessions?profile=default")["sessions"]
+            self.assertEqual([s["id"] for s in root], ["root-sess"])
+            coder = self._json("GET", "/api/sessions?profile=coder")["sessions"]
+            self.assertEqual([s["id"] for s in coder], ["coder-sess"])
+
+    def test_relay_started_inside_a_named_profile_still_lists_root_and_siblings(self):
+        # hub-11 runs the relay with HERMES_HOME=<root>/profiles/bishop.
+        root = Path(self.tmp.name) / "hub-home"
+        for d in (root, root / "profiles" / "bishop", root / "profiles" / "ash"):
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "config.yaml").write_text(f"model: {d.name}\n", encoding="utf-8")
+        with patch.dict(os.environ, {"HERMES_HOME": str(root / "profiles" / "bishop")}, clear=False):
+            profiles = self._json("GET", "/api/profiles")["profiles"]
+            self.assertEqual([p["id"] for p in profiles], ["default", "ash", "bishop"])
+            self.assertEqual(profiles[0]["model"], "hub-home")
+            self.assertEqual(profiles[2]["model"], "bishop")
+
+    def test_named_default_profile_dir_wins_over_root(self):
+        home = Path(self.tmp.name) / "lab-home"
+        (home / "profiles" / "default").mkdir(parents=True)
+        (home / "config.yaml").write_text("model: root\n", encoding="utf-8")
+        (home / "profiles" / "default" / "config.yaml").write_text("model: named\n", encoding="utf-8")
+        with patch.dict(os.environ, {"HERMES_HOME": str(home)}, clear=False):
+            profiles = self._json("GET", "/api/profiles")["profiles"]
+            self.assertEqual([(p["id"], p["model"]) for p in profiles], [("default", "named")])
 
     def test_list_sessions_titles_from_first_user_message(self):
         created = self._json("POST", "/api/sessions?profile=coder", {}, status=201)["session"]
@@ -179,8 +273,8 @@ class StandaloneOperatorTests(unittest.TestCase):
         con.close()
         with patch.dict(os.environ, {"HERMES_HOME": str(home)}, clear=False):
             profiles = self._json("GET", "/api/profiles")["profiles"]
-            self.assertEqual([p["id"] for p in profiles], ["sparse-home"])
-            sessions = self._json("GET", "/api/sessions?profile=sparse-home")["sessions"]
+            self.assertEqual([p["id"] for p in profiles], ["default"])
+            sessions = self._json("GET", "/api/sessions?profile=default")["sessions"]
             self.assertEqual(sessions[0]["id"], "sess-sparse")
             self.assertEqual(sessions[0]["title"], "real work")
 

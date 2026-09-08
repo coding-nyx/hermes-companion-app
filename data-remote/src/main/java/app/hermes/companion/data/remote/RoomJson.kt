@@ -1,6 +1,8 @@
 package app.hermes.companion.data.remote
 
+import app.hermes.companion.model.ApprovalPrompt
 import app.hermes.companion.model.ChatBlock
+import app.hermes.companion.model.PeerLink
 import app.hermes.companion.model.ChatBlockKind
 import app.hermes.companion.model.ChatEvent
 import app.hermes.companion.model.ChatMessage
@@ -30,21 +32,57 @@ internal object RoomJson {
         val parts = obj.arr("participants")?.mapNotNull { el ->
             val p = el as? JsonObject ?: return@mapNotNull null
             val profile = p.str("profile")
-            if (profile.isBlank()) null else RoomParticipant(profile, p.str("glyph").ifBlank { profile.take(3).uppercase() })
+            if (profile.isBlank()) null
+            else RoomParticipant(profile, p.str("glyph").ifBlank { profile.take(3).uppercase() }, p.str("host").ifBlank { null })
         }.orEmpty()
         val updated = obj?.get("updated_at")?.jsonPrimitive?.doubleOrNull ?: 0.0
+        val policy = obj.obj("policy")
+        val maxTurns = policy.int("max_turns", 12)
         return RoomRef(
             id = id,
             title = obj.str("title").ifBlank { parts.joinToString(" + ") { it.glyph } },
             participants = parts,
-            maxRounds = obj.obj("policy").int("max_rounds", 2),
+            maxRounds = policy.int("max_rounds", 2),
             seq = obj.int("seq"),
             messageCount = obj.int("message_count"),
             busy = obj.bool("busy"),
             speaking = obj.str("speaking").ifBlank { null },
             updatedAtEpochMs = (updated * 1000).toLong(),
             lastText = obj.obj("last").str("text"),
+            lastSpeaker = obj.obj("last").str("speaker"),
+            mode = obj.str("mode").ifBlank { policy.str("mode") }.ifBlank { "converse" },
+            state = obj.str("state").ifBlank { if (obj.bool("busy")) "running" else "idle" },
+            pauseReason = obj.str("pause_reason"),
+            turnsUsed = obj.int("turns_used"),
+            maxTurns = maxTurns,
+            budget = obj.int("budget", maxTurns),
+            hands = obj.str("hands").ifBlank { policy.str("hands") },
+            moderator = obj.str("moderator").ifBlank { policy.str("moderator") },
+            approval = approval(obj.obj("approval")),
+            summary = obj.obj("summary").str("text"),
         )
+    }
+
+    fun approval(obj: JsonObject?): ApprovalPrompt? {
+        val rid = obj.str("request_id")
+        if (obj == null || rid.isBlank()) return null
+        val choices = obj.arr("choices")?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty()
+        return ApprovalPrompt(
+            requestId = rid,
+            kind = obj.str("kind").ifBlank { "approval" },
+            command = obj.str("command"),
+            choices = choices.ifEmpty { listOf("once", "deny") },
+            speaker = obj.str("speaker").ifBlank { null },
+        )
+    }
+
+    fun peers(body: String): List<PeerLink> {
+        val root = DashboardJson.parseToJsonElement(body) as? JsonObject
+        return root.arr("peers")?.mapNotNull { el ->
+            val p = el as? JsonObject ?: return@mapNotNull null
+            val name = p.str("name")
+            if (name.isBlank()) null else PeerLink(name = name, origin = p.str("origin"), hostId = p.str("host_id"))
+        }.orEmpty()
     }
 
     fun rooms(body: String): List<RoomRef> {
@@ -63,6 +101,7 @@ internal object RoomJson {
         val text = obj.str("text")
         val passed = obj.bool("passed")
         val error = obj.str("error")
+        val summary = obj.str("kind") == "summary"
         val tools = obj.arr("tools")?.mapNotNull { el ->
             val t = el as? JsonObject ?: return@mapNotNull null
             t.str("name").ifBlank { "tool" } to t.str("detail")
@@ -78,6 +117,7 @@ internal object RoomJson {
             },
             speaker = if (operator) null else speaker,
             passed = passed,
+            summary = summary,
             toolDetail = if (error.isNotBlank()) error else null,
             blocks = if (!operator && !passed && text.isNotBlank()) listOf(ChatBlock(kind = ChatBlockKind.TEXT, text = text)) else emptyList(),
         ).let { row ->
@@ -142,6 +182,17 @@ internal object RoomJson {
                 val m = obj.obj("message")
                 ChatEvent.RoomPost(m.int("seq"), m.str("text"))
             }
+            "room.approval" -> approval(obj)?.let { ChatEvent.Approval(it) }
+            "room.approval.resolved" -> ChatEvent.PromptExpired(obj.str("request_id"))
+            "room.state" -> ChatEvent.RoomState(
+                obj.str("state").ifBlank { "idle" },
+                obj.str("reason"),
+                obj.int("turns_used"),
+                obj.int("budget", obj.int("max_turns", 12)),
+                obj.int("seq"),
+            )
+            "room.ready" -> ChatEvent.RoomReady(obj.int("seq", -1), room(obj.obj("room")))
+            "room.updated", "room.created" -> room(obj.obj("room"))?.let { ChatEvent.RoomUpdated(it) }
             "room.idle", "room.interrupted" -> ChatEvent.Completed
             else -> null
         }
