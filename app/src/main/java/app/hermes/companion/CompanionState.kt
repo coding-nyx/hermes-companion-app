@@ -115,6 +115,11 @@ data class CompanionState(
     val messages: List<ChatMessage> = emptyList(),
     val draft: String = "",
     val streaming: Boolean = false,
+    /**
+     * Session whose turn is streaming right now, if any. Survives [ChatSessionManager.closeChat]
+     * so reopening the window can show the turn as still running.
+     */
+    val streamingSessionId: String? = null,
     val approval: ApprovalPrompt? = null,
     val historyHasMore: Boolean = false,
     val historyLoading: Boolean = false,
@@ -201,6 +206,7 @@ data class CompanionState(
 
     /** Drop previous host's metrics/catalog so a switch cannot show stale telemetry. */
     fun dropHostScoped(): CompanionState = copy(
+        streamingSessionId = null,
         hostMetrics = null,
         modelCatalog = null,
         cronJobs = emptyList(),

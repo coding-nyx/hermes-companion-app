@@ -33,12 +33,140 @@ class DeviceLanePolicyTest {
     }
 
     @Test
-    fun hostMayArmAndDisarm() {
-        assertNull(DeviceLanePolicy.reject(DeviceArm.DISARMED, a11yBound = true, action = "device.arm"))
+    fun l0PassiveRunsWhileDisarmedAndWithoutA11y() {
+        // Read-only L0 is a health-check surface: it must work on a cold, unarmed phone
+        // whose accessibility service was never granted.
+        for (action in DeviceLanePolicy.L0_PASSIVE) {
+            assertNull(
+                "expected $action to be allowed while disarmed",
+                DeviceLanePolicy.reject(DeviceArm.DISARMED, a11yBound = false, action = action),
+            )
+        }
+    }
+
+    @Test
+    fun l0DestructiveStillNeedsArming() {
+        val destructive = DeviceLanePolicy.L0_NO_A11Y - DeviceLanePolicy.L0_PASSIVE
+        assertTrue("expected some destructive L0 actions", destructive.isNotEmpty())
+        for (action in destructive) {
+            assertEquals(
+                "expected $action to require arming",
+                "disarmed",
+                DeviceLanePolicy.reject(DeviceArm.DISARMED, a11yBound = true, action = action),
+            )
+        }
+    }
+
+    @Test
+    fun l0DoesNotNeedA11yWhenArmed() {
+        for (action in DeviceLanePolicy.L0_NO_A11Y) {
+            assertNull(
+                "expected $action to bypass the a11y gate",
+                DeviceLanePolicy.reject(DeviceArm.ARMED, a11yBound = false, action = action),
+            )
+        }
+        // The L1 lane must keep the gate.
         assertEquals(
             "a11y_unavailable",
-            DeviceLanePolicy.reject(DeviceArm.DISARMED, a11yBound = false, action = "device.arm"),
+            DeviceLanePolicy.reject(DeviceArm.ARMED, a11yBound = false, action = "device.snapshot"),
         )
+    }
+
+    @Test
+    fun l0IgnoresProtectedForegroundPackage() {
+        // L0 targets a stream or a session handle, never the foreground app, so a protected
+        // app on screen must not block a volume change.
+        val protectedPkg = "com.example.banking"
+        assertNull(
+            DeviceLanePolicy.reject(
+                DeviceArm.ARMED,
+                a11yBound = true,
+                action = "device.audio.volume.set",
+                foregroundApp = protectedPkg,
+                extraProtected = setOf(protectedPkg),
+            ),
+        )
+        assertEquals(
+            "protected_package",
+            DeviceLanePolicy.reject(
+                DeviceArm.ARMED,
+                a11yBound = true,
+                action = "device.snapshot",
+                foregroundApp = protectedPkg,
+                extraProtected = setOf(protectedPkg),
+            ),
+        )
+    }
+
+    @Test
+    fun privateHistoryReadsRequireArming() {
+        // sms/call-log/contacts are reads, but arming is the user's consent and one sms.list
+        // discloses the whole message history — so they must not be passive.
+        for (action in listOf("device.sms.list", "device.calls.log", "device.contacts.search")) {
+            assertFalse("$action must not be passive", action in DeviceLanePolicy.L0_PASSIVE)
+            assertEquals(
+                "$action must require arming",
+                "disarmed",
+                DeviceLanePolicy.reject(DeviceArm.DISARMED, a11yBound = true, action = action),
+            )
+        }
+    }
+
+    @Test
+    fun messagingToolsRunWithoutAccessibility() {
+        for (action in listOf(
+            "device.sms.list", "device.sms.send", "device.sms.compose",
+            "device.calls.log", "device.calls.dial", "device.calls.place",
+            "device.contacts.search",
+        )) {
+            assertTrue("$action should be L0", action in DeviceLanePolicy.L0_NO_A11Y)
+            assertNull(
+                "$action should run in an armed L0-only session",
+                DeviceLanePolicy.reject(DeviceArm.ARMED, a11yBound = false, action = action),
+            )
+        }
+    }
+
+    @Test
+    fun l0SetsAreConsistent() {
+        assertTrue(
+            "L0_PASSIVE must be a subset of L0_NO_A11Y",
+            DeviceLanePolicy.L0_NO_A11Y.containsAll(DeviceLanePolicy.L0_PASSIVE),
+        )
+        assertTrue(
+            "every L0 action must be a granted capability",
+            DeviceLanePolicy.CAPABILITIES.containsAll(DeviceLanePolicy.L0_NO_A11Y),
+        )
+    }
+
+    @Test
+    fun armingNeverRequiresAccessibility() {
+        // The whole point of the L0 lane is to work without the accessibility grant; gating
+        // `arm` on it meant no destructive L0 action could ever run on such a phone.
+        assertNull(DeviceLanePolicy.reject(DeviceArm.DISARMED, a11yBound = false, action = "device.arm"))
+        for (action in DeviceLanePolicy.L0_NO_A11Y) {
+            assertNull(
+                "expected $action to run in an armed L0-only session",
+                DeviceLanePolicy.reject(DeviceArm.ARMED, a11yBound = false, action = action),
+            )
+        }
+    }
+
+    @Test
+    fun l1StillRefusesInAnL0OnlySession() {
+        // Capability is per action: arming does not conjure an accessibility service.
+        for (action in listOf("device.snapshot", "device.click", "device.type", "device.swipe", "device.scroll", "device.press")) {
+            assertEquals(
+                "expected $action to still need a11y",
+                "a11y_unavailable",
+                DeviceLanePolicy.reject(DeviceArm.ARMED, a11yBound = false, action = action),
+            )
+        }
+    }
+
+    @Test
+    fun hostMayArmAndDisarm() {
+        assertNull(DeviceLanePolicy.reject(DeviceArm.DISARMED, a11yBound = true, action = "device.arm"))
         assertNull(DeviceLanePolicy.reject(DeviceArm.DISARMED, a11yBound = false, action = "device.disarm"))
         assertNull(DeviceLanePolicy.reject(DeviceArm.ARMED, a11yBound = true, action = "device.disarm"))
     }

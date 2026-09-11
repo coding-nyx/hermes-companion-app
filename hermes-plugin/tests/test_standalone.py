@@ -15,6 +15,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import _isolate  # noqa: F401,E402  # must precede plugin imports
+
 from media import MediaStore
 from relay import RelayState, make_server
 from standalone import Operator, TINY_PNG
@@ -81,6 +83,46 @@ class StandaloneOperatorTests(unittest.TestCase):
         messages = self._json("GET", f"/api/sessions/{sid}/messages?profile=default")["messages"]
         self.assertGreaterEqual(len(messages), 2)
         self.assertIn("standalone", messages[1]["content"])
+
+    def test_submit_with_client_id_is_idempotent(self):
+        """A retried turn must replay, not duplicate.
+
+        The phone retries when a stream drops mid-turn, because it cannot tell "never arrived"
+        from "arrived and is answering". Without a client key that retry appended a second copy
+        of the message and ran a second turn.
+        """
+        op = Operator(self.state_path)
+        sid = op.create_session("default")["id"]
+        first = op.submit(sid, "default", "deploy the thing", client_id="u-abc")
+        rows_after_first = len(op.data["messages"][sid])
+
+        again = op.submit(sid, "default", "deploy the thing", client_id="u-abc")
+        self.assertTrue(again.get("replayed"), "a repeat of the same client_id must replay")
+        self.assertEqual(first["user"]["id"], again["user"]["id"])
+        self.assertEqual(first["assistant"]["id"], again["assistant"]["id"])
+        self.assertEqual(
+            rows_after_first,
+            len(op.data["messages"][sid]),
+            "a replay must not append rows",
+        )
+        # The key is echoed on the row so the phone can dedup its display exactly.
+        self.assertEqual("u-abc", first["user"].get("client_id"))
+
+    def test_submit_without_client_id_still_appends(self):
+        # Legacy clients send no key; they must keep working, duplicates and all.
+        op = Operator(self.state_path)
+        sid = op.create_session("default")["id"]
+        op.submit(sid, "default", "same text")
+        op.submit(sid, "default", "same text")
+        self.assertEqual(4, len(op.data["messages"][sid]))
+
+    def test_distinct_client_ids_are_distinct_turns(self):
+        op = Operator(self.state_path)
+        sid = op.create_session("default")["id"]
+        a = op.submit(sid, "default", "one", client_id="u-1")
+        b = op.submit(sid, "default", "one", client_id="u-2")
+        self.assertNotEqual(a["user"]["id"], b["user"]["id"])
+        self.assertFalse(b.get("replayed"))
 
     def test_create_stream_delete(self):
         created = self._json("POST", "/api/sessions?profile=coder", {"title": "lab"}, status=201)["session"]

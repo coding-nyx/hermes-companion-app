@@ -266,6 +266,7 @@ class CompanionViewModel(
                 messages = emptyList(),
                 draft = "",
                 streaming = false,
+                streamingSessionId = null,
                 approval = null,
                 historyHasMore = false,
                 historyLoading = false,
@@ -791,6 +792,7 @@ class CompanionViewModel(
                     openSessionRef = keepChat,
                     messages = if (keepChat == null) emptyList() else it.messages,
                     streaming = false,
+                    streamingSessionId = null,
                     rewindTargetId = null,
                     // Picked from the profiles tab → land on a new chat for that profile.
                     tab = if (it.tab == MainTab.PROFILES) MainTab.THREADS else it.tab,

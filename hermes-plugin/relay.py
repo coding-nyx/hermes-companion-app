@@ -389,6 +389,25 @@ class RelayState:
     def push_notification(self, device_id: str, event: dict) -> None:
         if not device_id or not isinstance(event, dict):
             return
+        # Per-app policy decides both whether this reaches the ring and whether it wakes
+        # anyone. `off` drops it here rather than after the fact, so a muted app never
+        # shows up in mobile_notifications either.
+        mode = None
+        try:
+            try:
+                from . import notif_policy
+            except ImportError:
+                import notif_policy
+            notif = event.get("notification") if isinstance(event.get("notification"), dict) else {}
+            package = str(notif.get("package") or event.get("package") or "")
+            profile = str(event.get("profile") or "")
+            device = self.pairing.devices.get(device_id)
+            phone_off = tuple(getattr(device, "extra_protected", ()) or ())
+            mode = notif_policy.effective_mode(package, profile=profile, phone_off=phone_off)
+            if not notif_policy.should_ring(mode):
+                return
+        except Exception:
+            mode = None
         with self.lock:
             ring = self.notif_rings.setdefault(device_id, [])
             ring.append(event)
@@ -405,7 +424,9 @@ class RelayState:
                 from .agent_wake import maybe_wake_for_notification
             except ImportError:
                 from agent_wake import maybe_wake_for_notification
-            maybe_wake_for_notification(event)
+            # `silent` means ring-only: the agent can read it, but nothing is woken.
+            if mode is None or mode == "respond":
+                maybe_wake_for_notification(event)
         except Exception:
             pass
 

@@ -6,18 +6,21 @@ import org.junit.Test
 
 class DeviceArmingTest {
     @Test
-    fun cannotArmWithoutAccessibility() {
-        assertEquals(DeviceArm.DISARMED, DeviceArming.arm(DeviceArm.DISARMED, a11yBound = false))
+    fun armsWithoutAccessibilitySoTheL0LaneIsUsable() {
+        // Arming is consent + kill switch, not a capability claim. Refusing here made every
+        // L0 write impossible on a phone without the accessibility grant.
+        assertEquals(DeviceArm.ARMED, DeviceArming.arm(DeviceArm.DISARMED))
     }
 
     @Test
-    fun overlayDoesNotGateArm() {
-        assertEquals(DeviceArm.ARMED, DeviceArming.arm(DeviceArm.DISARMED, a11yBound = true))
+    fun armIsIdempotent() {
+        assertEquals(DeviceArm.ARMED, DeviceArming.arm(DeviceArm.ARMED))
+        assertEquals(DeviceArm.EXECUTING, DeviceArming.arm(DeviceArm.EXECUTING))
     }
 
     @Test
     fun armThenExecThenDisarm() {
-        val armed = DeviceArming.arm(DeviceArm.DISARMED, a11yBound = true)
+        val armed = DeviceArming.arm(DeviceArm.DISARMED)
         assertEquals(DeviceArm.ARMED, armed)
         val exec = DeviceArming.beginExec(armed)
         assertEquals(DeviceArm.EXECUTING, exec)

@@ -17,7 +17,7 @@ def profiles_dir() -> str:
     override = os.environ.get("HERMES_PROFILES_DIR")
     if override:
         return override
-    return str(Path.home() / ".hermes")
+    return os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
 
 
 def self_test() -> dict:

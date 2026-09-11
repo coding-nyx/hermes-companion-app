@@ -1,6 +1,6 @@
 name: hermes-companion
-version: "0.1.3"
-description: Pair an Android companion as a device node and expose mobile_* tools.
+version: "0.9.0"
+description: Pair an Android companion as a device node and expose mobile_* tools (a11y lane + direct API lane).
 author: hermes-companion-app
 kind: standalone
 platforms:
@@ -24,3 +24,55 @@ provides_tools:
   - mobile_screenshot
   - mobile_notifications
   - mobile_notifications_inject
+  # L0 (direct API) tools — do not require a11y; preferred when the action has a direct Android API.
+  - mobile_audio_volume_get
+  - mobile_audio_volume_set
+  - mobile_audio_ringer
+  - mobile_media_sessions
+  - mobile_media_now_playing
+  - mobile_media_control
+  - mobile_clipboard_get
+  - mobile_clipboard_set
+  - mobile_device_info
+  # Stream + NLS controls (L0). The phone-side toggle for both the Android notification
+  # listener permission and the per-profile shade stream.
+  - mobile_notifications_nls
+  - mobile_notifications_nls_enable
+  - mobile_notifications_stream
+  - mobile_notifications_stream_set
+  # L0 notification actions — act on a shade notification instead of tapping its UI.
+  - mobile_notification_actions
+  - mobile_notification_action
+  - mobile_notification_reply
+  - mobile_notification_dismiss
+  - mobile_notification_snooze
+  # Per-app notification policy (off / silent / respond), host config.
+  - mobile_notification_policy
+  - mobile_notification_policy_set
+  # L0 messaging / call log / contacts.
+  - mobile_sms_list
+  - mobile_sms_send
+  - mobile_sms_compose
+  - mobile_calls_log
+  - mobile_calls_dial
+  - mobile_calls_place
+  - mobile_contacts_search
+  # L0 voice out.
+  - mobile_speak
+  - mobile_speak_stop
+  - mobile_speak_status
+  - mobile_alarm_set
+  - mobile_timer_set
+  - mobile_media_play_search
+  - mobile_calendar_add
+  - mobile_share
+  - mobile_settings_open
+  - mobile_app_uninstall
+  - mobile_calendar_list
+  - mobile_location_last
+  - mobile_battery
+  - mobile_power_state
+  - mobile_thermal
+  - mobile_app_usage
+  - mobile_dnd
+  - mobile_dnd_set

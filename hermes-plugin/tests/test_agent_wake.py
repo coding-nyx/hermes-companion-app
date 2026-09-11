@@ -15,6 +15,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import _isolate  # noqa: F401,E402  # must precede plugin imports
+
 from agent_wake import (
     STREAM_SUPPRESS_PACKAGES,
     _reset_wake_state_for_tests,

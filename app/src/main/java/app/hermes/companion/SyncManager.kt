@@ -79,6 +79,13 @@ class SyncManager(
                 client(origin).wakeEvents(sse).collect { raw ->
                     val ping = WakePolicy.parse(raw, origin) ?: return@collect
                     _state.update { it.copy(lastWake = ping) }
+                    // Post the shade notification here, in appScope, not from a Compose effect
+                    // in MainActivity: this collector outlives the UI (StayConnectedService keeps
+                    // the process up), so a thread reply that arrives while the app is closed —
+                    // which is when a notification is actually the point — used to update state
+                    // and notify nobody.
+                    runCatching { WakeNotifier.show(runtime, ping) }
+                    // UI navigation; a no-op when no Activity is alive.
                     onWake(ping)
                 }
             }

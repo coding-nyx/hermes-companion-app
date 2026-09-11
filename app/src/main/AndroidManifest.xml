@@ -14,15 +14,68 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!--
+      Package visibility. On Android 11+ an unlisted intent is invisible: resolveActivity()
+      returns null and startActivity() throws ActivityNotFoundException. One <intent> per
+      handoff we actually make — same rule as permissions, the entry lands with the tool.
+
+      The L2 (intent handoff) entries — alarm, timer, smsto:, mailto:, tel:, calendar insert,
+      image/video capture, play-from-search, share, geo: — were declared ahead of the tools and
+      have been removed until those tools exist (docs/PLAN-phone-tools.md §K/§G/§H/§J/§N/§C/§Q).
+      They cost no grant, but a <queries> list that does not match the code is a lie about what
+      the app talks to. Note ActivityResultContracts (PickVisualMedia, TakePicture, used by the
+      chat attachment flow) resolve without an entry here.
+    -->
     <queries>
+        <!-- mobile_apps / mobile_open_app: the launcher list and launch intents. -->
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <!-- Voice: recognizer discovery (VoiceInputManager) and TTS engines (TextToSpeechEngine). -->
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <!-- device.sms.compose: opens the messaging app pre-filled, no permission needed. -->
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="smsto" />
+        </intent>
+        <!-- device.calls.dial / device.calls.place. -->
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+            <data android:scheme="tel" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.CALL" />
+            <data android:scheme="tel" />
+        </intent>
+        <!-- device.alarm.set / device.timer.set. -->
+        <intent>
+            <action android:name="android.intent.action.SET_ALARM" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SET_TIMER" />
+        </intent>
+        <!-- device.media.play_search: start playback when no media session exists yet. -->
+        <intent>
+            <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+        </intent>
+        <!-- device.calendar.add. -->
+        <intent>
+            <action android:name="android.intent.action.INSERT" />
+            <data android:mimeType="vnd.android.cursor.dir/event" />
+        </intent>
+        <!-- device.share. -->
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="*/*" />
+        </intent>
     </queries>
+
     <application
         android:name=".CompanionApp"
         android:allowBackup="false"

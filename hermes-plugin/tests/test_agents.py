@@ -18,6 +18,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import _isolate  # noqa: F401,E402  # must precede plugin imports
+
 from agents import (  # noqa: E402
     AgentError, AgentSessions, ToolDiscovery, Tmux, list_dirs, resolve_cwd, strip_ansi, SPECIAL_KEYS,
 )
@@ -129,7 +131,14 @@ class DiscoveryTests(unittest.TestCase):
             (root / ".hidden").mkdir()
             (root / "node_modules").mkdir()
             (root / "file.txt").write_text("x")
-            with patch.dict(os.environ, {"HERMES_COMPANION_AGENT_ROOTS": str(root), "HERMES_WORKSPACE": str(root)}):
+            # allowed_roots() always contributes $HOME and /tmp on top of the configured
+            # roots. On Linux the fixture lives under /tmp, so the fixture's parent is itself
+            # a root and "cannot leave the root" cannot hold; on macOS temp dirs sit under
+            # /var/folders, which is why this passed locally and failed on both hosts. Pin the
+            # roots to the fixture so the assertion tests the rooting rule, not the platform's
+            # choice of temp directory.
+            with patch.dict(os.environ, {"HERMES_COMPANION_AGENT_ROOTS": str(root), "HERMES_WORKSPACE": str(root)}), \
+                    patch("agents.allowed_roots", return_value=[root]):
                 listing = list_dirs(str(root))
                 self.assertEqual(listing["path"], str(root))
                 self.assertIsNone(listing["parent"])  # cannot leave the root

@@ -73,6 +73,7 @@ class ChatSessionManager(
         cancelTurn()
         retryJob?.cancel()
         retryJob = null
+        _state.update { it.copy(streamingSessionId = null) }
     }
 
     fun openSession(session: SessionRef) {
@@ -98,6 +99,7 @@ class ChatSessionManager(
                     approval = null,
                     rewindTargetId = null,
                     messages = cachedTail,
+                    streaming = streamingFor(it, owned.id),
                     historyHasMore = cached.size > cachedTail.size,
                     historyLoading = false,
                 )
@@ -113,6 +115,7 @@ class ChatSessionManager(
                         transcriptLoading = false,
                         historySource = page.source,
                         messages = merged,
+                        streaming = streamingFor(state, owned.id),
                         approval = approval,
                         historyHasMore = page.hasMore,
                     )
@@ -126,8 +129,17 @@ class ChatSessionManager(
         }
     }
 
+    /**
+     * Leave the chat window.
+     *
+     * Deliberately does **not** cancel the in-flight turn. It used to, and that produced a
+     * nasty loop: cancelling left `flushOutbox` on its `cancelled` path, which returned without
+     * `outbox.remove`, so the item stayed pending — and every re-entry rendered it as queued
+     * *and* re-submitted it. Exiting a window means "stop looking", not "stop the agent"; the
+     * turn keeps running so it reaches `outbox.remove` and the host keeps the reply. Use
+     * [interrupt] to actually stop an agent.
+     */
     fun closeChat() {
-        turnJob?.cancel()
         _state.update {
             it.copy(
                 openSessionId = null,
@@ -496,6 +508,40 @@ class ChatSessionManager(
         }
     }
 
+    /**
+     * Has this queued item's turn already landed on the host?
+     *
+     * Called only for retries. Fetches the transcript and asks [OutboxPolicy.landedIds] whether
+     * the text shows up as a USER message in the tail. Fetch failures answer "no", so a
+     * reconcile that cannot reach the host never discards a message.
+     */
+    private suspend fun reconcileLanded(
+        origin: String,
+        profile: String,
+        item: OutboxItem,
+        requireAttempt: Boolean = true,
+    ): Boolean {
+        val page = runCatching {
+            client(origin).pageMessages(origin, item.sessionId, profile)
+        }.getOrNull() ?: return false
+        val serverUserTexts = page.messages.filter { it.role == MessageRole.USER }.map { it.text }
+        val landed = OutboxPolicy.landedIds(
+            pending = listOf(Triple(item.id, item.text, item.attempts)),
+            serverUserTexts = serverUserTexts,
+            requireAttempt = requireAttempt,
+        )
+        if (item.id in landed && _state.value.openSessionId == item.sessionId) {
+            // The turn ran while the stream was down; show what the host actually has rather
+            // than leaving the message stuck as "queued" with no reply.
+            val merged = withQueued(origin, profile, item.sessionId, page.messages)
+            _state.update { st ->
+                if (st.openSessionId != item.sessionId) st
+                else st.copy(messages = merged, streaming = false, error = null)
+            }
+        }
+        return item.id in landed
+    }
+
     internal suspend fun withQueued(
         origin: String,
         profileId: String,
@@ -504,17 +550,7 @@ class ChatSessionManager(
     ): List<ChatMessage> {
         val pending = runCatching { outbox.pending(origin, profileId) }.getOrDefault(emptyList())
             .filter { it.sessionId == sessionId }
-        val seen = messages.map { it.id }.toSet()
-        return messages + pending.filter { it.id !in seen }.map {
-            val attached = decodeAttachments(it.attachmentsJson)
-            ChatMessage(
-                id = it.id,
-                role = MessageRole.USER,
-                text = it.text,
-                queued = true,
-                blocks = ChatContent.userBlocks(it.text, attached),
-            )
-        }
+        return mergeQueued(messages, pending)
     }
 
     internal suspend fun flushOutbox() {
@@ -522,24 +558,53 @@ class ChatSessionManager(
         try {
             val origin = _state.value.origin ?: return
             val profile = _state.value.activeProfileId ?: return
+            // Items that failed during this pass. Without this the loop always retook the
+            // oldest pending item and returned on its failure, so one wedged message blocked
+            // every later one from ever being sent — the "queued, no response" symptom.
+            val skip = mutableSetOf<String>()
             while (true) {
-                val item = outbox.pending(origin, profile).firstOrNull() ?: return
+                val queue = outbox.pending(origin, profile)
+                val item = queue.firstOrNull { it.id !in skip } ?: return
                 if (DraftThread.isDraft(item.sessionId)) {
                     outbox.remove(item.id)
                     continue
                 }
-                val open = _state.value.openSessionId == item.sessionId
-                val assistantId = "a-${UUID.randomUUID()}"
-                if (open) {
-                    _state.update { st ->
-                        st.copy(
-                            streaming = true,
-                            error = null,
-                            messages = st.messages.map { m ->
-                                if (m.id == item.id) m.copy(queued = false) else m
-                            },
-                        )
+                // FIX 2: a retry that has run out of attempts must stop holding up the queue.
+                // Only the BUSY path used to consult this, so an OFFLINE item retried forever.
+                if (OutboxPolicy.exhausted(item.attempts)) {
+                    outbox.remove(item.id)
+                    if (_state.value.openSessionId == item.sessionId) {
+                        _state.update { st ->
+                            st.copy(
+                                error = "not delivered after ${item.attempts} attempts",
+                                messages = st.messages.map { m ->
+                                    if (m.id == item.id) m.copy(queued = false, streaming = false) else m
+                                },
+                            )
+                        }
                     }
+                    continue
+                }
+                // FIX 3: never re-submit a turn the host already accepted. A dropped stream
+                // does not mean the turn did not run, and re-sending on that guess is what
+                // creates duplicate user messages and duplicate agent turns.
+                if (item.attempts > 0 && reconcileLanded(origin, profile, item)) {
+                    outbox.remove(item.id)
+                    continue
+                }
+                val assistantId = "a-${UUID.randomUUID()}"
+                // Recorded even when the window is closed: the operator may leave mid-turn and
+                // come back, and reopening has to know the turn is still running.
+                _state.update { st ->
+                    if (st.openSessionId != item.sessionId) st.copy(streamingSessionId = item.sessionId)
+                    else st.copy(
+                        streamingSessionId = item.sessionId,
+                        streaming = true,
+                        error = null,
+                        messages = st.messages.map { m ->
+                            if (m.id == item.id) m.copy(queued = false) else m
+                        },
+                    )
                 }
                 try {
                     var cancelled = false
@@ -555,6 +620,9 @@ class ChatSessionManager(
                                 item.text,
                                 model = turnModel(),
                                 partsJson = partsJson,
+                                // Stable outbox id, so a host that records it can recognise a
+                                // retry rather than appending a second copy of this message.
+                                clientId = item.id,
                             ).coalesceDeltas().collect { event ->
                                 if (_state.value.openSessionId == item.sessionId) {
                                     _state.update { applyEvent(it, event, assistantId) }
@@ -569,16 +637,32 @@ class ChatSessionManager(
                         cancelled = job.isCancelled
                     }
                     if (cancelled) {
-                        if (open) _state.update { finishStream(it, assistantId) }
-                        return
+                        // The stream was cut (interrupt, profile switch, thread delete) but the
+                        // turn had already been submitted, so the host may well have it. Leaving
+                        // the item pending is what made an interrupted message come back on the
+                        // next flush; check the transcript and only keep it if it truly never
+                        // arrived.
+                        clearStreamingMarker(item.sessionId)
+                        if (_state.value.openSessionId == item.sessionId) {
+                            _state.update { finishStream(it, assistantId) }
+                        }
+                        if (reconcileLanded(origin, profile, item, requireAttempt = false)) {
+                            outbox.remove(item.id)
+                        } else {
+                            outbox.markAttempt(item.id, origin, profile, "stream cancelled")
+                        }
+                        skip.add(item.id)
+                        continue
                     }
                     outbox.remove(item.id)
+                    clearStreamingMarker(item.sessionId)
                     if (_state.value.openSessionId == item.sessionId) {
                         _state.update { finishStream(it, assistantId) }
                         persistOpenMessages()
                         onTurnCompleted?.invoke()
                     }
                 } catch (c: CancellationException) {
+                    clearStreamingMarker(item.sessionId)
                     onTurnInterrupted?.invoke()
                     throw c
                 } catch (t: Throwable) {
@@ -586,19 +670,11 @@ class ChatSessionManager(
                     val code = (t as? DashboardException)?.code.orEmpty()
                     val fate = OutboxPolicy.classify(code, "${t.message.orEmpty()} ${t.javaClass.simpleName}")
                     outbox.markAttempt(item.id, origin, profile, "$code ${t.message}")
-                    val queued = _state.value.messages.map { m ->
-                        if (m.id == item.id) m.copy(queued = true, streaming = false) else m
-                    }
+                    clearStreamingMarker(item.sessionId)
                     when (fate) {
                         SendFate.BUSY -> {
-                            if (open) {
-                                _state.update {
-                                    finishStream(it, assistantId).copy(
-                                        error = "session busy",
-                                        messages = queued,
-                                        streaming = false,
-                                    )
-                                }
+                            _state.update {
+                                applyTurnFailure(it, item.id, item.sessionId, assistantId, "session busy")
                             }
                             val attempts = item.attempts + 1
                             if (!OutboxPolicy.giveUp(attempts)) {
@@ -608,37 +684,39 @@ class ChatSessionManager(
                                     flushOutbox()
                                 }
                             }
-                            return
+                            // A busy session blocks its own next turn, not the whole outbox —
+                            // messages for other sessions must still drain.
+                            skip.add(item.id)
+                            continue
                         }
                         SendFate.OFFLINE -> {
-                            if (open) {
-                                _state.update {
-                                    finishStream(it, assistantId).copy(
-                                        error = "queued",
-                                        messages = queued,
-                                        streaming = false,
-                                    )
-                                }
+                            _state.update {
+                                applyTurnFailure(it, item.id, item.sessionId, assistantId, "queued")
                             }
-                            return
+                            // Skip this one and keep draining: a later message must not be
+                            // held hostage by an undeliverable earlier one.
+                            skip.add(item.id)
+                            continue
                         }
                         SendFate.FAILED -> {
-                            if (open) {
-                                _state.update {
-                                    finishStream(it, assistantId).copy(
-                                        error = t.toMonoError(),
-                                        messages = queued,
-                                        streaming = false,
-                                    )
-                                }
+                            _state.update {
+                                applyTurnFailure(it, item.id, item.sessionId, assistantId, t.toMonoError())
                             }
-                            return
+                            skip.add(item.id)
+                            continue
                         }
                     }
                 }
             }
         } finally {
             outboxMutex.unlock()
+        }
+    }
+
+    /** Drop the in-flight marker for [sessionId], leaving another session's turn alone. */
+    private fun clearStreamingMarker(sessionId: String) {
+        _state.update {
+            if (it.streamingSessionId == sessionId) it.copy(streamingSessionId = null) else it
         }
     }
 
@@ -793,3 +871,56 @@ private fun encodeAttachments(items: List<ChatAttachment>): String =
 private fun decodeAttachments(raw: String): List<ChatAttachment> =
     if (raw.isBlank()) emptyList()
     else runCatching { attachmentJson.decodeFromString<List<ChatAttachment>>(raw) }.getOrDefault(emptyList())
+
+/**
+ * Merge the host transcript with the outbox items still queued for this thread.
+ *
+ * Id equality can never match: outbox ids are client-side `u-<uuid>` while the host returns
+ * `row_id`/`id` (database rows). Suppression is by text against the transcript tail.
+ */
+internal fun mergeQueued(
+    messages: List<ChatMessage>,
+    pending: List<OutboxItem>,
+): List<ChatMessage> {
+    val seen = messages.map { it.id }.toSet()
+    val landed = OutboxPolicy.landedIds(
+        pending = pending.map { Triple(it.id, it.text, it.attempts) },
+        serverUserTexts = messages.filter { it.role == MessageRole.USER }.map { it.text },
+        // Rendering is not a send decision. `requireAttempt` guards re-submitting a blind first
+        // send; drawing a bubble for a turn the host demonstrably has only duplicates it. An
+        // in-flight turn is exactly this case: attempts is still 0 and the host already echoes it.
+        requireAttempt = false,
+    )
+    return messages + pending.filter { it.id !in seen && it.id !in landed }.map {
+        val attached = decodeAttachments(it.attachmentsJson)
+        ChatMessage(
+            id = it.id,
+            role = MessageRole.USER,
+            text = it.text,
+            queued = true,
+            blocks = ChatContent.userBlocks(it.text, attached),
+        )
+    }
+}
+
+/** Is a turn for [sessionId] streaming right now, so reopening its window shows it live? */
+internal fun streamingFor(state: CompanionState, sessionId: String): Boolean =
+    state.streamingSessionId != null && state.streamingSessionId == sessionId
+
+/** State write for a turn that failed, cancelled or was rejected. */
+internal fun applyTurnFailure(
+    state: CompanionState,
+    itemId: String,
+    sessionId: String,
+    assistantId: String,
+    error: String?,
+): CompanionState {
+    if (state.openSessionId != sessionId) return state
+    return finishStream(state, assistantId).copy(
+        error = error,
+        streaming = false,
+        messages = state.messages.map {
+            if (it.id == itemId) it.copy(queued = true, streaming = false) else it
+        },
+    )
+}

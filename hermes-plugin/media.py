@@ -28,7 +28,8 @@ def default_media_root() -> Path:
     override = os.environ.get("HERMES_COMPANION_MEDIA")
     if override:
         return Path(override)
-    return Path.home() / ".hermes" / "companion-media"
+    home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
+    return home / "companion-media"
 
 
 class MediaError(Exception):

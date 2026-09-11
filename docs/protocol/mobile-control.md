@@ -48,9 +48,45 @@ device.wait
 device.arm
 device.disarm
 device.notifications
+
+# L0 (direct API) — do not require a11y and are not scoped to the foreground app.
+device.audio.volume.get
+device.audio.volume.set
+device.audio.ringer
+device.media.sessions
+device.media.now_playing
+device.media.control
+device.clipboard.get
+device.clipboard.set
+device.device.info
+
+# L0 notification actions — act on a shade notification, not its UI.
+device.notifications.actions
+device.notifications.action
+device.notifications.reply
+device.notifications.dismiss
+device.notifications.snooze
 ```
 
 Anything else is stripped at register and denied at command time.
+
+L0 actions are dispatched straight to Android platform APIs (AudioManager,
+MediaSessionManager, ClipboardManager, BatteryManager, …) and do not need
+the `CompanionAccessibilityService` to be bound. The agent prefers L0
+whenever the task maps to one of these; the a11y lane stays the fallback for
+interacting with arbitrary 3rd-party app UI. Passive L0 reads
+(`device.audio.volume.get`, `device.media.sessions`, `device.media.now_playing`,
+`device.clipboard.get`, `device.device.info`) are allowed while DISARMED;
+destructive L0 still requires `ARMED`.
+
+`device.clipboard.get` is the one L0 action the platform can refuse outright:
+Android 10+ withholds the primary clip from any app that is neither the focused
+app nor the default IME, which is Companion's normal state as a background
+service. The phone distinguishes the cases rather than reporting an empty clip —
+`clipboard_read_blocked` (platform refused), `clipboard_not_text` (non-text clip)
+or `{"text": ""}` (genuinely empty, read while a Companion activity was on
+screen). Agents wanting the text a user is looking at should read the focused
+node over the L1 lane instead.
 
 ## Frames
 
@@ -190,3 +226,62 @@ Host: `{HERMES_HOME}/companion-audit.jsonl`. Fields: time, device_id, profile, a
 See `hermes-plugin/skills/hermes-companion/SKILL.md` (ships with the plugin).
 
 Agents must **`mobile_arm` before snapshot/gestures**, and preferably before long reasoning, so the phone does not hit the lock screen while the model is still thinking. `mobile_status` / `mobile_devices` / `mobile_select_device` remain allowed while disarmed; control actions fail closed with `disarmed` (+ hint to call `mobile_arm`) until armed. Do not auto-arm.
+
+## Notification action keys
+
+The stream never gives the host a platform notification key: `device.notifications` emits a
+truncated SHA-256 of `StatusBarNotification.key`. The phone keeps a bounded (256-entry,
+insertion-ordered) map from that hash back to the real key, populated only for notifications that
+passed the stream's protected-package and denylist filters — so the action commands inherit that
+filtering and cannot reach a protected app's notification. Entries are dropped when the
+notification is removed, or evicted oldest-first past the cap; both cases report
+`unknown_notification`, and a notification that has left the shade reports `notification_gone`.
+
+`device.notifications.reply` uses the notification's own `RemoteInput` action, filling every
+declared result key and setting the results source to free-form input. It refuses to fire a
+text-expecting action without text, and `device.notifications.action` refuses text-expecting
+actions outright — sending one with no bundle is what delivers an empty message.
+
+## Per-app notification policy
+
+`hermes-plugin/notif_policy.py` resolves one of three modes per package: `off`, `silent`,
+`respond`. Unlisted packages are `respond` — apps are enabled by default.
+
+Two layers, host overriding phone:
+
+1. **Phone base** — the operator's Device-tab rules, synced at register as `extra_protected`.
+   Enforced on the phone, so these notifications never leave the device.
+2. **Host override** — `~/.hermes/companion-notif-policy.json` (`HERMES_COMPANION_NOTIF_POLICY`
+   to relocate), with an optional per-profile map that beats the host-wide one. The legacy
+   `HERMES_COMPANION_NOTIF_WAKE_SKIP_PACKAGES` env list is honoured as an implicit `silent`
+   floor so existing deployments do not start waking on Telegram again; any explicit override
+   beats it.
+
+Resolution, lowest precedence first: default `respond` → legacy env `silent` → host-wide rule →
+per-profile rule. A phone-side suppression then wins unconditionally, because the event never
+arrives; `describe()` flags that case as `unreachable_override` instead of reporting a mode that
+cannot be observed.
+
+Enforcement is at one choke point, `RelayState.push_notification`: `off` returns before the ring
+(so a muted app is absent from `device.notifications` too), `silent` rings without waking, and
+only `respond` reaches `maybe_wake_for_notification`. `agent_wake` re-checks the policy itself so
+a direct caller cannot bypass a `silent` rule.
+
+## Arming does not imply accessibility
+
+`device.arm` used to be refused with `a11y_unavailable` whenever the accessibility service was
+unbound, and every destructive L0 action requires `ARMED` — so on a phone where the user never
+granted accessibility, no L0 write could run at all. That reintroduced exactly the dependency the
+direct-API lane exists to remove.
+
+Arming is now the user's consent plus the kill switch (`HandsService`, which is a foreground
+service and needs no accessibility), and capability is enforced per action. `device.arm` succeeds
+either way and reports which lanes the session has:
+
+```
+{"armed": true, "a11y_bound": false, "lanes": "l0"}     // direct API only
+{"armed": true, "a11y_bound": true,  "lanes": "l0+l1"}  // a11y tree available too
+```
+
+`DeviceLanePolicy.reject()` still answers `a11y_unavailable` for `device.snapshot` / `click` /
+`type` / `swipe` / `scroll` / `press` in an `l0`-only session, so nothing gained UI-driving power.

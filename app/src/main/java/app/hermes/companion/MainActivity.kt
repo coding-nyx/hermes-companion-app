@@ -148,9 +148,8 @@ class MainActivity : FragmentActivity() {
                     }
                 }
 
-                LaunchedEffect(state.lastWake) {
-                    state.lastWake?.let { WakeNotifier.show(this@MainActivity, it) }
-                }
+                // Wake notifications are posted by SyncManager at application scope so they
+                // still fire with the UI gone; nothing to do here.
 
                 LaunchedEffect(state.stayConnected, state.notifStreamEnabled) {
                     val stay = Intent(app, StayConnectedService::class.java)

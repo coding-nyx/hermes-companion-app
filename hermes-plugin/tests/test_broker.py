@@ -7,7 +7,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from broker import ALLOWLIST, Broker, BrokerError, LiveDevice, MockDevice
+import _isolate  # noqa: F401,E402  # must precede plugin imports
+
+from broker import ALLOWLIST, L0_NO_A11Y, L0_PASSIVE, Broker, BrokerError, LiveDevice, MockDevice
 from tools import error_hint, find_clickable, make_handlers
 
 
@@ -32,6 +34,212 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(payload["error"]["code"], "disarmed")
         self.assertIn("mobile_arm", payload.get("hint", "") + payload["error"].get("hint", ""))
 
+
+    def test_l0_passive_dispatches_while_disarmed(self):
+        # Read-only L0 is the health-check surface: it has to answer on an unarmed phone.
+        echo = lambda action, args: {"action": action}
+        for action in sorted(L0_PASSIVE):
+            broker = Broker(device=MockDevice(armed=False, handler=echo))
+            self.assertEqual(broker.dispatch(action)["action"], action)
+
+    def test_l0_destructive_refuses_while_disarmed(self):
+        destructive = L0_NO_A11Y - L0_PASSIVE
+        self.assertTrue(destructive)
+        for action in sorted(destructive):
+            broker = Broker(device=MockDevice(armed=False))
+            with self.assertRaises(BrokerError) as ctx:
+                broker.dispatch(action)
+            self.assertEqual(ctx.exception.code, "disarmed", action)
+
+    def test_l0_ignores_protected_foreground_package(self):
+        # L0 targets a stream or session handle, not the foreground app, so a protected
+        # app on screen must not veto a volume change.
+        echo = lambda action, args: {"action": action}
+        broker = Broker(
+            device=MockDevice(armed=True, foreground_app="com.example.banking", handler=echo),
+            extra_protected=("com.example.banking",),
+        )
+        self.assertEqual(
+            broker.dispatch("device.audio.volume.set")["action"],
+            "device.audio.volume.set",
+        )
+        with self.assertRaises(BrokerError) as ctx:
+            broker.dispatch("device.snapshot")
+        self.assertEqual(ctx.exception.code, "protected_package")
+
+    def test_notification_action_tools_require_a_key(self):
+        # Every one of these addresses a specific notification; without a key the phone would
+        # have to guess which one, so refuse before dispatching.
+        handlers = make_handlers(Broker(device=MockDevice(armed=True)))
+        for name in (
+            "mobile_notification_actions",
+            "mobile_notification_action",
+            "mobile_notification_reply",
+            "mobile_notification_dismiss",
+            "mobile_notification_snooze",
+        ):
+            payload = json.loads(handlers[name]({}))
+            self.assertFalse(payload["ok"], name)
+            self.assertEqual(payload["error"]["code"], "missing_args", name)
+
+    def test_notification_reply_requires_text(self):
+        handlers = make_handlers(Broker(device=MockDevice(armed=True)))
+        payload = json.loads(handlers["mobile_notification_reply"]({"key": "abc123"}))
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "missing_args")
+
+    def test_notification_action_requires_index(self):
+        handlers = make_handlers(Broker(device=MockDevice(armed=True)))
+        payload = json.loads(handlers["mobile_notification_action"]({"key": "abc123"}))
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "missing_args")
+
+    def test_notification_writes_need_arming_but_listing_does_not(self):
+        echo = lambda action, args: {"action": action}
+        # Listing buttons is a read.
+        broker = Broker(device=MockDevice(armed=False, handler=echo))
+        self.assertEqual(
+            broker.dispatch("device.notifications.actions", {"key": "k"})["action"],
+            "device.notifications.actions",
+        )
+        # Firing, replying, dismissing and snoozing are not.
+        for action in (
+            "device.notifications.action",
+            "device.notifications.reply",
+            "device.notifications.dismiss",
+            "device.notifications.snooze",
+        ):
+            with self.assertRaises(BrokerError) as ctx:
+                Broker(device=MockDevice(armed=False)).dispatch(action, {"key": "k"})
+            self.assertEqual(ctx.exception.code, "disarmed", action)
+
+    def test_notification_error_hints_point_at_the_recovery(self):
+        self.assertIn("mobile_notifications", error_hint("unknown_notification"))
+        self.assertIn("mobile_notification_reply", error_hint("no_such_action"))
+
+    def test_messaging_tools_require_their_args(self):
+        handlers = make_handlers(Broker(device=MockDevice(armed=True)))
+        cases = [
+            ("mobile_sms_send", {}),
+            ("mobile_sms_send", {"address": "+15550100"}),   # no body
+            ("mobile_sms_send", {"body": "hi"}),             # no address
+            ("mobile_sms_compose", {}),
+            ("mobile_calls_dial", {}),
+            ("mobile_calls_place", {}),
+        ]
+        for name, args in cases:
+            payload = json.loads(handlers[name](args))
+            self.assertFalse(payload["ok"], (name, args))
+            self.assertEqual(payload["error"]["code"], "missing_args", (name, args))
+
+    def test_private_history_reads_are_not_passive(self):
+        # Arming is the user's consent. One sms.list discloses the whole message history, so
+        # these reads must refuse on an unarmed phone even though they mutate nothing.
+        for action in ("device.sms.list", "device.calls.log", "device.contacts.search"):
+            self.assertNotIn(action, L0_PASSIVE, action)
+            with self.assertRaises(BrokerError) as ctx:
+                Broker(device=MockDevice(armed=False)).dispatch(action)
+            self.assertEqual(ctx.exception.code, "disarmed", action)
+
+    def test_messaging_tools_do_not_need_a11y(self):
+        echo = lambda action, args: {"action": action}
+        for action in (
+            "device.sms.list", "device.sms.send", "device.sms.compose",
+            "device.calls.log", "device.calls.dial", "device.calls.place",
+            "device.contacts.search",
+        ):
+            self.assertIn(action, L0_NO_A11Y, action)
+            broker = Broker(device=MockDevice(armed=True, a11y_bound=False, handler=echo))
+            self.assertEqual(broker.dispatch(action)["action"], action)
+
+    def test_permission_hint_names_the_recovery(self):
+        self.assertIn("permission", error_hint("permission_denied"))
+        self.assertIn("no messaging app", error_hint("no_handler"))
+
+    def test_speak_requires_text_and_arming(self):
+        handlers = make_handlers(Broker(device=MockDevice(armed=True)))
+        payload = json.loads(handlers["mobile_speak"]({}))
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "missing_args")
+        # Speaking out loud is a control action, so it needs consent.
+        with self.assertRaises(BrokerError) as ctx:
+            Broker(device=MockDevice(armed=False)).dispatch("device.voice.speak", {"text": "hi"})
+        self.assertEqual(ctx.exception.code, "disarmed")
+
+    def test_speak_status_is_passive_but_speaking_is_not(self):
+        echo = lambda action, args: {"action": action}
+        # Asking whether the phone *can* speak is harmless.
+        self.assertIn("device.voice.status", L0_PASSIVE)
+        broker = Broker(device=MockDevice(armed=False, handler=echo))
+        self.assertEqual(broker.dispatch("device.voice.status")["action"], "device.voice.status")
+        for action in ("device.voice.speak", "device.voice.stop"):
+            self.assertNotIn(action, L0_PASSIVE, action)
+
+    def test_voice_needs_no_a11y(self):
+        echo = lambda action, args: {"action": action}
+        for action in ("device.voice.speak", "device.voice.stop", "device.voice.status"):
+            self.assertIn(action, L0_NO_A11Y, action)
+            broker = Broker(device=MockDevice(armed=True, a11y_bound=False, handler=echo))
+            self.assertEqual(broker.dispatch(action)["action"], action)
+
+    def test_tts_hint_points_at_the_status_tool(self):
+        self.assertIn("mobile_speak_status", error_hint("tts_unavailable"))
+
+    def test_intent_lane_and_reads_require_their_args(self):
+        handlers = make_handlers(Broker(device=MockDevice(armed=True)))
+        cases = [
+            ("mobile_alarm_set", {}), ("mobile_alarm_set", {"hour": 7}),
+            ("mobile_timer_set", {}), ("mobile_media_play_search", {}),
+            ("mobile_calendar_add", {"title": "x"}), ("mobile_share", {}),
+            ("mobile_settings_open", {}), ("mobile_app_uninstall", {}),
+            ("mobile_dnd_set", {}),
+        ]
+        for name, args in cases:
+            payload = json.loads(handlers[name](args))
+            self.assertFalse(payload["ok"], (name, args))
+            self.assertEqual(payload["error"]["code"], "missing_args", (name, args))
+
+    def test_phone_health_is_passive_but_personal_data_is_not(self):
+        echo = lambda action, args: {"action": action}
+        # Telemetry about the phone itself is fine on an unarmed phone.
+        for action in ("device.battery", "device.power.state", "device.thermal", "device.audio.dnd"):
+            self.assertIn(action, L0_PASSIVE, action)
+            broker = Broker(device=MockDevice(armed=False, handler=echo))
+            self.assertEqual(broker.dispatch(action)["action"], action)
+        # Calendar, location and app usage are personal: arming is the consent gate.
+        for action in ("device.calendar.list", "device.location.last", "device.apps.usage"):
+            self.assertNotIn(action, L0_PASSIVE, action)
+            with self.assertRaises(BrokerError) as ctx:
+                Broker(device=MockDevice(armed=False)).dispatch(action)
+            self.assertEqual(ctx.exception.code, "disarmed", action)
+
+    def test_intent_lane_and_reads_need_no_a11y(self):
+        echo = lambda action, args: {"action": action}
+        for action in (
+            "device.alarm.set", "device.timer.set", "device.media.play_search",
+            "device.calendar.add", "device.share", "device.settings.open",
+            "device.apps.uninstall", "device.calendar.list", "device.location.last",
+            "device.battery", "device.power.state", "device.thermal",
+            "device.apps.usage", "device.audio.dnd", "device.audio.dnd.set",
+        ):
+            self.assertIn(action, L0_NO_A11Y, action)
+            broker = Broker(device=MockDevice(armed=True, a11y_bound=False, handler=echo))
+            self.assertEqual(broker.dispatch(action)["action"], action)
+
+    def test_unavailable_hint_explains_itself(self):
+        self.assertIn("feature off", error_hint("unavailable"))
+
+    def test_l0_sets_are_consistent(self):
+        # These sets are hand-mirrored from DeviceLanePolicy.kt; keep the containment
+        # invariants the phone side also asserts.
+        self.assertTrue(L0_PASSIVE <= L0_NO_A11Y)
+        self.assertTrue(L0_NO_A11Y <= ALLOWLIST)
+
+    def test_clipboard_read_blocked_has_hint(self):
+        # The phone reports clipboard_read_blocked when Android refuses a background read;
+        # the agent must be steered to the a11y fallback rather than trusting an empty clip.
+        hint = error_hint("clipboard_read_blocked")
+        self.assertIn("focused field", hint)
 
     def test_snapshot_when_armed(self):
         broker = Broker(device=MockDevice(armed=True))

@@ -26,7 +26,12 @@ def default_state_path() -> Path:
     override = os.environ.get("HERMES_COMPANION_STATE")
     if override:
         return Path(override)
-    return Path.home() / ".hermes" / "companion-operator.json"
+    # Fall back to HERMES_HOME before the real home dir, matching pairing.py and
+    # hermes_store.py. Without this the store is unredirectable, so anything that
+    # imports this module on a dev machine — the test suite included — writes into the
+    # developer's own ~/.hermes/companion-operator.json.
+    home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
+    return home / "companion-operator.json"
 
 
 def _now_ms() -> int:
@@ -410,7 +415,23 @@ class Operator:
             return None
         return str(rows[0].get("id") or "") or None
 
-    def submit(self, sid: str, profile: str, text: str, model: str = "", parts: list | None = None) -> dict:
+    def submit(
+        self,
+        sid: str,
+        profile: str,
+        text: str,
+        model: str = "",
+        parts: list | None = None,
+        client_id: str = "",
+    ) -> dict:
+        """Run one turn.
+
+        ``client_id`` is the phone's stable outbox id. The phone→host transport is
+        at-least-once: when a stream drops mid-turn the client cannot tell "never arrived"
+        from "arrived and is answering", so it retries. Without a key that retry appends a
+        second copy of the message and runs a second turn — the duplicate-message bug. With
+        one, a repeat returns the turn already recorded instead of creating another.
+        """
         if not text.strip() and not parts:
             raise OperatorError("text_required", 400)
         with self.lock:
@@ -419,6 +440,22 @@ class Operator:
                 raise OperatorError("unknown_session", 404)
             if not profile or sess["profile"] != profile:
                 raise OperatorError("profile_mismatch", 403)
+            key = str(client_id or "").strip()
+            if key:
+                seen = self.data.setdefault("client_ids", {}).get(key)
+                if seen:
+                    # Replay: hand back the same rows rather than running the turn again.
+                    rows = self.data["messages"].get(sid) or []
+                    by_id = {str(r.get("id")): r for r in rows}
+                    user = by_id.get(str(seen.get("user")))
+                    assistant = by_id.get(str(seen.get("assistant")))
+                    if user is not None and assistant is not None:
+                        return {
+                            "user": user,
+                            "assistant": assistant,
+                            "reply": assistant.get("content") or "",
+                            "replayed": True,
+                        }
             uid = self._row()
             user: dict = {"id": str(uid), "row_id": uid, "role": "user", "content": text}
             if parts:
@@ -427,6 +464,11 @@ class Operator:
             aid = self._row()
             assistant = {"id": str(aid), "row_id": aid, "role": "assistant", "content": reply}
             self.data["messages"].setdefault(sid, []).extend([user, assistant])
+            if key:
+                # Echo the key on the row so the phone can dedup its display exactly, and
+                # remember it so a retry replays instead of duplicating.
+                user["client_id"] = key
+                self.data.setdefault("client_ids", {})[key] = {"user": user["id"], "assistant": assistant["id"]}
             sess["unread"] = False
             sess["updated_at"] = _now_ms()
             if sess["title"] in ("new thread", sess["id"]):
@@ -557,7 +599,14 @@ class Operator:
             sid = str(params.get("session_id") or "")
             text = str(params.get("text") or params.get("input") or "")
             parts = params.get("parts") if isinstance(params.get("parts"), list) else None
-            submitted = self.submit(sid, scoped, text, str(params.get("model") or ""), parts)
+            submitted = self.submit(
+                sid,
+                scoped,
+                text,
+                str(params.get("model") or ""),
+                parts,
+                client_id=str(params.get("client_id") or ""),
+            )
             events = [
                 {
                     "jsonrpc": "2.0",

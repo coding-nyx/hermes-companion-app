@@ -1,8 +1,71 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!--
+      Phone-tool permissions.
+
+      Rule: a permission ships in the same change as the tool that uses it. An earlier pass
+      declared the whole inventory up front — location, contacts, calendar, SMS, call log,
+      telephony, media, sensors, usage stats, system settings — and granted them on the
+      operator's phone before a single one had a code path. That is pure attack surface for
+      zero capability: nothing could use them, and an exploit of this app would have held
+      READ_SMS and READ_CALL_LOG on a daily driver. The full inventory with each permission,
+      its API and its constraint lives in docs/PLAN-phone-tools.md; add the entry here when
+      the tool lands, not before.
+
+      Currently implemented and therefore declared:
+      - ACCESS_NOTIFICATION_POLICY: device.audio.ringer needs it to reach SILENT, and
+        DirectToolbox.ringerSet gates on isNotificationPolicyAccessGranted (SPECIAL — the
+        user grants it in Settings; NORMAL/VIBRATE work without it).
+      The notification-listener bind and the accessibility bind are declared on the services
+      themselves, further down.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+
+    <!-- device.sms.list / device.sms.send / device.calls.log — TelephonyToolbox.
+         HARD-RESTRICTED: the installer must allowlist these or the grant is refused however
+         the user answers. `adb install` does (verified on the S22: granted=true with
+         RESTRICTION_INSTALLER_EXEMPT), so no default-SMS role is needed for a sideloaded build.
+         Google Play distribution would additionally require the ROLE_SMS handler role. -->
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
+
+    <!-- device.contacts.search — resolves a name to a number so the messaging tools are
+         usable by name rather than by digits. Ordinary runtime permission. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
+    <!-- device.calls.dial needs nothing (ACTION_DIAL only opens the dialer); device.calls.place
+         places the call itself. -->
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+
+    <!-- device.alarm.set / device.timer.set — install-time, no runtime prompt. EXTRA_SKIP_UI asks
+         the clock app to act without coming to the foreground. USE_EXACT_ALARM is NOT declared:
+         it is Play-policy-restricted to calendar and alarm-clock apps, and these tools ask the
+         clock app to set a user-visible alarm rather than scheduling our own callback. -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+
+    <!-- device.apps.uninstall — the user still confirms in the system dialog. -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+
+    <!-- device.calendar.list. device.calendar.add is an L2 intent and needs no permission, so
+         WRITE_CALENDAR stays off. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+
+    <!-- device.location.last — reads the fix a provider already holds; never requests a new one,
+         so ACCESS_BACKGROUND_LOCATION is not needed. COARSE is enough for the tool to answer;
+         FINE upgrades precision when granted. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- device.apps.usage — SPECIAL: granted under Settings > Special app access > Usage access,
+         not by a runtime prompt. Declared so the app appears in that list at all. -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
     <application>
         <service
             android:name=".CompanionAccessibilityService"

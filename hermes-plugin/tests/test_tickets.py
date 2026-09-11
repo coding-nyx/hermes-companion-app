@@ -6,6 +6,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import _isolate  # noqa: F401,E402  # must precede plugin imports
+
 import tickets as tickets_mod
 from pairing import PairingStore
 from tickets import TicketError, TicketStore, parse_subprotocols

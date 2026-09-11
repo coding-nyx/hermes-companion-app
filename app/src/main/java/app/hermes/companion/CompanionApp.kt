@@ -57,6 +57,10 @@ class CompanionApp : Application() {
         deviceCreds = DeviceCredStore.encrypted(this)
         operatorCreds = OperatorCredStore.encrypted(this)
         deviceNode = DeviceNodeCoordinator(this, clients, deviceCreds, sticky, appScope)
+        // Create the five notification channels up front (A27.1). On the hot path a ping would
+        // otherwise race channel creation, and the user could not find them in Settings to tune
+        // until one had already fired.
+        runCatching { WakeNotifier.ensureChannels(this) }
         if (sticky.stayConnected || sticky.notifStreamEnabled) {
             val stay = android.content.Intent(this, StayConnectedService::class.java)
             runCatching { androidx.core.content.ContextCompat.startForegroundService(this, stay) }

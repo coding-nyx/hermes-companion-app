@@ -15,12 +15,21 @@ import java.security.MessageDigest
 class CompanionNotificationListener : NotificationListenerService() {
     override fun onListenerConnected() {
         NotifStreamBus.listenerBound = true
+        // The action tools need an instance to call cancelNotification / snoozeNotification /
+        // getActiveNotifications; those are instance methods on NotificationListenerService.
+        NotifStreamBus.listener = this
         Log.i(TAG, "nls connected")
     }
 
     override fun onListenerDisconnected() {
         NotifStreamBus.listenerBound = false
+        NotifStreamBus.listener = null
         Log.i(TAG, "nls disconnected")
+    }
+
+    override fun onNotificationRemoved(sbn: StatusBarNotification?) {
+        // Keep the key registry from holding handles to notifications that are gone.
+        sbn?.key?.let { NotifStreamBus.forgetKey(it) }
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
@@ -47,7 +56,11 @@ class CompanionNotificationListener : NotificationListenerService() {
             extras?.getCharSequence(Notification.EXTRA_SUB_TEXT),
         ).mapNotNull { it?.toString()?.takeIf { s -> s.isNotBlank() } }.firstOrNull().orEmpty().take(480)
         val category = n.category.orEmpty()
-        val key = hashKey(sbn.key ?: "$pkg:${sbn.id}:${sbn.postTime}")
+        val rawKey = sbn.key ?: "$pkg:${sbn.id}:${sbn.postTime}"
+        val key = hashKey(rawKey)
+        // Register only what we actually stream, so the action tools inherit the same
+        // protected-package and denylist filtering the stream applies above.
+        sbn.key?.let { NotifStreamBus.rememberKey(key, it) }
         NotifStreamBus.emit(
             NotifStreamEvent(
                 key = key,

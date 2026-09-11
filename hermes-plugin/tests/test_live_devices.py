@@ -8,6 +8,8 @@ import threading
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import _isolate  # noqa: F401,E402  # must precede plugin imports
+
 from broker import Broker, BrokerError, MockDevice
 from live import resolve_device_id
 from pairing import PairingStore

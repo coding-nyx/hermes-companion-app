@@ -20,6 +20,8 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import _isolate  # noqa: F401,E402  # must precede plugin imports
+
 from pairing import PairingStore  # noqa: E402
 from relay import CompanionHandler, RelayState, _ws_accept, _ws_recv, _ws_text, make_server  # noqa: E402
 from peers import PeerStore  # noqa: E402

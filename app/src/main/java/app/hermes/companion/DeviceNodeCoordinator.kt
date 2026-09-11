@@ -11,16 +11,23 @@ import app.hermes.companion.data.remote.DashboardClient
 import app.hermes.companion.data.remote.DashboardException
 import app.hermes.companion.data.remote.HostClientPool
 import app.hermes.companion.device.CompanionAccessibilityService
+import app.hermes.companion.device.DirectToolbox
 import app.hermes.companion.device.HandsBridge
+import app.hermes.companion.device.IntentToolbox
 import app.hermes.companion.device.HandsService
+import app.hermes.companion.device.NotifActions
 import app.hermes.companion.device.NotifStreamBus
+import app.hermes.companion.device.SpeechToolbox
+import app.hermes.companion.device.SystemToolbox
 import app.hermes.companion.device.NotifStreamEvent
 import app.hermes.companion.device.StopStreamReceiver
+import app.hermes.companion.device.TelephonyToolbox
 import app.hermes.companion.domain.CompactTree
 import app.hermes.companion.domain.DeviceArming
 import app.hermes.companion.domain.DeviceAudit
 import app.hermes.companion.domain.DeviceAuditRow
 import app.hermes.companion.domain.DeviceGestures
+import app.hermes.companion.domain.JsonText
 import app.hermes.companion.domain.DeviceLanePolicy
 import app.hermes.companion.domain.PairingPolicy
 import app.hermes.companion.domain.SwipeSpec
@@ -106,6 +113,12 @@ class DeviceNodeCoordinator(
     private fun client(origin: String): DashboardClient = clients.forOrigin(origin)
     private var idleJob: Job? = null
     private var pairJob: Job? = null
+    /**
+     * Set when a command changed the stream config and therefore owes a lane re-registration.
+     * The refresh tears down and reopens the lane, which would kill the response path for the
+     * very command that asked for it — so [handleCommand] runs it *after* the reply is sent.
+     */
+    private var pendingLaneRefresh = false
     private var lastRefs: Set<String> = emptySet()
     private var lastNodes: List<SnapshotNode> = emptyList()
     private val rateHits = mutableListOf<Long>()
@@ -119,6 +132,20 @@ class DeviceNodeCoordinator(
         HandsBridge.onDisarm = { disarm() }
         syncNotifBusConfig()
         StopStreamReceiver.onStopStream = { setNotifStreamEnabled(false) }
+        // Open lanes at process start, not on UI bind.
+        //
+        // `startAllLanes()` used to be reachable only from `bind()`, whose sole caller is the
+        // ViewModel — so a process revived in the background by StayConnectedService (START_STICKY)
+        // held no lane at all, and the phone was unreachable until a human opened the app. Observed
+        // on the S22: correct build installed and the process alive, yet the host saw no lane for
+        // ~34 minutes until MainActivity was launched.
+        //
+        // Gated on the same opt-in that starts StayConnectedService, so a phone the user has not
+        // asked to stay connected keeps the old lazy behaviour instead of dialling every paired
+        // host on every transient process start. Safe with respect to arming: a fresh process is
+        // DISARMED, and the idle timer and kill-switch notification only exist once armed, so this
+        // cannot leave a UI-less lane sitting armed.
+        if (sticky.stayConnected || sticky.notifStreamEnabled) startAllLanes()
         scope.launch {
             NotifStreamBus.events.collect { ev ->
                 forwardNotif(ev)
@@ -178,7 +205,7 @@ class DeviceNodeCoordinator(
     // ---- arming -----------------------------------------------------------------------------
 
     fun arm() {
-        val next = DeviceArming.arm(_state.value.arm, _state.value.a11yBound)
+        val next = DeviceArming.arm(_state.value.arm)
         _state.update { it.copy(arm = next) }
         if (next != DeviceArm.DISARMED) {
             bumpIdle()
@@ -195,17 +222,15 @@ class DeviceNodeCoordinator(
 
     fun setA11yBound(bound: Boolean) {
         val on = bound || CompanionAccessibilityService.bound
+        // Losing accessibility downgrades the session to the L0 lane; it does not end it.
+        // Disarming here would take the direct-API tools down with the a11y tree, which is
+        // the coupling the L0 lane exists to remove. The kill switch and the idle
+        // auto-disarm timer stay exactly as they were.
         _state.update { st ->
             st.copy(
                 a11yBound = on,
-                arm = if (!on) DeviceArming.disarm() else st.arm,
                 foregroundApp = CompanionAccessibilityService.foregroundApp,
             )
-        }
-        if (!on) {
-            idleJob?.cancel()
-            idleJob = null
-            syncHands(armed = false)
         }
     }
 
@@ -260,7 +285,11 @@ class DeviceNodeCoordinator(
 
     // ---- notification stream (A13.2) --------------------------------------------------------
 
-    fun setNotifStreamEnabled(enabled: Boolean) {
+    /**
+     * @param deferLaneRefresh when true, record that lanes need re-registering instead of doing
+     *   it now. Command handlers pass true so their reply is not lost with the bounced lane.
+     */
+    fun setNotifStreamEnabled(enabled: Boolean, deferLaneRefresh: Boolean = false) {
         sticky.notifStreamEnabled = enabled
         syncNotifBusConfig()
         val origin = sticky.notifStreamTargetOrigin()
@@ -273,12 +302,12 @@ class DeviceNodeCoordinator(
             )
         }
         syncStayForStream()
-        refreshLaneRegistrations()
+        if (deferLaneRefresh) pendingLaneRefresh = true else refreshLaneRegistrations()
         pushStreamStatus()
         StayConnectedService.refresh(app)
     }
 
-    fun setNotifStreamTarget(origin: String?, profileId: String?) {
+    fun setNotifStreamTarget(origin: String?, profileId: String?, deferLaneRefresh: Boolean = false) {
         val cleanOrigin = origin?.trim()?.takeIf { it.isNotBlank() }
         sticky.notifStreamOrigin = cleanOrigin
         val target = sticky.notifStreamTargetOrigin()
@@ -292,7 +321,7 @@ class DeviceNodeCoordinator(
             )
         }
         syncStayForStream()
-        refreshLaneRegistrations()
+        if (deferLaneRefresh) pendingLaneRefresh = true else refreshLaneRegistrations()
         pushStreamStatus()
         StayConnectedService.refresh(app)
     }
@@ -665,6 +694,11 @@ class DeviceNodeCoordinator(
         val ref = jsonField(args, "ref") ?: jsonField(args, "from_ref")
         val target = jsonField(args, "package")
         val fg = CompanionAccessibilityService.foregroundApp
+        // Read the binding live, like foregroundApp above. `_state.a11yBound` is only
+        // refreshed while MainActivity is observing the setting, so a grant revoked while the
+        // app sits in the background leaves it stale — and a stale `true` let the L1 lane
+        // through to return an empty tree with ok:true instead of refusing a11y_unavailable.
+        val a11yLive = CompanionAccessibilityService.bound
         if (!DeviceGestures.allowRate(System.currentTimeMillis(), rateHits)) {
             noteAudit(command.action, fg, false, "rate_limited")
             client(laneOrigin).replyDevice(DeviceLanePolicy.fail(command.commandId, "rate_limited"))
@@ -672,7 +706,7 @@ class DeviceNodeCoordinator(
         }
         val code = DeviceLanePolicy.reject(
             arm = st.arm,
-            a11yBound = st.a11yBound,
+            a11yBound = a11yLive,
             action = command.action,
             foregroundApp = fg,
             ref = ref,
@@ -695,6 +729,13 @@ class DeviceNodeCoordinator(
         }
         noteAudit(command.action, target ?: fg, result.ok, result.errorCode)
         client(laneOrigin).replyDevice(result)
+        // Only now is it safe to bounce the lane: the reply has already gone out. Refreshing
+        // inside execute() made every stream.set look like a timeout to the caller even though
+        // it had applied.
+        if (pendingLaneRefresh) {
+            pendingLaneRefresh = false
+            refreshLaneRegistrations()
+        }
         _state.update {
             it.copy(
                 arm = DeviceArming.endExec(it.arm),
@@ -830,9 +871,19 @@ class DeviceNodeCoordinator(
             }
             "device.arm" -> {
                 arm()
-                val armed = _state.value.arm != DeviceArm.DISARMED
-                if (!armed) DeviceLanePolicy.fail(command.commandId, "a11y_unavailable")
-                else DeviceLanePolicy.ok(command.commandId, """{"armed":true}""")
+                val armedState = _state.value
+                if (armedState.arm == DeviceArm.DISARMED) {
+                    DeviceLanePolicy.fail(command.commandId, "arm_failed", "the phone refused to arm")
+                } else {
+                    // Report which lanes this session actually has, so the agent does not plan a
+                    // snapshot it cannot run. L0 works with or without accessibility; L1 needs it.
+                    val a11y = CompanionAccessibilityService.bound
+                    val lanes = if (a11y) "l0+l1" else "l0"
+                    DeviceLanePolicy.ok(
+                        command.commandId,
+                        """{"armed":true,"a11y_bound":$a11y,"lanes":${jsonQuote(lanes)}}""",
+                    )
+                }
             }
             "device.disarm" -> {
                 disarm()
@@ -847,6 +898,531 @@ class DeviceNodeCoordinator(
                 DeviceLanePolicy.ok(
                     command.commandId,
                     """{"mime":"image/png","w":${shot.second},"h":${shot.third},"png_b64":"$b64"}""",
+                )
+            }
+            // ---------- L0 (direct API) tools ----------
+            "device.audio.volume.get" -> {
+                val stream = jsonField(args, "stream")
+                val rows = DirectToolbox.audioVolumeGet(app, stream)
+                if (rows.isEmpty() && !stream.isNullOrBlank()) {
+                    return DeviceLanePolicy.fail(command.commandId, "invalid_stream", "unknown stream '$stream'")
+                }
+                val payload = rows.joinToString(",") { row ->
+                    val sName = (row["stream"] as? String) ?: ""
+                    val cVal = (row["current"] as? Int) ?: 0
+                    val mVal = (row["max"] as? Int) ?: 0
+                    """{"stream":${jsonQuote(sName)},"current":$cVal,"max":$mVal}"""
+                }
+                DeviceLanePolicy.ok(command.commandId, """{"streams":[$payload]}""")
+            }
+            "device.audio.volume.set" -> {
+                val stream = jsonField(args, "stream").orEmpty()
+                val level = jsonNumber(args, "level")?.toInt()
+                val step = jsonNumber(args, "step")?.toInt()
+                if (stream.isBlank()) {
+                    return DeviceLanePolicy.fail(command.commandId, "missing_stream", "stream required")
+                }
+                if (level == null && step == null) {
+                    return DeviceLanePolicy.fail(command.commandId, "missing_level", "level or step required")
+                }
+                val row = DirectToolbox.audioVolumeSet(app, stream, level, step)
+                    ?: return DeviceLanePolicy.fail(command.commandId, "invalid_stream", "unknown stream '$stream'")
+                val sName = (row["stream"] as? String) ?: stream
+                val cVal = (row["current"] as? Int) ?: 0
+                val mVal = (row["max"] as? Int) ?: 0
+                DeviceLanePolicy.ok(
+                    command.commandId,
+                    """{"stream":${jsonQuote(sName)},"current":$cVal,"max":$mVal}""",
+                )
+            }
+            "device.audio.ringer" -> {
+                val mode = jsonField(args, "mode")
+                if (mode.isNullOrBlank()) {
+                    val cur = DirectToolbox.ringerGet(app)
+                    return DeviceLanePolicy.ok(command.commandId, """{"mode":${jsonQuote(cur)}}""")
+                }
+                val out = DirectToolbox.ringerSet(app, mode)
+                    ?: return DeviceLanePolicy.fail(command.commandId, "invalid_mode", "use normal|vibrate|silent")
+                if (out.startsWith("denied")) {
+                    return DeviceLanePolicy.fail(
+                        command.commandId,
+                        "policy_denied",
+                        "grant Do Not Disturb access in Settings to allow silent",
+                    )
+                }
+                DeviceLanePolicy.ok(command.commandId, """{"mode":${jsonQuote(out)}}""")
+            }
+            "device.media.sessions" -> {
+                val rows = DirectToolbox.mediaSessions(app)
+                if (rows.isEmpty() && !NotifStreamBus.listenerBound) {
+                    return DeviceLanePolicy.fail(
+                        command.commandId,
+                        "nls_unavailable",
+                        "grant notification access in Settings, then retry",
+                    )
+                }
+                val payload = rows.joinToString(",") { row ->
+                    val pkg = (row["package"] as? String) ?: ""
+                    val active = (row["is_active"] as? Boolean) ?: false
+                    val state = (row["playback_state"] as? String) ?: "none"
+                    """{"package":${jsonQuote(pkg)},"is_active":$active,"playback_state":${jsonQuote(state)}}"""
+                }
+                DeviceLanePolicy.ok(command.commandId, """{"sessions":[$payload]}""")
+            }
+            "device.media.now_playing" -> {
+                val handle = jsonField(args, "session_id").orEmpty()
+                if (handle.isBlank()) {
+                    return DeviceLanePolicy.fail(command.commandId, "missing_session", "session_id required")
+                }
+                val row = DirectToolbox.mediaNowPlaying(app, handle)
+                    ?: return DeviceLanePolicy.fail(
+                        command.commandId,
+                        "no_session",
+                        "no active session for '$handle'",
+                    )
+                val keys = listOf("title", "artist", "album", "duration_ms")
+                val body = keys.joinToString(",") { k ->
+                    val v = row[k]
+                    if (v is String) "\"$k\":${jsonQuote(v)}"
+                    else if (v is Long) "\"$k\":$v"
+                    else "\"$k\":${v ?: "null"}"
+                }
+                DeviceLanePolicy.ok(command.commandId, """{"package":${jsonQuote(handle)},$body}""")
+            }
+            "device.media.control" -> {
+                val handle = jsonField(args, "session_id").orEmpty()
+                val action = jsonField(args, "action").orEmpty()
+                if (handle.isBlank() || action.isBlank()) {
+                    return DeviceLanePolicy.fail(
+                        command.commandId,
+                        "missing_args",
+                        "session_id and action required",
+                    )
+                }
+                val pos = jsonNumber(args, "position_ms")?.toLong()
+                val out = DirectToolbox.mediaControl(app, handle, action, pos)
+                val ok = (out["ok"] as? Boolean) ?: false
+                if (!ok) {
+                    return DeviceLanePolicy.fail(
+                        command.commandId,
+                        (out["error"] as? String) ?: "control_failed",
+                        "media control failed",
+                    )
+                }
+                DeviceLanePolicy.ok(
+                    command.commandId,
+                    """{"package":${jsonQuote(handle)},"action":${jsonQuote(action)}}""",
+                )
+            }
+            "device.clipboard.get" -> {
+                // Blocked is not the same as empty: Android 10+ withholds the clip from any
+                // app that is neither focused nor the default IME, which is Companion's normal
+                // state. Report that as a distinct error so the agent falls back to reading the
+                // focused field over the a11y lane instead of trusting an empty string.
+                when (val read = DirectToolbox.clipboardGet(app)) {
+                    is DirectToolbox.ClipRead.Text ->
+                        DeviceLanePolicy.ok(command.commandId, """{"text":${jsonQuote(read.text)}}""")
+                    is DirectToolbox.ClipRead.Empty ->
+                        DeviceLanePolicy.ok(command.commandId, """{"text":""}""")
+                    is DirectToolbox.ClipRead.NotText ->
+                        DeviceLanePolicy.fail(
+                            command.commandId,
+                            "clipboard_not_text",
+                            read.mime ?: "clip has no text/plain item",
+                        )
+                    is DirectToolbox.ClipRead.Blocked ->
+                        DeviceLanePolicy.fail(
+                            command.commandId,
+                            "clipboard_read_blocked",
+                            "Android 10+ blocks clipboard reads unless the app is focused or the default IME",
+                        )
+                }
+            }
+            "device.clipboard.set" -> {
+                val text = jsonField(args, "text").orEmpty()
+                val ok = DirectToolbox.clipboardSet(app, text)
+                if (!ok) return DeviceLanePolicy.fail(command.commandId, "clipboard_failed")
+                DeviceLanePolicy.ok(command.commandId, """{"length":${text.length}}""")
+            }
+            "device.device.info" -> {
+                val info = DirectToolbox.deviceInfo(app)
+                val body = info.entries.joinToString(",") { (k, v) ->
+                    if (v is String) "\"$k\":${jsonQuote(v)}"
+                    else "\"$k\":$v"
+                }
+                DeviceLanePolicy.ok(command.commandId, "{$body}")
+            }
+            // ---------- Stream + NLS controls (L0) ----------
+            "device.notifications.nls" -> {
+                val n = DirectToolbox.nlsStatus(app)
+                val body = n.entries.joinToString(",") { (k, v) ->
+                    if (v is String) "\"$k\":${jsonQuote(v)}"
+                    else "\"$k\":$v"
+                }
+                DeviceLanePolicy.ok(command.commandId, "{$body}")
+            }
+            "device.notifications.nls.enable" -> {
+                val n = DirectToolbox.nlsEnable(app)
+                val body = n.entries.joinToString(",") { (k, v) ->
+                    if (v is String) "\"$k\":${jsonQuote(v)}"
+                    else "\"$k\":$v"
+                }
+                DeviceLanePolicy.ok(command.commandId, "{$body}")
+            }
+            "device.notifications.stream" -> {
+                val target = sticky.notifStreamTargetOrigin()
+                val profile = target?.let { sticky.notifStreamProfileFor(it) }
+                DeviceLanePolicy.ok(
+                    command.commandId,
+                    "{" +
+                        "\"enabled\":${sticky.notifStreamEnabled}," +
+                        "\"origin\":${jsonQuote(sticky.notifStreamOrigin.orEmpty())}," +
+                        "\"target_origin\":${jsonQuote(target.orEmpty())}," +
+                        "\"profile\":${jsonQuote(profile.orEmpty())}," +
+                        "\"nls_bound\":${NotifStreamBus.listenerBound}" +
+                    "}",
+                )
+            }
+            "device.sms.list", "device.calls.log", "device.contacts.search" -> {
+                // One shape for the three provider reads: run off the main thread, render rows,
+                // and turn a missing grant into a named permission_denied rather than an empty
+                // list an agent would read as "you have no messages".
+                val limit = jsonNumber(args, "limit")?.toInt() ?: 20
+                runCatching {
+                    when (command.action) {
+                        "device.sms.list" -> "messages" to TelephonyToolbox.smsList(
+                            app,
+                            limit = limit,
+                            address = jsonField(args, "address"),
+                            query = jsonField(args, "query"),
+                            sinceMs = jsonNumber(args, "since_ms")?.toLong(),
+                            box = jsonField(args, "box"),
+                        )
+                        "device.calls.log" -> "calls" to TelephonyToolbox.callLog(
+                            app,
+                            limit = limit,
+                            type = jsonField(args, "type"),
+                            sinceMs = jsonNumber(args, "since_ms")?.toLong(),
+                        )
+                        else -> "contacts" to TelephonyToolbox.contactsSearch(
+                            app,
+                            query = jsonField(args, "query"),
+                            limit = limit,
+                        )
+                    }
+                }.fold(
+                    onSuccess = { (key, rows) ->
+                        val body = rows.joinToString(",") { row -> jsonObject(row) }
+                        DeviceLanePolicy.ok(command.commandId, """{"$key":[$body],"count":${rows.size}}""")
+                    },
+                    onFailure = { t ->
+                        DeviceLanePolicy.fail(
+                            command.commandId,
+                            TelephonyToolbox.errorCode(t),
+                            TelephonyToolbox.errorMessage(t),
+                        )
+                    },
+                )
+            }
+            // L2 intent handoffs: alarm, timer, play-from-search, calendar insert, share,
+            // settings deep link, uninstall. Args are read through a typed accessor over the
+            // flat argument map.
+            "device.alarm.set", "device.timer.set", "device.media.play_search",
+            "device.calendar.add", "device.share", "device.settings.open",
+            "device.apps.uninstall" -> {
+                val typed = IntentToolbox.Args { key -> jsonField(args, key) ?: jsonNumber(args, key)?.let { n ->
+                    if (n == n.toLong().toFloat()) n.toLong().toString() else n.toString()
+                } }
+                runCatching { IntentToolbox.launchTask(app, command.action, typed) }.fold(
+                    onSuccess = { info -> DeviceLanePolicy.ok(command.commandId, jsonObject(info)) },
+                    onFailure = { t ->
+                        DeviceLanePolicy.fail(
+                            command.commandId,
+                            IntentToolbox.errorCode(t),
+                            t.message ?: "handoff failed",
+                        )
+                    },
+                )
+            }
+            // L0 read surfaces. Each raises a named failure rather than returning empty data.
+            "device.calendar.list", "device.location.last", "device.battery",
+            "device.power.state", "device.thermal", "device.apps.usage",
+            "device.audio.dnd", "device.audio.dnd.set" -> {
+                runCatching {
+                    when (command.action) {
+                        "device.calendar.list" -> "events" to SystemToolbox.calendarList(
+                            app,
+                            fromMs = jsonNumber(args, "from_ms")?.toLong(),
+                            toMs = jsonNumber(args, "to_ms")?.toLong(),
+                            limit = jsonNumber(args, "limit")?.toInt() ?: 20,
+                        )
+                        "device.apps.usage" -> "apps" to SystemToolbox.appUsage(
+                            app,
+                            sinceMs = jsonNumber(args, "since_ms")?.toLong(),
+                            limit = jsonNumber(args, "limit")?.toInt() ?: 20,
+                        )
+                        "device.location.last" -> null to SystemToolbox.locationLast(app)
+                        "device.battery" -> null to SystemToolbox.battery(app)
+                        "device.power.state" -> null to SystemToolbox.powerState(app)
+                        "device.thermal" -> null to SystemToolbox.thermal(app)
+                        "device.audio.dnd" -> null to SystemToolbox.dndGet(app)
+                        else -> null to SystemToolbox.dndSet(
+                            app,
+                            jsonField(args, "mode") ?: throw IllegalArgumentException("mode required"),
+                        )
+                    }
+                }.fold(
+                    onSuccess = { (listKey, payload) ->
+                        val body = if (listKey == null) {
+                            @Suppress("UNCHECKED_CAST")
+                            jsonObject(payload as Map<String, Any?>)
+                        } else {
+                            @Suppress("UNCHECKED_CAST")
+                            val rows = payload as List<Map<String, Any?>>
+                            """{"$listKey":[${rows.joinToString(",") { jsonObject(it) }}],"count":${rows.size}}"""
+                        }
+                        DeviceLanePolicy.ok(command.commandId, body)
+                    },
+                    onFailure = { t ->
+                        DeviceLanePolicy.fail(
+                            command.commandId,
+                            SystemToolbox.errorCode(t),
+                            SystemToolbox.errorMessage(t),
+                        )
+                    },
+                )
+            }
+            "device.voice.speak" -> {
+                val text = jsonField(args, "text").orEmpty()
+                if (text.isBlank()) {
+                    return DeviceLanePolicy.fail(command.commandId, "missing_args", "text required")
+                }
+                runCatching {
+                    SpeechToolbox.speak(
+                        app,
+                        text = text,
+                        queue = jsonBool(args, "queue") ?: false,
+                        rate = jsonNumber(args, "rate"),
+                        pitch = jsonNumber(args, "pitch"),
+                        waitMs = jsonNumber(args, "wait_ms")?.toLong() ?: 0L,
+                    )
+                }.fold(
+                    onSuccess = { info -> DeviceLanePolicy.ok(command.commandId, jsonObject(info)) },
+                    onFailure = { t ->
+                        DeviceLanePolicy.fail(
+                            command.commandId,
+                            SpeechToolbox.errorCode(t),
+                            t.message ?: "speak failed",
+                        )
+                    },
+                )
+            }
+            "device.voice.stop" -> {
+                val had = SpeechToolbox.stop()
+                DeviceLanePolicy.ok(command.commandId, """{"stopped":$had}""")
+            }
+            "device.voice.status" -> {
+                DeviceLanePolicy.ok(command.commandId, jsonObject(SpeechToolbox.status(app)))
+            }
+            "device.sms.send" -> {
+                val to = jsonField(args, "address").orEmpty()
+                val body = jsonField(args, "body").orEmpty()
+                if (to.isBlank() || body.isEmpty()) {
+                    return DeviceLanePolicy.fail(
+                        command.commandId,
+                        "missing_args",
+                        "address and a non-empty body required",
+                    )
+                }
+                runCatching { TelephonyToolbox.smsSend(app, to, body) }.fold(
+                    // Never echo the body: it is a private message to a real person.
+                    onSuccess = { parts ->
+                        DeviceLanePolicy.ok(
+                            command.commandId,
+                            """{"sent":true,"parts":$parts,"length":${body.length}}""",
+                        )
+                    },
+                    onFailure = { t ->
+                        DeviceLanePolicy.fail(
+                            command.commandId,
+                            TelephonyToolbox.errorCode(t),
+                            TelephonyToolbox.errorMessage(t),
+                        )
+                    },
+                )
+            }
+            "device.sms.compose", "device.calls.dial", "device.calls.place" -> {
+                // L2 intent handoffs: these put an app on screen. compose/dial need no
+                // permission at all — the messaging app or dialer opens pre-filled and the user
+                // completes it, which is why they are the route to prefer over sms.send.
+                val to = jsonField(args, "address").orEmpty().trim()
+                if (to.isBlank()) {
+                    return DeviceLanePolicy.fail(command.commandId, "missing_args", "address required")
+                }
+                val body = jsonField(args, "body").orEmpty()
+                runCatching { IntentToolbox.launch(app, command.action, to, body) }.fold(
+                    onSuccess = { info -> DeviceLanePolicy.ok(command.commandId, jsonObject(info)) },
+                    onFailure = { t ->
+                        DeviceLanePolicy.fail(
+                            command.commandId,
+                            IntentToolbox.errorCode(t),
+                            t.message ?: "handoff failed",
+                        )
+                    },
+                )
+            }
+            "device.notifications.actions" -> {
+                val key = jsonField(args, "key").orEmpty()
+                if (key.isBlank()) {
+                    return DeviceLanePolicy.fail(command.commandId, "missing_args", "key required")
+                }
+                NotifActions.listActions(key).fold(
+                    onSuccess = { rows ->
+                        val body = rows.joinToString(",") { r ->
+                            """{"index":${r.index},"title":${jsonQuote(r.title)},"accepts_text":${r.acceptsText}}"""
+                        }
+                        DeviceLanePolicy.ok(command.commandId, """{"actions":[$body]}""")
+                    },
+                    onFailure = { t ->
+                        DeviceLanePolicy.fail(
+                            command.commandId,
+                            NotifActions.errorCode(t),
+                            NotifActions.errorMessage(t),
+                        )
+                    },
+                )
+            }
+            "device.notifications.action" -> {
+                val key = jsonField(args, "key").orEmpty()
+                val index = jsonNumber(args, "index")?.toInt()
+                if (key.isBlank() || index == null) {
+                    return DeviceLanePolicy.fail(
+                        command.commandId,
+                        "missing_args",
+                        "key and index required; list them with the notification actions tool",
+                    )
+                }
+                NotifActions.fireAction(app, key, index).fold(
+                    onSuccess = { title ->
+                        DeviceLanePolicy.ok(
+                            command.commandId,
+                            """{"fired":${jsonQuote(title)},"index":$index}""",
+                        )
+                    },
+                    onFailure = { t ->
+                        DeviceLanePolicy.fail(
+                            command.commandId,
+                            NotifActions.errorCode(t),
+                            NotifActions.errorMessage(t),
+                        )
+                    },
+                )
+            }
+            "device.notifications.reply" -> {
+                val key = jsonField(args, "key").orEmpty()
+                val text = jsonField(args, "text")
+                if (key.isBlank() || text.isNullOrEmpty()) {
+                    return DeviceLanePolicy.fail(
+                        command.commandId,
+                        "missing_args",
+                        "key and a non-empty text required",
+                    )
+                }
+                NotifActions.reply(app, key, text).fold(
+                    onSuccess = { title ->
+                        // Never echo the body back: replies land in the user's private threads.
+                        DeviceLanePolicy.ok(
+                            command.commandId,
+                            """{"replied":true,"action":${jsonQuote(title)},"length":${text.length}}""",
+                        )
+                    },
+                    onFailure = { t ->
+                        DeviceLanePolicy.fail(
+                            command.commandId,
+                            NotifActions.errorCode(t),
+                            NotifActions.errorMessage(t),
+                        )
+                    },
+                )
+            }
+            "device.notifications.dismiss" -> {
+                val key = jsonField(args, "key").orEmpty()
+                if (key.isBlank()) {
+                    return DeviceLanePolicy.fail(command.commandId, "missing_args", "key required")
+                }
+                NotifActions.dismiss(key).fold(
+                    onSuccess = { DeviceLanePolicy.ok(command.commandId, """{"dismissed":true}""") },
+                    onFailure = { t ->
+                        DeviceLanePolicy.fail(
+                            command.commandId,
+                            NotifActions.errorCode(t),
+                            NotifActions.errorMessage(t),
+                        )
+                    },
+                )
+            }
+            "device.notifications.snooze" -> {
+                val key = jsonField(args, "key").orEmpty()
+                val ms = jsonNumber(args, "duration_ms")?.toLong()
+                if (key.isBlank() || ms == null) {
+                    return DeviceLanePolicy.fail(
+                        command.commandId,
+                        "missing_args",
+                        "key and duration_ms required",
+                    )
+                }
+                NotifActions.snooze(key, ms).fold(
+                    onSuccess = { applied ->
+                        DeviceLanePolicy.ok(command.commandId, """{"snoozed_ms":$applied}""")
+                    },
+                    onFailure = { t ->
+                        DeviceLanePolicy.fail(
+                            command.commandId,
+                            NotifActions.errorCode(t),
+                            NotifActions.errorMessage(t),
+                        )
+                    },
+                )
+            }
+            "device.notifications.stream.set" -> {
+                // `enabled` is declared as a boolean in the tool schema, so it arrives unquoted;
+                // hasEnabled tracks presence separately from the parsed value so a malformed
+                // value still reports invalid_enabled rather than missing_args.
+                val hasEnabled = Regex("\"enabled\"\\s*:").containsMatchIn(args)
+                val enabledParsed = jsonBool(args, "enabled")
+                val originRaw = jsonField(args, "origin")
+                val profileRaw = jsonField(args, "profile")
+                if (!hasEnabled && originRaw == null && profileRaw == null) {
+                    return DeviceLanePolicy.fail(
+                        command.commandId,
+                        "missing_args",
+                        "pass enabled=true|false and/or origin=… and/or profile=…",
+                    )
+                }
+                // Setting the target first means setNotifStreamEnabled(…) later sees the
+                // new target when it reconfigures the bus.
+                if (originRaw != null || profileRaw != null) {
+                    setNotifStreamTarget(originRaw, profileRaw, deferLaneRefresh = true)
+                }
+                if (hasEnabled) {
+                    val parsed = enabledParsed ?: return DeviceLanePolicy.fail(
+                        command.commandId,
+                        "invalid_enabled",
+                        "enabled must be one of true/false",
+                    )
+                    setNotifStreamEnabled(parsed, deferLaneRefresh = true)
+                }
+                val target = sticky.notifStreamTargetOrigin()
+                val profile = target?.let { sticky.notifStreamProfileFor(it) }
+                DeviceLanePolicy.ok(
+                    command.commandId,
+                    "{" +
+                        "\"enabled\":${sticky.notifStreamEnabled}," +
+                        "\"origin\":${jsonQuote(sticky.notifStreamOrigin.orEmpty())}," +
+                        "\"target_origin\":${jsonQuote(target.orEmpty())}," +
+                        "\"profile\":${jsonQuote(profile.orEmpty())}," +
+                        "\"nls_bound\":${NotifStreamBus.listenerBound}" +
+                    "}",
                 )
             }
             else -> DeviceLanePolicy.fail(command.commandId, "capability_denied")
@@ -894,6 +1470,23 @@ class DeviceNodeCoordinator(
         return match?.groupValues?.getOrNull(1)?.replace("\\\"", "\"")?.replace("\\\\", "\\")
     }
 
+    /**
+     * Read a boolean argument.
+     *
+     * [jsonField] only matches a *quoted* value, so a real JSON boolean (`"enabled": true`) is
+     * invisible to it — and the tool schemas declare these as booleans, so that is exactly what
+     * a well-behaved caller sends. Accept both, plus the usual string spellings, so the wire
+     * format and the schema agree.
+     */
+    private fun jsonBool(raw: String, key: String): Boolean? {
+        val match = Regex("\"${Regex.escape(key)}\"\\s*:\\s*\"?([A-Za-z01]+)\"?").find(raw)
+        return when (match?.groupValues?.getOrNull(1)?.lowercase()) {
+            "true", "1", "yes", "on" -> true
+            "false", "0", "no", "off" -> false
+            else -> null
+        }
+    }
+
     private fun jsonNumber(raw: String, key: String): Float? {
         val match = Regex("\"${Regex.escape(key)}\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)").find(raw)
         return match?.groupValues?.getOrNull(1)?.toFloatOrNull()
@@ -906,17 +1499,12 @@ class DeviceNodeCoordinator(
         return x to y
     }
 
-    private fun jsonQuote(value: String): String = buildString {
-        append('"')
-        for (ch in value) {
-            when (ch) {
-                '\\' -> append("\\\\")
-                '"' -> append("\\\"")
-                else -> append(ch)
-            }
-        }
-        append('"')
-    }
+    // Delegated to a tested, spec-correct encoder: the previous inline version escaped only
+    // `\` and `"`, so a newline in an SMS body, notification text or snapshot label produced a
+    // payload the host could not parse — surfacing as a timeout rather than an error.
+    private fun jsonQuote(value: String): String = JsonText.quote(value)
+
+    private fun jsonObject(row: Map<String, Any?>): String = JsonText.obj(row)
 }
 
 /** Pairing phase derives from the stored credential, but only for the origin it was issued by. */

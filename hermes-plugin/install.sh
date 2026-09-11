@@ -19,14 +19,20 @@ echo "copied plugin -> $DEST"
 if command -v hermes >/dev/null 2>&1; then
   # Newer hermes asks whether the plugin may override built-in tools; we never do, so answer
   # without a prompt (and never block a non-interactive install on the question).
+  #
+  # This step is best-effort on purpose. A hand-copied plugin dir is not in the CLI's install
+  # registry, so `plugins enable` answers "Plugin 'hermes-companion' is not installed or
+  # bundled" and exits non-zero — while the runtime happily loads it because config.yaml
+  # already lists it under enabled plugins. Under `set -e` that non-zero used to abort the
+  # script *before* hc_ensure_relay, so the files landed and the relay kept running the old
+  # code. Never let this gate the restart.
   if hermes plugins enable --help 2>/dev/null | grep -q -- "--no-allow-tool-override"; then
-    hermes plugins enable --no-allow-tool-override hermes-companion </dev/null
+    hermes plugins enable --no-allow-tool-override hermes-companion </dev/null || true
   else
-    hermes plugins enable hermes-companion </dev/null
+    hermes plugins enable hermes-companion </dev/null || true
   fi
-  echo "enabled hermes-companion"
 else
-  echo "hermes CLI not on PATH — later run: hermes plugins enable hermes-companion"
+  echo "hermes CLI not on PATH — the runtime loads the plugin from config.yaml anyway"
 fi
 
 hc_ensure_relay "$SRC" "$DEST" "$HOME_DIR"

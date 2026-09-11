@@ -8,6 +8,8 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import _isolate  # noqa: F401,E402  # must precede plugin imports
+
 from pairing import PairingStore
 from relay import RelayState
 from tools import bind_stores, make_handlers

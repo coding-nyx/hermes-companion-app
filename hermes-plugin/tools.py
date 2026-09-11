@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 
 try:
+    from . import notif_policy
     from .broker import Broker, BrokerError
 except ImportError:  # script/tests on sys.path
+    import notif_policy
     from broker import Broker, BrokerError
 
 TOOLSET = "mobile"
@@ -40,6 +42,32 @@ ERROR_HINTS = {
     "click_failed": "snapshot and click an @eN; pixel taps miss often",
     "ambiguous_device": "call mobile_devices then mobile_select_device (or pass device=)",
     "lane_down": "phone lane is down — ask the user to open Companion / stay-connected",
+    "nls_unavailable": "ask the user to grant notification access: Settings → Notifications → Device & app notifications → Hermes Companion",
+    "policy_denied": "user must grant Do Not Disturb access in Settings before the phone will switch to silent",
+    "invalid_stream": "stream must be one of music/ring/notification/alarm/system/voice_call/dtmf",
+    "invalid_mode": "ringer mode must be one of normal/vibrate/silent",
+    "missing_stream": "pass stream=music|ring|notification|alarm|system|voice_call",
+    "missing_level": "pass level=<int 0..max> or step=<int delta>",
+    "missing_session": "pass session_id=<package owning the media session>; get it from mobile_media_sessions",
+    "missing_args": "required args missing for this action",
+    "no_session": "no active media session for that package; call mobile_media_sessions first",
+    "control_failed": "media control failed; the app may not support this transport action",
+    "clipboard_read_blocked": "Android blocks background clipboard reads; snapshot and read the focused field instead of using mobile_clipboard_get",
+    "clipboard_not_text": "the clipboard holds a non-text clip (image/uri); there is no text to read",
+    "unknown_notification": "that notification key is unknown; call mobile_notifications first and use a key from it",
+    "notification_gone": "the notification left the shade; re-read mobile_notifications",
+    "no_such_action": "list the buttons with mobile_notification_actions; use mobile_notification_reply for text ones",
+    "action_cancelled": "the owning app cancelled that action; open the app over the a11y lane instead",
+    "action_failed": "the notification action could not be delivered",
+    "arm_failed": "the phone refused to arm; check it is unlocked and Companion is running",
+    "permission_denied": "the phone lacks that Android permission; the message names it — grant it in Settings > Apps > Hermes Companion > Permissions or via adb pm grant",
+    "no_handler": "no app on the phone handles that intent (no messaging app or dialer installed)",
+    "handoff_failed": "the app handoff could not start; the phone may be locked",
+    "query_failed": "the provider query failed; the phone may have no telephony or SIM",
+    "tts_unavailable": "the phone has no usable text-to-speech engine, or it failed to start; call mobile_speak_status",
+    "speak_failed": "the speech engine refused the utterance",
+    "text_too_long": "the text is past the 4000-char speech cap; split it and call mobile_speak per part",
+    "unavailable": "the phone cannot do that right now (feature off, or no stored value yet) — the message says which",
 }
 
 
@@ -485,6 +513,430 @@ def make_handlers(broker: Broker):
         except BrokerError as extra:
             return _err(extra)
 
+    # ---------- L0 (direct API) tools ----------
+
+    def mobile_audio_volume_get(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        del kwargs
+        args = _with_device(params)
+        try:
+            result = broker.dispatch("device.audio.volume.get", args)
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_audio_volume_set(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        del kwargs
+        args = _with_device(params)
+        if "level" not in args and "step" not in args:
+            return _err(BrokerError("missing_level", "pass level=<0..max> or step=<delta>"))
+        stream = (args.get("stream") or "").strip()
+        if not stream:
+            return _err(BrokerError("missing_stream", "stream=music|ring|notification|alarm|system|voice_call"))
+        try:
+            result = broker.dispatch("device.audio.volume.set", args)
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_audio_ringer(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        del kwargs
+        args = _with_device(params)
+        try:
+            result = broker.dispatch("device.audio.ringer", args)
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_media_sessions(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        del kwargs
+        args = _with_device(params)
+        try:
+            result = broker.dispatch("device.media.sessions", args)
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_media_now_playing(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        del kwargs
+        args = _with_device(params)
+        if not (args.get("session_id") or "").strip():
+            return _err(BrokerError("missing_session", "session_id required (package name)"))
+        try:
+            result = broker.dispatch("device.media.now_playing", args)
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_media_control(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        del kwargs
+        args = _with_device(params)
+        if not (args.get("session_id") or "").strip():
+            return _err(BrokerError("missing_session", "session_id required (package name)"))
+        if not (args.get("action") or "").strip():
+            return _err(BrokerError("missing_args", "action=play|pause|toggle|next|prev|stop|seek"))
+        try:
+            result = broker.dispatch("device.media.control", args)
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_clipboard_get(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        del kwargs
+        args = _with_device(params)
+        try:
+            result = broker.dispatch("device.clipboard.get", args)
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_clipboard_set(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        del kwargs
+        args = _with_device(params)
+        if "text" not in args:
+            return _err(BrokerError("missing_args", "text required"))
+        try:
+            result = broker.dispatch("device.clipboard.set", args)
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_device_info(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        del kwargs
+        args = _with_device(params)
+        try:
+            result = broker.dispatch("device.device.info", args)
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_notifications_nls(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        del kwargs
+        args = _with_device(params)
+        try:
+            result = broker.dispatch("device.notifications.nls", args)
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_notifications_nls_enable(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        del kwargs
+        args = _with_device(params)
+        try:
+            result = broker.dispatch("device.notifications.nls.enable", args)
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_notifications_stream(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        del kwargs
+        args = _with_device(params)
+        try:
+            result = broker.dispatch("device.notifications.stream", args)
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_notifications_stream_set(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        del kwargs
+        args = _with_device(params)
+        # Empty-string origin/profile clear the override; treat absence as "leave alone".
+        if "origin" in args and (args.get("origin") or "").strip() == "":
+            args["origin"] = ""
+        if "profile" in args and (args.get("profile") or "").strip() == "":
+            args["profile"] = ""
+        if "enabled" not in args and "origin" not in args and "profile" not in args:
+            return _err(BrokerError("missing_args", "pass enabled=true|false and/or origin=… and/or profile=…"))
+        try:
+            result = broker.dispatch("device.notifications.stream.set", args)
+            return _dump({"ok": True, "result": result})
+        except BrokerError as extra:
+            return _err(extra)
+
+
+    # ---------- L0 notification actions ----------
+
+    def _notif_act(action, params, *, need=()):
+        """Shared shape for the notification action tools: room guard, key check, dispatch."""
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        args = _with_device(params)
+        if not str(args.get("key") or "").strip():
+            return _err(BrokerError("missing_args", "key required; get one from mobile_notifications"))
+        for field in need:
+            if args.get(field) in (None, ""):
+                return _err(BrokerError("missing_args", f"{field} required"))
+        try:
+            return _dump({"ok": True, "result": broker.dispatch(action, args)})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_notification_actions(params, **kwargs):
+        del kwargs
+        return _notif_act("device.notifications.actions", params)
+
+    def mobile_notification_action(params, **kwargs):
+        del kwargs
+        return _notif_act("device.notifications.action", params, need=("index",))
+
+    def mobile_notification_reply(params, **kwargs):
+        del kwargs
+        return _notif_act("device.notifications.reply", params, need=("text",))
+
+    def mobile_notification_dismiss(params, **kwargs):
+        del kwargs
+        return _notif_act("device.notifications.dismiss", params)
+
+    def mobile_notification_snooze(params, **kwargs):
+        del kwargs
+        return _notif_act("device.notifications.snooze", params, need=("duration_ms",))
+
+    # ---------- L0 messaging / call log / contacts ----------
+
+    def _dispatch(action, params, *, need=()):
+        """Guard, require args, dispatch. Shared by the messaging and call-log tools."""
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        args = _with_device(params)
+        for field in need:
+            if not str(args.get(field) or "").strip():
+                return _err(BrokerError("missing_args", f"{field} required"))
+        try:
+            return _dump({"ok": True, "result": broker.dispatch(action, args)})
+        except BrokerError as extra:
+            return _err(extra)
+
+    def mobile_sms_list(params, **kwargs):
+        del kwargs
+        return _dispatch("device.sms.list", params)
+
+    def mobile_sms_send(params, **kwargs):
+        del kwargs
+        return _dispatch("device.sms.send", params, need=("address", "body"))
+
+    def mobile_sms_compose(params, **kwargs):
+        del kwargs
+        return _dispatch("device.sms.compose", params, need=("address",))
+
+    def mobile_calls_log(params, **kwargs):
+        del kwargs
+        return _dispatch("device.calls.log", params)
+
+    def mobile_calls_dial(params, **kwargs):
+        del kwargs
+        return _dispatch("device.calls.dial", params, need=("address",))
+
+    def mobile_calls_place(params, **kwargs):
+        del kwargs
+        return _dispatch("device.calls.place", params, need=("address",))
+
+    def mobile_contacts_search(params, **kwargs):
+        del kwargs
+        return _dispatch("device.contacts.search", params)
+
+    # ---------- L2 intent lane + L0 read surfaces ----------
+
+    def mobile_alarm_set(params, **kwargs):
+        del kwargs
+        return _dispatch("device.alarm.set", params, need=("hour", "minute",))
+
+    def mobile_timer_set(params, **kwargs):
+        del kwargs
+        return _dispatch("device.timer.set", params, need=("seconds",))
+
+    def mobile_media_play_search(params, **kwargs):
+        del kwargs
+        return _dispatch("device.media.play_search", params, need=("query",))
+
+    def mobile_calendar_add(params, **kwargs):
+        del kwargs
+        return _dispatch("device.calendar.add", params, need=("title", "begin_ms",))
+
+    def mobile_share(params, **kwargs):
+        del kwargs
+        return _dispatch("device.share", params, need=("text",))
+
+    def mobile_settings_open(params, **kwargs):
+        del kwargs
+        return _dispatch("device.settings.open", params, need=("page",))
+
+    def mobile_app_uninstall(params, **kwargs):
+        del kwargs
+        return _dispatch("device.apps.uninstall", params, need=("package",))
+
+    def mobile_calendar_list(params, **kwargs):
+        del kwargs
+        return _dispatch("device.calendar.list", params)
+
+    def mobile_location_last(params, **kwargs):
+        del kwargs
+        return _dispatch("device.location.last", params)
+
+    def mobile_battery(params, **kwargs):
+        del kwargs
+        return _dispatch("device.battery", params)
+
+    def mobile_power_state(params, **kwargs):
+        del kwargs
+        return _dispatch("device.power.state", params)
+
+    def mobile_thermal(params, **kwargs):
+        del kwargs
+        return _dispatch("device.thermal", params)
+
+    def mobile_app_usage(params, **kwargs):
+        del kwargs
+        return _dispatch("device.apps.usage", params)
+
+    def mobile_dnd(params, **kwargs):
+        del kwargs
+        return _dispatch("device.audio.dnd", params)
+
+    def mobile_dnd_set(params, **kwargs):
+        del kwargs
+        return _dispatch("device.audio.dnd.set", params, need=("mode",))
+
+    # ---------- L0 voice out ----------
+
+    def mobile_speak(params, **kwargs):
+        del kwargs
+        return _dispatch("device.voice.speak", params, need=("text",))
+
+    def mobile_speak_stop(params, **kwargs):
+        del kwargs
+        return _dispatch("device.voice.stop", params)
+
+    def mobile_speak_status(params, **kwargs):
+        del kwargs
+        return _dispatch("device.voice.status", params)
+
+    # ---------- per-app notification policy (host-local; no device dispatch) ----------
+
+    def _phone_rules_for(args):
+        """The paired device's own per-app rules, so the read can show both layers."""
+        if _pairing_store is None:
+            return ()
+        hint = args.get("device")
+        device = None
+        try:
+            if hint:
+                device = _pairing_store.resolve(str(hint))
+            elif _pairing_store.default_device_id:
+                device = _pairing_store.devices.get(_pairing_store.default_device_id)
+        except Exception:
+            device = None
+        if device is None:
+            devices = list(getattr(_pairing_store, "devices", {}).values())
+            device = devices[0] if len(devices) == 1 else None
+        return tuple(getattr(device, "extra_protected", ()) or ())
+
+    def mobile_notification_policy(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        del kwargs
+        args = dict(params or {})
+        try:
+            return _dump({
+                "ok": True,
+                "result": notif_policy.snapshot(
+                    profile=args.get("profile"),
+                    phone_off=_phone_rules_for(args),
+                ),
+            })
+        except Exception as exc:  # policy file unreadable etc.
+            return _err(BrokerError("policy_error", str(exc)))
+
+    def mobile_notification_policy_set(params, **kwargs):
+        try:
+            _room_guard()
+        except BrokerError as guard_err:
+            return _err(guard_err)
+        del kwargs
+        args = dict(params or {})
+        package = str(args.get("package") or "").strip()
+        mode = str(args.get("mode") or "").strip().lower()
+        if not package:
+            return _err(BrokerError("missing_args", "package required"))
+        if not mode:
+            return _err(BrokerError("missing_args", "mode=off|silent|respond|default"))
+        try:
+            notif_policy.set_mode(
+                package,
+                None if mode in ("default", "clear", "") else mode,
+                profile=args.get("profile"),
+            )
+        except ValueError as exc:
+            return _err(BrokerError("invalid_mode", str(exc)))
+        except Exception as exc:
+            return _err(BrokerError("policy_error", str(exc)))
+        phone_off = _phone_rules_for(args)
+        result = notif_policy.describe(
+            package, profile=args.get("profile"), phone_off=phone_off
+        )
+        if result.get("unreachable_override"):
+            # Say so rather than reporting a mode that will never be observed.
+            result["warning"] = (
+                "the phone suppresses this package at source, so this host rule cannot take "
+                "effect; clear it in the phone's Device tab to let the app through"
+            )
+        return _dump({"ok": True, "result": result})
 
     def mobile_notifications(params, **kwargs):
         del kwargs
@@ -597,6 +1049,57 @@ def make_handlers(broker: Broker):
         "mobile_apps": mobile_apps,
         "mobile_wait": mobile_wait,
         "mobile_screenshot": mobile_screenshot,
+        # L0 (direct API) tools
+        "mobile_audio_volume_get": mobile_audio_volume_get,
+        "mobile_audio_volume_set": mobile_audio_volume_set,
+        "mobile_audio_ringer": mobile_audio_ringer,
+        "mobile_media_sessions": mobile_media_sessions,
+        "mobile_media_now_playing": mobile_media_now_playing,
+        "mobile_media_control": mobile_media_control,
+        "mobile_clipboard_get": mobile_clipboard_get,
+        "mobile_clipboard_set": mobile_clipboard_set,
+        "mobile_device_info": mobile_device_info,
+        # L0 stream + NLS controls.
+        "mobile_notifications_nls": mobile_notifications_nls,
+        "mobile_notifications_nls_enable": mobile_notifications_nls_enable,
+        "mobile_notifications_stream": mobile_notifications_stream,
+        "mobile_notifications_stream_set": mobile_notifications_stream_set,
+        # L0 notification actions.
+        "mobile_notification_actions": mobile_notification_actions,
+        "mobile_notification_action": mobile_notification_action,
+        "mobile_notification_reply": mobile_notification_reply,
+        "mobile_notification_dismiss": mobile_notification_dismiss,
+        "mobile_notification_snooze": mobile_notification_snooze,
+        # Per-app notification policy (host config).
+        "mobile_notification_policy": mobile_notification_policy,
+        "mobile_notification_policy_set": mobile_notification_policy_set,
+        # L0 messaging / call log / contacts.
+        "mobile_sms_list": mobile_sms_list,
+        "mobile_sms_send": mobile_sms_send,
+        "mobile_sms_compose": mobile_sms_compose,
+        "mobile_calls_log": mobile_calls_log,
+        "mobile_calls_dial": mobile_calls_dial,
+        "mobile_calls_place": mobile_calls_place,
+        "mobile_contacts_search": mobile_contacts_search,
+        # L0 voice out.
+        "mobile_speak": mobile_speak,
+        "mobile_speak_stop": mobile_speak_stop,
+        "mobile_speak_status": mobile_speak_status,
+        "mobile_alarm_set": mobile_alarm_set,
+        "mobile_timer_set": mobile_timer_set,
+        "mobile_media_play_search": mobile_media_play_search,
+        "mobile_calendar_add": mobile_calendar_add,
+        "mobile_share": mobile_share,
+        "mobile_settings_open": mobile_settings_open,
+        "mobile_app_uninstall": mobile_app_uninstall,
+        "mobile_calendar_list": mobile_calendar_list,
+        "mobile_location_last": mobile_location_last,
+        "mobile_battery": mobile_battery,
+        "mobile_power_state": mobile_power_state,
+        "mobile_thermal": mobile_thermal,
+        "mobile_app_usage": mobile_app_usage,
+        "mobile_dnd": mobile_dnd,
+        "mobile_dnd_set": mobile_dnd_set,
     }
 
 

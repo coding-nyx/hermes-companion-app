@@ -559,18 +559,24 @@ class DashboardClient internal constructor(
         rewind: RewindSubmit? = null,
         model: String? = null,
         partsJson: String = "",
+        /**
+         * Stable outbox id for this message. The transport is at-least-once, so a host that
+         * records it can recognise a retry instead of appending a second copy of the same
+         * message and running a second turn. Hosts that do not understand the field ignore it.
+         */
+        clientId: String = "",
     ): Flow<ChatEvent> {
         val socket = rpc
         if (rewind != null) {
             if (socket == null || !socket.isOpen) {
                 return flow { throw DashboardException("rpc_required", "rewind needs live gateway") }
             }
-            return streamTurnRpc(socket, sessionId, profileId, text, rewind, model, partsJson)
+            return streamTurnRpc(socket, sessionId, profileId, text, rewind, model, partsJson, clientId)
         }
         if (socket != null && socket.isOpen) {
-            return streamTurnRpc(socket, sessionId, profileId, text, model = model, partsJson = partsJson)
+            return streamTurnRpc(socket, sessionId, profileId, text, model = model, partsJson = partsJson, clientId = clientId)
         }
-        return streamTurnSse(origin, sessionId, profileId, text, model, partsJson)
+        return streamTurnSse(origin, sessionId, profileId, text, model, partsJson, clientId)
     }
 
     private fun streamTurnSse(
@@ -580,9 +586,11 @@ class DashboardClient internal constructor(
         text: String,
         model: String? = null,
         partsJson: String = "",
+        clientId: String = "",
     ): Flow<ChatEvent> = flow {
         val url = DashboardUrls.rest(origin, "/api/sessions/$sessionId/chat/stream", profileId)
-        val payload = """{"input":${text.json()},"profile":${profileId.json()}${modelField(model)}$partsJson}"""
+        val idField = if (clientId.isBlank()) "" else ",\"client_id\":${clientId.json()}"
+        val payload = """{"input":${text.json()},"profile":${profileId.json()}${modelField(model)}$idField$partsJson}"""
         val request = Request.Builder()
             .url(url)
             .header("Accept", "text/event-stream")
@@ -616,6 +624,7 @@ class DashboardClient internal constructor(
         rewind: RewindSubmit? = null,
         model: String? = null,
         partsJson: String = "",
+        clientId: String = "",
     ): Flow<ChatEvent> = callbackFlow {
         if (liveByStored[sessionId] == null) {
             runCatching { resumeSession(sessionId, profileId) }
@@ -635,9 +644,10 @@ class DashboardClient internal constructor(
         val submitJob = launch {
             try {
                 val extra = RewindPolicy.jsonExtras(rewind)
+                val idField = if (clientId.isBlank()) "" else ",\"client_id\":${clientId.json()}"
                 val result = socket.request(
                     "prompt.submit",
-                    """{"session_id":${bound.json()},"text":${text.json()},"profile":${profileId.json()}${modelField(model)}$partsJson$extra}""",
+                    """{"session_id":${bound.json()},"text":${text.json()},"profile":${profileId.json()}${modelField(model)}$idField$partsJson$extra}""",
                     timeoutMs = 180_000,
                 )
                 if (rewind != null) {

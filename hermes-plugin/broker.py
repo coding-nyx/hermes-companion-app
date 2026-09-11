@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from time import monotonic
 from typing import Any, Callable
 
 try:
@@ -25,6 +26,131 @@ ALLOWLIST = frozenset(
         "device.screenshot",
         "device.arm",
         "device.disarm",
+        # L0 (direct API) tools — do not require a11y and are not scoped to the foreground app.
+        "device.audio.volume.get",
+        "device.audio.volume.set",
+        "device.audio.ringer",
+        "device.media.sessions",
+        "device.media.now_playing",
+        "device.media.control",
+        "device.clipboard.get",
+        "device.clipboard.set",
+        "device.device.info",
+        # L0 stream/NLS controls.
+        "device.notifications.nls",
+        "device.notifications.nls.enable",
+        "device.notifications.stream",
+        "device.notifications.stream.set",
+        # L0 notification actions.
+        "device.notifications.actions",
+        "device.notifications.action",
+        "device.notifications.reply",
+        "device.notifications.dismiss",
+        "device.notifications.snooze",
+        # L0 messaging / call-log / contacts.
+        "device.sms.list",
+        "device.sms.send",
+        "device.sms.compose",
+        "device.calls.log",
+        "device.calls.dial",
+        "device.calls.place",
+        "device.contacts.search",
+        # L0 voice out.
+        "device.voice.speak",
+        "device.voice.stop",
+        "device.voice.status",
+        # L2 intent handoffs and L0 read surfaces.
+        "device.alarm.set",
+        "device.timer.set",
+        "device.media.play_search",
+        "device.calendar.add",
+        "device.share",
+        "device.settings.open",
+        "device.apps.uninstall",
+        "device.calendar.list",
+        "device.location.last",
+        "device.battery",
+        "device.power.state",
+        "device.thermal",
+        "device.apps.usage",
+        "device.audio.dnd",
+        "device.audio.dnd.set",
+    }
+)
+
+# Mirror of the phone-side DeviceLanePolicy.L0_NO_A11Y set. These actions are
+# not scoped to the foreground app, so the protected-package check must skip them.
+L0_NO_A11Y = frozenset(
+    {
+        "device.audio.volume.get",
+        "device.audio.volume.set",
+        "device.audio.ringer",
+        "device.media.sessions",
+        "device.media.now_playing",
+        "device.media.control",
+        "device.clipboard.get",
+        "device.clipboard.set",
+        "device.device.info",
+        "device.notifications.nls",
+        "device.notifications.nls.enable",
+        "device.notifications.stream",
+        "device.notifications.stream.set",
+        "device.notifications.actions",
+        "device.notifications.action",
+        "device.notifications.reply",
+        "device.notifications.dismiss",
+        "device.notifications.snooze",
+        "device.sms.list",
+        "device.sms.send",
+        "device.sms.compose",
+        "device.calls.log",
+        "device.calls.dial",
+        "device.calls.place",
+        "device.contacts.search",
+        "device.voice.speak",
+        "device.voice.stop",
+        "device.voice.status",
+        "device.alarm.set",
+        "device.timer.set",
+        "device.media.play_search",
+        "device.calendar.add",
+        "device.share",
+        "device.settings.open",
+        "device.apps.uninstall",
+        "device.calendar.list",
+        "device.location.last",
+        "device.battery",
+        "device.power.state",
+        "device.thermal",
+        "device.apps.usage",
+        "device.audio.dnd",
+        "device.audio.dnd.set",
+    }
+)
+
+# L0 actions that may run even when the device is DISARMED. Read-only / passive.
+# sms.list, calls.log and contacts.search are reads but are deliberately excluded: arming is
+# the user's consent, and one sms.list discloses the whole message history.
+L0_PASSIVE = frozenset(
+    {
+        "device.audio.volume.get",
+        "device.media.sessions",
+        "device.media.now_playing",
+        "device.clipboard.get",
+        "device.device.info",
+        "device.notifications.nls",
+        "device.notifications.nls.enable",
+        "device.notifications.stream",
+        # Listing a notification's buttons is a read; firing one is not.
+        "device.notifications.actions",
+        # Checking whether the phone *can* speak is harmless; speaking out loud is not.
+        "device.voice.status",
+        # Phone health telemetry: no personal data. calendar/location/app-usage are personal
+        # and deliberately stay behind arming, like sms.list.
+        "device.battery",
+        "device.power.state",
+        "device.thermal",
+        "device.audio.dnd",
     }
 )
 
@@ -158,7 +284,7 @@ class Broker:
     # Optional provider merges phone-synced custom denylist rules (per register).
     extra_protected_fn: Callable[[], tuple[str, ...]] | None = None
     hits: list[float] = field(default_factory=list)
-    clock: Callable[[], float] = lambda: 0.0
+    clock: Callable[[], float] = monotonic
     audit: AuditLog = field(default_factory=AuditLog)
 
     def _extras(self) -> tuple[str, ...]:
@@ -178,12 +304,13 @@ class Broker:
             raise BrokerError("capability_denied", f"{action} is not grantable")
         if self.device is None:
             raise BrokerError("no_device", "nothing paired")
-        if action not in META and not self.device.armed:
+        if action not in META and not self.device.armed and action not in L0_PASSIVE:
             raise BrokerError("disarmed", "device is DISARMED")
         extras = self._extras()
         app = self.device.foreground_app
         target = str(arguments.get("package") or "") or app
-        if action not in META and (is_protected(app, extras) or is_protected(target, extras)):
+        # L0 actions are not scoped to the foreground app, so the protected-package check is skipped.
+        if action not in META and action not in L0_NO_A11Y and (is_protected(app, extras) or is_protected(target, extras)):
             raise BrokerError("protected_package", target)
         if action == "device.click" and "xy" in arguments:
             xy = arguments["xy"]

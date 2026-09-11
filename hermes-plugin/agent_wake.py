@@ -487,6 +487,20 @@ def maybe_wake_for_notification(event: dict, *, now: Callable[[], float] | None 
     if package in wake_skip_packages():
         logger.debug("agent wake skip package=%s profile=%s", package, profile)
         return False
+    # Per-app policy: only `respond` wakes. Checked here as well as in push_notification so a
+    # direct caller cannot bypass a `silent` rule.
+    try:
+        try:
+            from . import notif_policy
+        except ImportError:
+            import notif_policy
+        if not notif_policy.should_wake(
+            notif_policy.effective_mode(package, profile=profile)
+        ):
+            logger.debug("agent wake muted by policy package=%s profile=%s", package, profile)
+            return False
+    except Exception:
+        pass
     if not package and not title and not text:
         return False
 

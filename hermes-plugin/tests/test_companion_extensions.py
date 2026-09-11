@@ -1,21 +1,55 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
 import unittest
 import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import _isolate  # noqa: F401,E402  # must precede plugin imports
 
 from fs_explorer import list_dir_tree, read_file_content
 from git_workspace import get_git_branches, get_git_diff, get_git_status
 from host_metrics import collect_metrics
 from relay import RelayState, make_server
 from terminal_pty import PtySession, execute_quick_command
+
+
+@contextlib.contextmanager
+def temp_git_repo():
+    """A throwaway git repo with one commit.
+
+    The git tests used to point at `Path(__file__).parents[2]`, i.e. whatever directory the
+    checkout happened to sit in. That is the repo root on a dev machine but `/tmp` on a host
+    the plugin was rsynced to, so `get_git_status` returned ok=False there — which is why
+    these passed locally and failed on lab and hub-11. Own the fixture instead of inheriting
+    the environment's.
+    """
+    if shutil.which("git") is None:
+        raise unittest.SkipTest("git not installed")
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / "repo"
+        repo.mkdir()
+        ident = ["-c", "user.email=tests@hermes.local", "-c", "user.name=Hermes Tests"]
+        def git(*args):
+            subprocess.run(
+                ["git", *ident, *args], cwd=repo, check=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        git("init", "-q")
+        (repo / "README.md").write_text("hermes test fixture\n")
+        git("add", "README.md")
+        git("commit", "-q", "-m", "initial")
+        yield str(repo)
 
 
 class CompanionExtensionsTest(unittest.TestCase):
@@ -31,8 +65,10 @@ class CompanionExtensionsTest(unittest.TestCase):
         self.assertGreaterEqual(metrics["cpu"]["percent"], 0.0)
 
     def test_git_workspace_queries(self):
-        # Test against current repo directory
-        repo_dir = str(Path(__file__).resolve().parents[2])
+        with temp_git_repo() as repo_dir:
+            self._assert_git_queries(repo_dir)
+
+    def _assert_git_queries(self, repo_dir):
         status = get_git_status(repo_dir)
         self.assertTrue(status["ok"])
         self.assertIn("branch", status)
@@ -93,6 +129,12 @@ class CompanionExtensionsTest(unittest.TestCase):
             pty.kill()
 
     def test_relay_companion_endpoints(self):
+        with temp_git_repo() as repo_dir:
+            # /companion/git/status resolves the workspace, which on a host is not a repo.
+            with patch.dict(os.environ, {"HERMES_WORKSPACE": repo_dir}, clear=False):
+                self._assert_relay_endpoints()
+
+    def _assert_relay_endpoints(self):
         state = RelayState()
         relay = make_server("127.0.0.1:0", "http://127.0.0.1:9119", state)
         threading.Thread(target=relay.serve_forever, daemon=True).start()
