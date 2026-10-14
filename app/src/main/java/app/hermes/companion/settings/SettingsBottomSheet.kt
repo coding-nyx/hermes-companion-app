@@ -51,7 +51,9 @@ fun SettingsBottomSheet(
     onSwitchModel: (model: String, provider: String) -> Unit,
     onOpenModelPicker: () -> Unit,
     onTab: (MainTab) -> Unit,
+    onSpeechBackend: (app.hermes.companion.model.SpeechBackend) -> Unit = {},
     onToggleStay: () -> Unit,
+    onToggleKeepA11y: () -> Unit = {},
     onNtfyTopicChange: (String) -> Unit,
     onSaveNtfy: () -> Unit,
     onDisconnect: () -> Unit,
@@ -133,6 +135,24 @@ fun SettingsBottomSheet(
                         .clickable { onDismiss() }
                         .padding(CompanionSpace.Xs),
                 )
+            }
+            Hairline()
+
+            Column(Modifier.fillMaxWidth().padding(CompanionSpace.Lg)) {
+                Text("SPEECH BACKEND", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    for (backend in app.hermes.companion.model.SpeechBackend.entries) {
+                        val enabled = backend != app.hermes.companion.model.SpeechBackend.HOST || app.hermes.companion.BuildConfig.HOST_SPEECH_ENABLED
+                        Text(backend.name + if (state.speechBackend == backend) " ✓" else "",
+                            style = CompanionType.Body.copy(color = if (enabled) CompanionColor.Signal else CompanionColor.TextMute),
+                            modifier = Modifier.testTag("settings.speech.${backend.name.lowercase()}")
+                                .clickable(enabled = enabled) { onSpeechBackend(backend) }.padding(vertical = 12.dp))
+                    }
+                }
+                Text(if (app.hermes.companion.BuildConfig.HOST_SPEECH_ENABLED)
+                    "Host uses the selected Hermes profile. System uses Android speech services."
+                    else "Host speech is awaiting device validation. System speech remains active and may use an online recognizer.",
+                    style = CompanionType.Body.copy(color = CompanionColor.TextDim))
             }
             Hairline()
 
@@ -538,6 +558,43 @@ fun SettingsBottomSheet(
                                 color = if (state.stayConnected) CompanionColor.Signal else CompanionColor.TextMute,
                             ),
                         )
+                    }
+                }
+
+                // Keep-accessibility-on: only offered when adb granted WRITE_SECURE_SETTINGS.
+                if (state.keepA11yAvailable) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onToggleKeepA11y() }
+                            .padding(vertical = CompanionSpace.Xs)
+                            .testTag("settings.keep_a11y"),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "KEEP ACCESSIBILITY ON",
+                                style = CompanionType.MonoSmall,
+                            )
+                            Text(
+                                text = "Re-enable Hands accessibility if it drops out · turning it off in Android settings won't stick",
+                                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim, fontSize = 10.sp),
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .border(CompanionSpace.Hairline, if (state.keepA11yOn) CompanionColor.Signal else CompanionColor.Line)
+                                .background(if (state.keepA11yOn) CompanionColor.SignalDim else CompanionColor.Void)
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                text = if (state.keepA11yOn) "ON" else "OFF",
+                                style = CompanionType.MonoSmall.copy(
+                                    color = if (state.keepA11yOn) CompanionColor.Signal else CompanionColor.TextMute,
+                                ),
+                            )
+                        }
                     }
                 }
 

@@ -49,6 +49,14 @@ def setup(parser) -> None:
     sub.add_parser("list", help="List paired Android devices")
     approve = sub.add_parser("approve", help="Approve the 6-char code shown on the phone")
     approve.add_argument("code")
+    pair_cmd = sub.add_parser("pair", help="Generate QR code and deep-link for zero-friction phone pairing")
+    pair_cmd.add_argument("--profile", default="default", help="Profile to pair with (default: default)")
+    pair_cmd.add_argument("--host", default="", help="Host origin override (e.g. http://100.x.y.z:9120)")
+    pair_cmd.add_argument("--no-approve", dest="approve", action="store_false", default=True, help="Do not pre-approve")
+    qr_cmd = sub.add_parser("qr", help="Alias for pair (generate QR code and deep-link)")
+    qr_cmd.add_argument("--profile", default="default", help="Profile to pair with (default: default)")
+    qr_cmd.add_argument("--host", default="", help="Host origin override (e.g. http://100.x.y.z:9120)")
+    qr_cmd.add_argument("--no-approve", dest="approve", action="store_false", default=True, help="Do not pre-approve")
     revoke = sub.add_parser("revoke", help="Revoke a paired device")
     revoke.add_argument("device_id")
     sub.add_parser("lanes", help="Show live device-control lanes")
@@ -228,6 +236,9 @@ def handle(args) -> None:
     if cmd == "room":
         _handle_room(args)
         return
+    if cmd in ("pair", "qr"):
+        _handle_pair_qr(args)
+        return
     if cmd == "peer":
         _handle_peer(args)
         return
@@ -235,6 +246,30 @@ def handle(args) -> None:
         _handle_agent(args)
         return
     raise SystemExit(f"unknown companion command: {cmd}")
+
+
+def _handle_pair_qr(args) -> None:
+    try:
+        from .qr import detect_host_origin, format_pair_card
+    except ImportError:
+        from qr import detect_host_origin, format_pair_card
+
+    profile = getattr(args, "profile", "default") or "default"
+    host = (getattr(args, "host", "") or "").strip()
+    approve = getattr(args, "approve", True)
+
+    # 1. Issue a pairing code from the relay
+    res = _json("POST", "/companion/device/pair", {"profile": profile})
+    code = res.get("code")
+    if not code:
+        raise SystemExit("failed to issue pairing code from relay")
+
+    # 2. Pre-approve on the host so the phone pairs without extra keystrokes
+    if approve:
+        _json("POST", f"/companion/device/pair/{code}/approve", {})
+
+    origin = host or detect_host_origin()
+    print(format_pair_card(origin=origin, code=code, profile=profile, pre_approved=approve))
 
 
 def _print_room_msg(m: dict) -> None:

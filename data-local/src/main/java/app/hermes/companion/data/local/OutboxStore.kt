@@ -26,4 +26,12 @@ class OutboxStore(private val dao: CompanionDao) {
             row.copy(attempts = row.attempts + 1, lastError = error).toEntity(),
         )
     }
+
+    suspend fun beginSubmission(item: OutboxItem, baseline: List<String>) {
+        dao.upsertOutbox(item.copy(baselineUserIds = baseline, lastError = "awaiting_ack").toEntity())
+    }
+
+    suspend fun retry(item: OutboxItem) {
+        dao.upsertOutbox(item.copy(attempts = 0, lastError = "").toEntity())
+    }
 }

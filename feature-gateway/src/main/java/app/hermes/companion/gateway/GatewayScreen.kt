@@ -56,6 +56,7 @@ import app.hermes.companion.model.SavedGateway
 fun GatewayScreen(
     status: DashboardStatus?,
     hud: GatewayHud,
+    nativeVoiceStatus: app.hermes.companion.model.NativeVoiceStatus? = null,
     hostMetrics: HostMetrics? = null,
     modelCatalog: ModelCatalog? = null,
     modelOverride: String = "",
@@ -117,6 +118,20 @@ fun GatewayScreen(
         HudLine("TG", hud.telegram)
         HudLine("DC", hud.discord)
         HudLine("API", hud.api)
+
+        nativeVoiceStatus?.let { voice ->
+            Spacer(Modifier.height(CompanionSpace.Lg))
+            Text("Voice & calls", style = CompanionType.Body)
+            Text("Voice chat · On-device audio", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim))
+            Text(when (voice.available) {
+                true -> "Host realtime voice · Ready"
+                false -> "Host realtime voice · Unavailable"
+                null -> "Host realtime voice · Not checked"
+            }, style = CompanionType.MonoSmall.copy(color = CompanionColor.Text))
+            if (voice.reason.isNotBlank()) Text(voice.reason,
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim))
+            Text("Incoming agent calls are not available yet", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim))
+        }
 
         Spacer(Modifier.height(CompanionSpace.Lg))
         Hairline()

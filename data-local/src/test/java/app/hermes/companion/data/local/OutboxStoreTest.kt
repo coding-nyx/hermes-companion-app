@@ -30,6 +30,18 @@ class OutboxStoreTest {
     }
 
     @Test
+    fun submissionBaselineSurvivesStorageAndRetry() = runBlocking {
+        val input = item("a", MOCK, "coder", 1)
+        outbox.enqueue(input)
+        outbox.beginSubmission(input, listOf("row-1", "row-2"))
+        val stored = outbox.pending(MOCK, "coder").single()
+        assertEquals(listOf("row-1", "row-2"), stored.baselineUserIds)
+        assertEquals("awaiting_ack", stored.lastError)
+        outbox.retry(stored.copy(attempts = 5))
+        assertEquals(0, outbox.pending(MOCK, "coder").single().attempts)
+    }
+
+    @Test
     fun fifoPerOriginAndProfile() = runBlocking {
         outbox.enqueue(item("b", MOCK, "coder", 2))
         outbox.enqueue(item("a", MOCK, "coder", 1))

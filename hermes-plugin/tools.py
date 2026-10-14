@@ -1113,6 +1113,7 @@ def armed_hint(paired: bool, armed: bool) -> str | None:
             "mobile_type. After mobile_open_app, wait 800-1500ms then snapshot. mobile_disarm when done."
         )
     return (
-        "Android companion is DISARMED. Call mobile_arm before snapshot/gestures "
-        "(and arm early to avoid lock-screen during long replies). Requires Accessibility on the phone."
+        "Android companion is DISARMED. Call mobile_arm before snapshot/gestures or personal-data reads "
+        "(including clipboard; arm early to avoid lock-screen during long replies). Arming does not require "
+        "Accessibility; L1 snapshots/gestures do."
     )

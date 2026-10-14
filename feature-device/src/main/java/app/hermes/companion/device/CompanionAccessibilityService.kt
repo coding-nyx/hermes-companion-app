@@ -243,5 +243,44 @@ class CompanionAccessibilityService : AccessibilityService() {
 
         @Volatile
         var foregroundApp: String = ""
+
+        /** WRITE_SECURE_SETTINGS is adb-granted only (`pm grant … WRITE_SECURE_SETTINGS`). */
+        fun canWriteSecureSettings(context: android.content.Context): Boolean =
+            context.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        /**
+         * If the app holds WRITE_SECURE_SETTINGS (granted via ADB), ensures this
+         * AccessibilityService is enabled in Settings.Secure so Android keeps it bound.
+         * This overrides the user turning the service off, so callers gate it on the
+         * user's keep-on opt-in (StickyStore.keepA11yOn).
+         */
+        fun ensureEnabled(context: android.content.Context): Boolean {
+            if (bound) return true
+            return runCatching {
+                val resolver = context.contentResolver
+                val expected = "${context.packageName}/${CompanionAccessibilityService::class.java.name}"
+                val current = android.provider.Settings.Secure.getString(
+                    resolver,
+                    android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+                ).orEmpty()
+                val services = current.split(':').filter { it.isNotBlank() }.toMutableSet()
+                if (!services.contains(expected)) {
+                    services.add(expected)
+                    val updated = services.joinToString(":")
+                    android.provider.Settings.Secure.putString(
+                        resolver,
+                        android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+                        updated,
+                    )
+                    android.provider.Settings.Secure.putString(
+                        resolver,
+                        android.provider.Settings.Secure.ACCESSIBILITY_ENABLED,
+                        "1",
+                    )
+                }
+                true
+            }.getOrDefault(false)
+        }
     }
 }

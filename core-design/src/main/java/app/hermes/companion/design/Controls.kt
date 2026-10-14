@@ -25,6 +25,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -53,10 +55,12 @@ fun ActionButton(
     val fg = if (active) accent else CompanionColor.TextMute
     val border = if (active) accent else CompanionColor.Line
     val bg = if (kind == ActionKind.PRIMARY && active) CompanionColor.SignalDim else Color.Transparent
+    val shape = RoundedCornerShape(CompanionSpace.RadiusSmall)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
-            .border(CompanionSpace.Hairline, border)
+            .clip(shape)
+            .border(CompanionSpace.Hairline, border, shape)
             .background(bg)
             .clickable(enabled = active, onClick = onClick)
             .padding(horizontal = CompanionSpace.Lg, vertical = 10.dp),
@@ -173,9 +177,12 @@ fun StatusStrip(
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
 ) {
+    val shape = RoundedCornerShape(CompanionSpace.RadiusSmall)
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .clip(shape)
+            .border(CompanionSpace.Hairline, tone.copy(alpha = 0.35f), shape)
             .background(CompanionColor.VoidElevated)
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
         verticalAlignment = Alignment.CenterVertically,

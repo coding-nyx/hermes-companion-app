@@ -1,20 +1,26 @@
 package app.hermes.companion.design
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -55,7 +61,9 @@ fun HairlineField(
     val focus = LocalFocusManager.current
     val requester = remember { BringIntoViewRequester() }
     val scope = rememberCoroutineScope()
+    var isFocused by remember { mutableStateOf(false) }
     val freeform = keyboardType == KeyboardType.Text
+    val shape = RoundedCornerShape(CompanionSpace.RadiusCard)
     fun submit() {
         onDone()
         if (!keepKeyboardOnDone) {
@@ -70,6 +78,7 @@ fun HairlineField(
             .fillMaxWidth()
             .bringIntoViewRequester(requester)
             .onFocusChanged { state ->
+                isFocused = state.isFocused
                 if (state.isFocused) {
                     // Let the IME inset start animating, then pull the field above it.
                     scope.launch {
@@ -79,8 +88,10 @@ fun HairlineField(
                 }
             }
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .border(CompanionSpace.Hairline, CompanionColor.LineStrong)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
+            .clip(shape)
+            .background(CompanionColor.VoidElevated)
+            .border(CompanionSpace.Hairline, if (isFocused) CompanionColor.Signal else CompanionColor.LineStrong, shape)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         textStyle = CompanionType.Mono.copy(color = CompanionColor.Text),
         cursorBrush = SolidColor(CompanionColor.Signal),
         singleLine = true,

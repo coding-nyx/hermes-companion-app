@@ -1,10 +1,12 @@
 package app.hermes.companion.data.local
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 import androidx.room.Index
 import app.hermes.companion.model.ChatBlock
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
+import app.hermes.companion.model.MessageDelivery
 import app.hermes.companion.model.OutboxItem
 import app.hermes.companion.model.SessionRef
 import kotlinx.serialization.decodeFromString
@@ -27,6 +29,7 @@ data class SessionEntity(
     val messageCount: Int = 0,
     val source: String = "",
     val archived: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val pinned: Boolean = false,
 )
 
 @Entity(
@@ -58,6 +61,7 @@ internal fun SessionEntity.toRef(): SessionRef = SessionRef(
     messageCount = messageCount,
     source = source,
     archived = archived,
+    pinned = pinned,
 )
 
 internal fun SessionRef.toEntity(origin: String): SessionEntity = SessionEntity(
@@ -72,6 +76,7 @@ internal fun SessionRef.toEntity(origin: String): SessionEntity = SessionEntity(
     messageCount = messageCount,
     source = source,
     archived = archived,
+    pinned = pinned,
 )
 
 internal fun MessageEntity.toModel(): ChatMessage = ChatMessage(
@@ -117,10 +122,12 @@ data class OutboxEntity(
     val attempts: Int,
     val lastError: String,
     val attachmentsJson: String = "",
+    @ColumnInfo(defaultValue = "'null'") val baselineUserIdsJson: String = "null",
 )
 
 internal fun persistableMessages(messages: List<ChatMessage>): List<ChatMessage> =
-    messages.filter { !it.streaming && !it.queued && it.id.isNotBlank() }
+    messages.filter { !it.streaming && !it.queued && !it.reasoning && it.id.isNotBlank() &&
+        it.delivery in setOf(MessageDelivery.NONE, MessageDelivery.SENT) }
 
 internal fun OutboxEntity.toItem(): OutboxItem = OutboxItem(
     id = id,
@@ -132,6 +139,7 @@ internal fun OutboxEntity.toItem(): OutboxItem = OutboxItem(
     attempts = attempts,
     lastError = lastError,
     attachmentsJson = attachmentsJson,
+    baselineUserIds = runCatching { blocksJson.decodeFromString<List<String>?>(baselineUserIdsJson) }.getOrNull(),
 )
 
 internal fun OutboxItem.toEntity(): OutboxEntity = OutboxEntity(
@@ -144,6 +152,7 @@ internal fun OutboxItem.toEntity(): OutboxEntity = OutboxEntity(
     attempts = attempts,
     lastError = lastError,
     attachmentsJson = attachmentsJson,
+    baselineUserIdsJson = blocksJson.encodeToString(baselineUserIds),
 )
 
 private val blocksJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }

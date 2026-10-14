@@ -7,6 +7,7 @@ import app.hermes.companion.model.SessionRef
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -102,6 +103,20 @@ class TranscriptCacheTest {
         cache.deleteSession(MOCK, "coder", sid)
         assertTrue(cache.sessions(MOCK, "coder").isEmpty())
         assertTrue(cache.messages(MOCK, "coder", sid).isEmpty())
+    }
+
+    @Test fun sparseEventsPreserveFlagsAndExplicitUnpinIsApplied() = runBlocking {
+        val existing = session("s", "coder", "keep the title").copy(pinned = true, archived = true, unread = true)
+        cache.upsertSession(MOCK, existing)
+        val sparse = existing.copy(title = "s", pinned = false, archived = false, unread = false, updatedAtEpochMs = 99)
+        cache.applyChange(MOCK, "coder", app.hermes.companion.model.SessionChange("upsert", sparse, setOf("id", "profile", "updated_at")))
+        val retained = cache.sessions(MOCK, "coder").single()
+        assertTrue(retained.pinned)
+        assertTrue(retained.archived)
+        assertTrue(retained.unread)
+        assertEquals("keep the title", retained.title)
+        cache.applyChange(MOCK, "coder", app.hermes.companion.model.SessionChange("upsert", sparse, setOf("id", "profile", "pinned")))
+        assertFalse(cache.sessions(MOCK, "coder").single().pinned)
     }
 
     private fun session(id: String, profile: String, title: String) = SessionRef(

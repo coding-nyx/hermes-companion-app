@@ -3,6 +3,7 @@ package app.hermes.companion
 import app.hermes.companion.console.TerminalLogEntry
 import app.hermes.companion.domain.DraftThread
 import app.hermes.companion.domain.HostHealth
+import app.hermes.companion.domain.PairDeepLink
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.Rooms
 import app.hermes.companion.domain.SessionLists
@@ -18,6 +19,7 @@ import app.hermes.companion.model.ChatAttachment
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.CronJob
 import app.hermes.companion.model.DashboardStatus
+import app.hermes.companion.model.CompanionAvailability
 import app.hermes.companion.model.DeviceArm
 import app.hermes.companion.model.GatewayHello
 import app.hermes.companion.model.GatewayHud
@@ -26,6 +28,7 @@ import app.hermes.companion.model.GitStatus
 import app.hermes.companion.model.HermesUpdateStatus
 import app.hermes.companion.model.HostMetrics
 import app.hermes.companion.model.ModelCatalog
+import app.hermes.companion.model.NativeVoiceStatus
 import app.hermes.companion.model.PairingPhase
 import app.hermes.companion.model.PeerLink
 import app.hermes.companion.model.ProfileRef
@@ -37,7 +40,7 @@ import app.hermes.companion.model.SessionRef
 enum class MainTab { THREADS, CONSOLE, REVIEW, REMINDERS, PROFILES, GATEWAY, DEVICE }
 
 /** Real-time conversational voice stream lifecycle states. */
-enum class VoiceStreamState { IDLE, LISTENING, THINKING, SPEAKING }
+enum class VoiceStreamState { IDLE, LISTENING, TRANSCRIBING, THINKING, SPEAKING }
 
 /** External `hermes-companion://open` request awaiting user confirmation (A7.10). */
 data class DeepLinkRequest(val profileId: String, val sessionId: String, val origin: String = "", val roomId: String = "")
@@ -72,8 +75,10 @@ data class CompanionState(
     val tab: MainTab = MainTab.THREADS,
     val openSessionId: String? = null,
     val openSessionRef: SessionRef? = null,
+    val hasLocalDraft: Boolean = false,
     // Agent rooms (P21). A room and a thread are never open at the same time.
     val rooms: List<RoomRef> = emptyList(),
+    val companionAvailability: CompanionAvailability = CompanionAvailability.UNKNOWN,
     val roomsLoading: Boolean = false,
     val roomsError: String? = null,
     val openRoomId: String? = null,
@@ -113,14 +118,22 @@ data class CompanionState(
     /** Structured (stream-json) session transcript while one is open. */
     val agentTranscript: AgentTranscriptState = AgentTranscriptState(),
     val messages: List<ChatMessage> = emptyList(),
+    val nativeCommands: List<app.hermes.companion.model.NativeCommand> = emptyList(),
+    val nativeCommandsOwner: app.hermes.companion.data.local.DraftOwner? = null,
+    val sessionControls: SessionControlsPanel? = null,
     val draft: String = "",
     val streaming: Boolean = false,
+    val submitting: Boolean = false,
+    val creatingThread: Boolean = false,
+    val sessionActionsBusy: Boolean = false,
+    val contextPanel: SessionContextPanel? = null,
     /**
      * Session whose turn is streaming right now, if any. Survives [ChatSessionManager.closeChat]
      * so reopening the window can show the turn as still running.
      */
     val streamingSessionId: String? = null,
     val approval: ApprovalPrompt? = null,
+    val approvalSubmittingRequestId: String? = null,
     val historyHasMore: Boolean = false,
     val historyLoading: Boolean = false,
     val rewindTargetId: String? = null,
@@ -141,6 +154,10 @@ data class CompanionState(
     val arm: DeviceArm = DeviceArm.DISARMED,
     val ntfyTopic: String = "",
     val stayConnected: Boolean = false,
+    /** User opted in to re-enabling the Hands accessibility service (StickyStore.keepA11yOn). */
+    val keepA11yOn: Boolean = false,
+    /** WRITE_SECURE_SETTINGS is granted, so the keep-on option can work at all. */
+    val keepA11yAvailable: Boolean = false,
     val lastWake: WakePing? = null,
     val hostMetrics: HostMetrics? = null,
     val modelCatalog: ModelCatalog? = null,
@@ -162,6 +179,10 @@ data class CompanionState(
     val appLocked: Boolean = false,
     val isListeningVoice: Boolean = false,
     val voiceStreamState: VoiceStreamState = VoiceStreamState.IDLE,
+    val voiceSpeaker: Boolean = true,
+    val speechBackend: app.hermes.companion.model.SpeechBackend = app.hermes.companion.model.SpeechBackend.SYSTEM,
+    val readAloudMessageId: String? = null,
+    val nativeVoiceStatus: NativeVoiceStatus? = null,
     val protectedCustom: List<String> = emptyList(),
     val protectedError: String? = null,
     val nlsBound: Boolean = false,
@@ -170,6 +191,8 @@ data class CompanionState(
     val notifStreamProfile: String? = null,
     val pairedHosts: List<String> = emptyList(),
     val pendingDeepLink: DeepLinkRequest? = null,
+    /** External `hermes-companion://pair` link: pairing hands the named host a device lane, so it waits for the user. */
+    val pendingPairLink: PairDeepLink? = null,
     val pendingDelete: SessionRef? = null,
     /** Optional per-turn model on session.create / prompt.submit (A9.3). */
     val modelOverride: String = "",
@@ -206,6 +229,35 @@ data class CompanionState(
 
     /** Drop previous host's metrics/catalog so a switch cannot show stale telemetry. */
     fun dropHostScoped(): CompanionState = copy(
+        submitting = false,
+        creatingThread = false,
+        sessionActionsBusy = false,
+        contextPanel = null,
+        sessionControls = null,
+        nativeCommands = emptyList(), nativeCommandsOwner = null,
+        openSessionId = null,
+        openSessionRef = null,
+        hasLocalDraft = false,
+        messages = emptyList(),
+        draft = "",
+        pendingAttachments = emptyList(),
+        approval = null,
+        approvalSubmittingRequestId = null,
+        companionAvailability = CompanionAvailability.UNKNOWN,
+        nativeVoiceStatus = null,
+        rooms = emptyList(),
+        roomsLoading = false,
+        roomsError = null,
+        roomCreateOpen = false,
+        openRoomId = null,
+        openRoom = null,
+        roomSpeaking = null,
+        roomSeen = emptyMap(),
+        peers = emptyList(),
+        peersLoading = false,
+        peerProfiles = emptyMap(),
+        peerLinking = null,
+        streaming = false,
         streamingSessionId = null,
         hostMetrics = null,
         modelCatalog = null,
@@ -227,6 +279,12 @@ data class CompanionState(
         gitLoading = false,
     )
 }
+
+internal fun CompanionState.owns(origin: String, profile: String): Boolean =
+    this.origin == origin && activeProfileId == profile
+
+internal fun CompanionState.shows(origin: String, profile: String, sessionId: String): Boolean =
+    owns(origin, profile) && openSessionId == sessionId && !inRoom
 
 internal fun CompanionState.mirror(node: DeviceNodeState): CompanionState = copy(
     pairingPhase = node.pairingPhase,

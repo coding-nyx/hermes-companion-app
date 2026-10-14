@@ -1,0 +1,41 @@
+{
+  "host": "lab",
+  "observed_on": "2026-10-14",
+  "source_revision": "4569bb8d21f",
+  "source_file": "hermes_cli/web_routers/audio.py",
+  "evidence": "Read installed host source over SSH. No provider request or microphone capture.",
+  "synthesis": {
+    "route": "/api/audio/speak-stream",
+    "source_route_present": true,
+    "runtime_availability": "unknown",
+    "runtime_upgrade_support": "supported",
+    "runtime_checked_profile": "knight",
+    "runtime_signal": "fallback before PCM",
+    "runtime_pcm_acceptance": "pending",
+    "native_speak_http_status": 400,
+    "upstream_provider": "Edge",
+    "upstream_http_status": 403,
+    "edge_tts_pinned_version": "7.2.7",
+    "relay_upgrade": "HTTP 101, valid accept header, no speech text sent",
+    "profile_scope": "profile query parameter applies during provider resolution and synthesis",
+    "authentication": "native WebSocket authentication and allowed-request checks",
+    "client_messages": [{"text": "incremental text"}, {"done": true}, {"stop": true}],
+    "server_messages": [
+      {"type": "start", "sample_rate": "provider rate finalized before first PCM", "channels": 1},
+      "binary signed int16 mono PCM",
+      {"type": "end"},
+      {"type": "fallback"}
+    ],
+    "fallback": "Server emits fallback when synthesis fails before producing any PCM. Client must not replay a reply after receiving PCM.",
+    "disconnect": "Stop or disconnect ends synthesis; start frame is deferred until rate is final."
+  },
+  "transcription": {
+    "conduit_route": "/api/audio/transcribe-stream",
+    "source_route_found": false,
+    "searched_source_roots": ["hermes_cli", "web/src", "apps/desktop/src", "tools"],
+    "runtime_availability": "unknown",
+    "whole_file_route": "/api/audio/transcribe",
+    "note": "Source absence is not a negotiated runtime capability verdict. Retain explicit whole-file compatibility and do not infer unsupported from authentication or network failures."
+  },
+  "android_streaming_enabled": false
+}

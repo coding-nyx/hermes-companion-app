@@ -8,6 +8,7 @@ import app.hermes.companion.domain.Rooms
 import app.hermes.companion.domain.coalesceDeltas
 import app.hermes.companion.model.ChatEvent
 import app.hermes.companion.model.ChatMessage
+import app.hermes.companion.model.CompanionAvailability
 import app.hermes.companion.model.MessageRole
 import app.hermes.companion.model.PeerLink
 import app.hermes.companion.model.ProfileRef
@@ -20,6 +21,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -62,9 +64,45 @@ class RoomSessionManager(
     private val sticky: RoomSeenStore,
     private val _state: MutableStateFlow<CompanionState>,
     private val scope: CoroutineScope,
+    private val navigationEpoch: () -> Long = { 0 },
+    private val draftStore: app.hermes.companion.data.local.ComposerDraftStore? = null,
+    private val roomApi: RoomConversationApi = DashboardRoomConversationApi(clients),
+    private val deliveryStore: app.hermes.companion.data.local.RoomDeliveryStore = app.hermes.companion.data.local.RoomDeliveryStore(),
+    private val journalDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.IO,
     /** Device credential per host, so calls to a *non-active* host (peer grant, peer profiles) are authorised. */
     private val deviceAuth: (origin: String) -> String? = { null },
 ) {
+    private var activeSelection: Selection? = null
+    private var generation = 0L
+    private data class Selection(val origin: String, val profile: String?, val room: String?,
+        val session: String?, val generation: Long, val navigation: Long)
+    private fun selection(): Selection? = _state.value.let { Selection(it.origin ?: return null,
+        it.activeProfileId, it.openRoomId, it.openSessionId, generation, navigationEpoch()) }
+    private fun owns(target: Selection, st: CompanionState = _state.value): Boolean =
+        st.origin == target.origin && st.activeProfileId == target.profile &&
+        st.openRoomId == target.room && st.openSessionId == target.session &&
+        generation == target.generation && navigationEpoch() == target.navigation
+    private fun saveDraft() {
+        val st = _state.value
+        val selected = activeSelection ?: return
+        if (!owns(selected, st)) return
+        val origin = st.origin ?: return
+        val room = st.openRoomId ?: return
+        val profile = st.activeProfileId ?: return
+        runCatching { draftStore?.save(app.hermes.companion.data.local.DraftOwner(origin, profile, "room:$room"),
+            app.hermes.companion.data.local.ComposerDraft(st.draft)) }.onFailure {
+            _state.update { current -> if (current.origin != origin || current.openRoomId != room || current.activeProfileId != profile) current
+                else current.copy(error = "Could not save this room draft. Your text remains in the composer.") }
+        }
+    }
+    init { scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+        _state.collect {
+            if (it.inRoom) saveDraft()
+            if (activeSelection?.let { selected -> !owns(selected) } == true) {
+                eventsJob?.cancel(); eventsJob = null; activeSelection = null; currentTurn = null
+            }
+        }
+    } }
     private var eventsJob: Job? = null
     /** Streaming segment id for the turn in flight (`a-<turn_id>`), or null between turns. */
     private var currentTurn: String? = null
@@ -82,33 +120,52 @@ class RoomSessionManager(
 
     // ---- rail ---------------------------------------------------------------------------------
 
+    private suspend fun extensionsAvailable(origin: String): Boolean {
+        val available = client(origin).companionAvailability(origin)
+        _state.update { st ->
+            if (st.origin != origin) st else if (available == CompanionAvailability.UNAVAILABLE) {
+                st.copy(companionAvailability = available, rooms = emptyList(), roomsError = null,
+                    roomsLoading = false, peers = emptyList(), peersLoading = false, peerProfiles = emptyMap())
+            } else st.copy(companionAvailability = available)
+        }
+        return available == CompanionAvailability.AVAILABLE && _state.value.origin == origin
+    }
+
     fun refreshRooms() {
         val origin = _state.value.origin ?: return
         scope.launch {
-            _state.update { it.copy(roomsLoading = true) }
             try {
+                if (!extensionsAvailable(origin)) return@launch
+                _state.update { if (it.origin != origin) it else it.copy(roomsLoading = true) }
                 val rooms = client(origin).listRooms(origin)
                 val seen = rooms.associate { it.id to sticky.roomSeen(origin, it.id) }
-                _state.update { it.copy(rooms = rooms, roomSeen = seen, roomsLoading = false, roomsError = null) }
+                _state.update { if (it.origin != origin) it else it.copy(rooms = rooms, roomSeen = seen, roomsLoading = false, roomsError = null) }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 // A host running an older plugin has no /companion/rooms at all: no section, no noise.
                 val unsupported = (t as? DashboardException)?.code == "http_404"
-                _state.update { it.copy(rooms = emptyList(), roomsLoading = false, roomsError = if (unsupported) null else roomError(t)) }
+                _state.update { if (it.origin != origin) it else it.copy(rooms = emptyList(), roomsLoading = false, roomsError = if (unsupported) null else roomError(t)) }
             }
         }
     }
 
     fun createRoom(spec: RoomCreateSpec) {
         val origin = _state.value.origin ?: return
+        if (_state.value.companionAvailability != CompanionAvailability.AVAILABLE) {
+            _state.update { it.copy(error = "Agent rooms require the optional Companion host integration") }
+            return
+        }
         if (spec.participants.isEmpty()) {
             _state.update { it.copy(error = "pick at least one profile") }
             return
         }
+        val target = selection() ?: return
         scope.launch {
             try {
                 val room = client(origin).createRoom(origin, spec.title, spec.participants, spec.policy)
+                if (_state.value.origin != origin || _state.value.activeProfileId != target.profile) return@launch
                 _state.update { it.copy(rooms = listOf(room) + it.rooms.filter { r -> r.id != room.id }, roomCreateOpen = false, error = null) }
+                if (!owns(target)) return@launch
                 openRoom(room)
                 if (spec.openingPost.isNotBlank()) {
                     _state.update { it.copy(draft = spec.openingPost) }
@@ -116,7 +173,7 @@ class RoomSessionManager(
                 }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
-                _state.update { it.copy(error = roomError(t)) }
+                _state.update { if (!owns(target, it)) it else it.copy(error = roomError(t)) }
             }
         }
     }
@@ -129,17 +186,26 @@ class RoomSessionManager(
 
     fun openRoom(room: RoomRef) {
         val origin = _state.value.origin ?: return
+        saveDraft()
+        generation++
         eventsJob?.cancel()
         currentTurn = null
         localSeq = 0
+        val owner = _state.value.activeProfileId?.let { app.hermes.companion.data.local.DraftOwner(origin, it, "room:${room.id}") }
+        val journalRecovery = runCatching { owner?.let(deliveryStore::list).orEmpty() }
+        val draftRecovery = runCatching { owner?.let { draftStore?.load(it)?.text }.orEmpty() }
+        val pending = journalRecovery.getOrDefault(emptyList())
+        val savedDraft = draftRecovery.getOrDefault("")
+        // Journal durability precedes clearing the draft; recreation cannot expose it as a second send.
+        val recovered = if (pending.any { it.text == savedDraft.trim() && it.state != "failed" }) "" else savedDraft
         _state.update {
             it.copy(
                 openRoomId = room.id,
                 openRoom = room,
                 openSessionId = null,
                 openSessionRef = null,
-                messages = emptyList(),
-                draft = "",
+                messages = pending.map(::deliveryRow),
+                draft = recovered,
                 streaming = room.busy,
                 roomSpeaking = room.speaking,
                 approval = room.approval,
@@ -148,42 +214,54 @@ class RoomSessionManager(
                 historyLoading = false,
                 transcriptLoading = true,
                 historySource = "",
-                error = null,
+                pendingAttachments = emptyList(),
+                error = if (journalRecovery.isFailure || draftRecovery.isFailure) "Could not recover room drafts or delivery records." else null,
             )
         }
+        val target = selection() ?: return
+        activeSelection = target
+        val baseline = _state.value.messages
         scope.launch {
             try {
-                val (fresh, rows) = client(origin).roomHistory(origin, room.id)
+                val (fresh, rows) = roomApi.history(origin, room.id)
+                if (!owns(target)) return@launch
                 val current = fresh ?: room
-                localSeq = current.seq
+                val recoveredRows = owner?.let { reconcileDeliveries(it, rows) }.orEmpty()
+                localSeq = maxOf(localSeq, current.seq)
                 markSeen(origin, current.id, current.seq)
                 _state.update { st ->
-                    if (st.openRoomId != room.id) st
+                    if (!owns(target, st)) st
                     else st.copy(
-                        messages = rows,
+                        messages = if (st.messages == baseline) rows + recoveredRows else rows + st.messages.filter { m -> rows.none { it.id == m.id } && recoveredRows.none { it.id == m.id } } + recoveredRows,
                         transcriptLoading = false,
                         historySource = "room",
                         openRoom = current,
-                        streaming = current.busy,
-                        roomSpeaking = current.speaking,
-                        approval = current.approval,
+                        streaming = if (st.messages == baseline) current.busy else st.streaming,
+                        roomSpeaking = if (st.messages == baseline) current.speaking else st.roomSpeaking,
+                        approval = st.approval ?: current.approval,
                     )
                 }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 _state.update { st ->
-                    if (st.openRoomId != room.id) st else st.copy(transcriptLoading = false, error = roomError(t))
+                    if (!owns(target, st)) st else st.copy(transcriptLoading = false, error = roomError(t))
                 }
             }
         }
-        eventsJob = scope.launch { pumpEvents(origin, room.id) }
+        eventsJob = scope.launch { pumpEvents(target) }
     }
 
     fun openRoomById(roomId: String) {
         val origin = _state.value.origin ?: return
         _state.value.rooms.firstOrNull { it.id == roomId }?.let { openRoom(it); return }
+        val target = selection() ?: return
         scope.launch {
-            val rooms = runCatching { client(origin).listRooms(origin) }.getOrDefault(emptyList())
+            val rooms = try { roomApi.list(origin) } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                if (owns(target)) _state.update { it.copy(error = roomError(t)) }
+                return@launch
+            }
+            if (!owns(target)) return@launch
             _state.update { it.copy(rooms = rooms) }
             rooms.firstOrNull { it.id == roomId }?.let { openRoom(it) }
                 ?: _state.update { it.copy(error = "room $roomId not on this host") }
@@ -191,6 +269,8 @@ class RoomSessionManager(
     }
 
     fun closeRoom() {
+        saveDraft()
+        generation++
         eventsJob?.cancel()
         eventsJob = null
         currentTurn = null
@@ -201,6 +281,7 @@ class RoomSessionManager(
                 roomSpeaking = null,
                 messages = emptyList(),
                 draft = "",
+                pendingAttachments = emptyList(),
                 streaming = false,
                 approval = null,
                 transcriptLoading = false,
@@ -213,90 +294,199 @@ class RoomSessionManager(
         if (seq <= 0) return
         if (sticky.roomSeen(origin, roomId) >= seq) return
         sticky.setRoomSeen(origin, roomId, seq)
-        _state.update { it.copy(roomSeen = it.roomSeen + (roomId to seq)) }
+        _state.update { if (it.origin != origin) it else it.copy(roomSeen = it.roomSeen + (roomId to seq)) }
     }
 
     // ---- operator actions ---------------------------------------------------------------------
 
+    private var admittingPost: String? = null
+    private val posting = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private fun owner(target: Selection) = app.hermes.companion.data.local.DraftOwner(target.origin,
+        requireNotNull(target.profile), "room:${requireNotNull(target.room)}")
+    private fun deliveryRow(record: app.hermes.companion.data.local.RoomDeliveryRecord) = ChatMessage(
+        id = record.sequence?.let { "rm-$it" } ?: record.id, role = MessageRole.USER, text = record.text,
+        delivery = when { record.sequence != null -> app.hermes.companion.model.MessageDelivery.SENT
+            record.state == "failed" -> app.hermes.companion.model.MessageDelivery.FAILED
+            else -> app.hermes.companion.model.MessageDelivery.UNCERTAIN })
+    private suspend fun reconcileDeliveries(owner: app.hermes.companion.data.local.DraftOwner, rows: List<ChatMessage>): List<ChatMessage> =
+        kotlinx.coroutines.withContext(journalDispatcher) {
+            val records = deliveryStore.list(owner)
+            records.mapNotNull { record ->
+                val baselineIds = record.baselineUserIds
+                val matches = if (baselineIds == null) emptyList() else rows.filter { row ->
+                    row.role == MessageRole.USER && row.id !in baselineIds && row.text.trim() == record.text }
+                val identicalPending = records.count { it.sequence == null && it.text == record.text && it.state != "failed" }
+                val confirmed = record.sequence?.let { seq -> rows.any { it.id == "rm-$seq" } } == true ||
+                    (record.state != "failed" && identicalPending == 1 && matches.size == 1)
+                if (confirmed) {
+                    val sequence = record.sequence ?: matches.singleOrNull()?.id?.removePrefix("rm-")?.toIntOrNull()?.takeIf { it > 0 }
+                    if (record.id in posting && sequence != null) deliveryStore.save(record.copy(state = "sent", sequence = sequence))
+                    else deliveryStore.remove(owner, record.id)
+                    null
+                } else deliveryRow(record).let { row ->
+                    if (record.state == "pending" && record.id in posting) row.copy(delivery = app.hermes.companion.model.MessageDelivery.SENDING) else row
+                }
+            }
+        }
+    private fun definitiveRejection(error: Throwable) = (error as? DashboardException)?.code in setOf(
+        "http_400", "http_401", "http_403", "http_404", "http_405", "http_410", "http_413", "http_415", "http_422")
+
     fun post() {
-        val origin = _state.value.origin ?: return
+        val target = selection() ?: return
         val room = _state.value.openRoom ?: return
+        if (target.profile == null || admittingPost != null) return
         val text = _state.value.draft.trim()
         if (text.isBlank()) return
-        // v2: the operator is never locked out; a line mid-plan steers the floor.
-        val local = ChatMessage(id = "u-room-${System.nanoTime()}", role = MessageRole.USER, text = text)
-        _state.update { it.copy(draft = "", error = null, streaming = true, messages = it.messages + local) }
+        val captured = _state.value
+        val journalOwner = owner(target)
+        val record = app.hermes.companion.data.local.RoomDeliveryRecord("u-room-${java.util.UUID.randomUUID()}", journalOwner,
+            text, if (captured.transcriptLoading || captured.historySource != "room") null else captured.messages.filter { it.role == MessageRole.USER && it.id.startsWith("rm-") }.map { it.id }, createdAt = System.currentTimeMillis())
+        admittingPost = record.id
         scope.launch {
+            var submitted = false
+            var receipt: Int? = null
             try {
-                val seq = client(origin).postRoom(origin, room.id, text)
+                kotlinx.coroutines.withContext(journalDispatcher) {
+                    check(deliveryStore.claim(record)) {
+                        "This text has an unconfirmed send. Use CHECK before sending it again." }
+                    draftStore?.consume(journalOwner, app.hermes.companion.data.local.ComposerDraft(captured.draft))
+                }
+                posting += record.id
+                _state.update { st -> if (!owns(target, st)) st else st.copy(
+                    draft = if (st.draft.trim() == text) "" else st.draft, error = null, streaming = true,
+                    messages = st.messages + ChatMessage(record.id, MessageRole.USER, text,
+                        delivery = app.hermes.companion.model.MessageDelivery.SENDING)) }
+                if (admittingPost == record.id) admittingPost = null
+                submitted = true
+                val seq = roomApi.post(target.origin, room.id, text)
+                check(seq > 0) { "The room send acknowledgment contained no sequence" }
+                receipt = seq
+                kotlinx.coroutines.withContext(journalDispatcher) { deliveryStore.save(record.copy(state = "sent", sequence = seq)) }
+                if (!owns(target)) {
+                    kotlinx.coroutines.withContext(journalDispatcher) { deliveryStore.remove(journalOwner, record.id) }
+                    return@launch
+                }
                 localSeq = maxOf(localSeq, seq)
-                markSeen(origin, room.id, seq)
+                markSeen(target.origin, room.id, seq)
                 _state.update { st ->
-                    // The room.post echo can land before this reply; never end up with two rm-<seq> rows.
-                    val echoed = st.messages.any { m -> m.id == "rm-$seq" }
-                    st.copy(
-                        messages = if (echoed) st.messages.filter { m -> m.id != local.id }
-                        else st.messages.map { m -> if (m.id == local.id) m.copy(id = "rm-$seq") else m },
-                    )
+                    if (!owns(target, st)) st else {
+                        val echoed = st.messages.any { it.id == "rm-$seq" }
+                        st.copy(messages = if (echoed) st.messages.filter { it.id != record.id }
+                            else st.messages.map { if (it.id == record.id) it.copy(id = "rm-$seq", delivery = app.hermes.companion.model.MessageDelivery.SENT) else it })
+                    }
                 }
             } catch (t: Throwable) {
-                if (t is CancellationException) throw t
-                _state.update { st ->
-                    st.copy(streaming = false, error = roomError(t), draft = text, messages = st.messages.filter { m -> m.id != local.id })
+                if (t is CancellationException) throw t // The durable pending record is uncertain after recreation.
+                val acknowledged = receipt ?: kotlinx.coroutines.withContext(journalDispatcher) {
+                    runCatching { deliveryStore.list(journalOwner).firstOrNull { it.id == record.id }?.sequence }.getOrNull()
+                }
+                if (acknowledged != null) {
+                    _state.update { st -> if (!owns(target, st)) st else st.copy(
+                        error = if (receipt != null) "Send confirmed; could not save the local receipt. Host history remains authoritative." else null,
+                        messages = if (st.messages.any { it.id == "rm-$acknowledged" }) st.messages.filterNot { it.id == record.id }
+                            else st.messages.map { if (it.id == record.id) it.copy(id = "rm-$acknowledged", delivery = app.hermes.companion.model.MessageDelivery.SENT) else it }) }
+                    return@launch
+                }
+                val failed = submitted && definitiveRejection(t)
+                if (submitted) kotlinx.coroutines.withContext(journalDispatcher) {
+                    runCatching { deliveryStore.save(record.copy(state = if (failed) "failed" else "uncertain")) }
+                }
+                _state.update { st -> if (!owns(target, st)) st else st.copy(streaming = false,
+                    error = if (!submitted || failed) roomError(t) else "Delivery is unconfirmed. CHECK reads host history without resending.",
+                    messages = st.messages.map { if (it.id == record.id) it.copy(delivery = if (failed)
+                        app.hermes.companion.model.MessageDelivery.FAILED else app.hermes.companion.model.MessageDelivery.UNCERTAIN) else it }) }
+            } finally {
+                posting -= record.id; if (admittingPost == record.id) admittingPost = null
+                if (receipt != null) kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable + journalDispatcher) {
+                    runCatching { deliveryStore.remove(journalOwner, record.id) }
                 }
             }
         }
     }
 
-    fun interrupt() = roomCall { origin, room -> client(origin).interruptRoom(origin, room.id) }
+    fun retryMessage(id: String) {
+        val target = selection() ?: return
+        if (target.room == null || target.profile == null) return
+        val journalOwner = owner(target)
+        scope.launch {
+            try {
+                val record = kotlinx.coroutines.withContext(journalDispatcher) { deliveryStore.list(journalOwner).firstOrNull { it.id == id } } ?: return@launch
+                if (record.state == "failed") {
+                    if (!owns(target)) return@launch
+                    if (_state.value.draft.isNotBlank()) {
+                        _state.update { if (owns(target, it)) it.copy(error = "Your current draft is preserved. Clear it before retrying this rejected send.") else it }; return@launch
+                    }
+                    kotlinx.coroutines.withContext(journalDispatcher) { deliveryStore.remove(journalOwner, id) }
+                    _state.update { if (!owns(target, it)) it else it.copy(draft = record.text, messages = it.messages.filterNot { row -> row.id == id }) }
+                    if (owns(target)) post()
+                    return@launch
+                }
+                val (_, rows) = roomApi.history(target.origin, target.room)
+                val pending = reconcileDeliveries(journalOwner, rows)
+                _state.update { st -> if (!owns(target, st)) st else {
+                    val known = st.messages.filterNot { row -> row.id.startsWith("u-room-") || rows.any { it.id == row.id } }
+                    st.copy(messages = rows + known + pending, error = if (pending.any { it.id == id })
+                        "Host history refreshed; delivery is still unconfirmed. Nothing was resent." else null)
+                } }
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                _state.update { if (!owns(target, it)) it else it.copy(error = roomError(t)) }
+            }
+        }
+    }
 
-    fun pause() = roomCall { origin, room -> client(origin).pauseRoom(origin, room.id) }
+    fun interrupt() = roomCall { origin, room -> client(origin).interruptRoom(origin, room.id); null }
+
+    fun pause() = roomCall { origin, room -> client(origin).pauseRoom(origin, room.id); null }
 
     fun continueRoom(turns: Int = 6) = roomCall { origin, room ->
-        client(origin).continueRoom(origin, room.id, turns)?.let { updated -> mergeRoom(updated) }
+        client(origin).continueRoom(origin, room.id, turns)
     }
 
     fun summarize(by: String = "") = roomCall { origin, room ->
-        client(origin).summarizeRoom(origin, room.id, by)?.let { updated -> mergeRoom(updated) }
+        client(origin).summarizeRoom(origin, room.id, by)
     }
 
     fun rename(title: String) = roomCall { origin, room ->
-        if (title.isNotBlank()) mergeRoom(client(origin).patchRoom(origin, room.id, title = title.trim()))
+        if (title.isNotBlank()) client(origin).patchRoom(origin, room.id, title = title.trim()) else null
     }
 
     fun setPolicy(policy: RoomPolicySpec) = roomCall { origin, room ->
-        mergeRoom(client(origin).patchRoom(origin, room.id, policy = policy))
+        client(origin).patchRoom(origin, room.id, policy = policy)
     }
 
     fun setParticipants(add: List<String>, remove: List<String>) = roomCall { origin, room ->
-        mergeRoom(client(origin).setRoomParticipants(origin, room.id, add, remove))
+        client(origin).setRoomParticipants(origin, room.id, add, remove)
     }
 
     fun respondApproval(decision: String) {
         val origin = _state.value.origin ?: return
         val room = _state.value.openRoom ?: return
         val prompt = _state.value.approval ?: return
+        val target = selection() ?: return
         scope.launch {
             try {
-                client(origin).respondRoomApproval(origin, room.id, prompt.requestId, decision)
-                _state.update { it.copy(approval = null) }
+                roomApi.approve(origin, room.id, prompt.requestId, decision)
+                _state.update { if (!owns(target, it) || it.approval?.requestId != prompt.requestId) it else it.copy(approval = null) }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
-                _state.update { it.copy(error = roomError(t)) }
+                _state.update { if (!owns(target, it)) it else it.copy(error = roomError(t)) }
             }
         }
     }
 
     fun deleteRoom(room: RoomRef) {
         val origin = _state.value.origin ?: return
+        val target = selection() ?: return
         scope.launch {
             try {
                 client(origin).deleteRoom(origin, room.id)
-                if (_state.value.openRoomId == room.id) closeRoom()
+                if (_state.value.origin != origin || _state.value.activeProfileId != target.profile) return@launch
+                if (owns(target) && _state.value.openRoomId == room.id) closeRoom()
                 _state.update { it.copy(rooms = it.rooms.filter { r -> r.id != room.id }) }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
-                _state.update { it.copy(error = roomError(t)) }
+                _state.update { if (!owns(target, it)) it else it.copy(error = roomError(t)) }
             }
         }
     }
@@ -313,22 +503,23 @@ class RoomSessionManager(
         }
     }
 
-    private fun roomCall(block: suspend (String, RoomRef) -> Unit) {
+    private fun roomCall(block: suspend (String, RoomRef) -> RoomRef?) {
         val origin = _state.value.origin ?: return
         val room = _state.value.openRoom ?: return
+        val target = selection() ?: return
         scope.launch {
             try {
-                block(origin, room)
+                block(origin, room)?.let { if (owns(target)) mergeRoom(target, it) }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
-                _state.update { it.copy(error = roomError(t)) }
+                _state.update { if (!owns(target, it)) it else it.copy(error = roomError(t)) }
             }
         }
     }
 
-    private fun mergeRoom(updated: RoomRef) {
+    private fun mergeRoom(target: Selection, updated: RoomRef) {
         _state.update { st ->
-            st.copy(
+            if (!owns(target, st)) st else st.copy(
                 openRoom = if (st.openRoomId == updated.id) updated else st.openRoom,
                 rooms = st.rooms.map { if (it.id == updated.id) updated else it }.ifEmpty { listOf(updated) },
             )
@@ -340,8 +531,12 @@ class RoomSessionManager(
     fun refreshPeers() {
         val origin = _state.value.origin ?: return
         scope.launch {
-            _state.update { it.copy(peersLoading = true) }
-            val peers = runCatching { client(origin).listPeers(origin) }.getOrDefault(emptyList())
+            if (!extensionsAvailable(origin)) return@launch
+            _state.update { if (it.origin != origin) it else it.copy(peersLoading = true) }
+            val peers = try { client(origin).listPeers(origin) } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                emptyList()
+            }
             _state.update { st -> if (st.origin != origin) st else st.copy(peers = peers, peersLoading = false) }
         }
     }
@@ -397,16 +592,18 @@ class RoomSessionManager(
     // ---- live events ----------------------------------------------------------------------------
 
     /** Reconnecting event pump; a socket drop mid-turn re-syncs incrementally from `history?after=`. */
-    private suspend fun pumpEvents(origin: String, roomId: String) {
+    private suspend fun pumpEvents(target: Selection) {
+        val origin = target.origin
+        val roomId = target.room ?: return
         var backoff = 1_000L
-        while (scope.isActive && _state.value.openRoomId == roomId) {
+        while (scope.isActive && owns(target)) {
             try {
-                client(origin).roomEvents(origin, roomId).coalesceDeltas().collect { event ->
-                    if (_state.value.openRoomId == roomId) {
+                roomApi.events(origin, roomId).coalesceDeltas().collect { event ->
+                    if (owns(target)) {
                         if (event is ChatEvent.RoomReady) {
-                            onReady(origin, roomId, event)
+                            onReady(target, event)
                         } else {
-                            _state.update { applyRoomEvent(it, event) }
+                            _state.update { if (owns(target, it)) applyRoomEvent(it, event) else it }
                             noteSeq(origin, roomId, event)
                         }
                     }
@@ -415,12 +612,12 @@ class RoomSessionManager(
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 if ((t as? DashboardException)?.code == "room_unauthorized") {
-                    _state.update { it.copy(error = roomError(t), streaming = false) }
+                    _state.update { if (owns(target, it)) it.copy(error = roomError(t), streaming = false) else it }
                     return
                 }
             }
-            if (_state.value.openRoomId != roomId) return
-            _state.update { st -> if (st.openRoomId == roomId) st.copy(historySource = "resyncing") else st }
+            if (!owns(target)) return
+            _state.update { st -> if (owns(target, st)) st.copy(historySource = "resyncing") else st }
             delay(backoff)
             backoff = (backoff * 2).coerceAtMost(15_000L)
         }
@@ -440,15 +637,19 @@ class RoomSessionManager(
     }
 
     /** `room.ready` says where the host is; pull only what the phone missed. */
-    private suspend fun onReady(origin: String, roomId: String, ready: ChatEvent.RoomReady) {
+    private suspend fun onReady(target: Selection, ready: ChatEvent.RoomReady) {
+        if (!owns(target)) return
+        val origin = target.origin
+        val roomId = target.room ?: return
         currentTurn = null
         val hostSeq = ready.seq
         if (hostSeq >= 0 && hostSeq > localSeq) {
-            runCatching { client(origin).roomHistory(origin, roomId, after = localSeq) }.onSuccess { (fresh, rows) ->
-                localSeq = fresh?.seq ?: hostSeq
+            runCatching { roomApi.history(origin, roomId, after = localSeq) }.onSuccess { (fresh, rows) ->
+                if (!owns(target)) return@onSuccess
+                localSeq = maxOf(localSeq, fresh?.seq ?: hostSeq)
                 markSeen(origin, roomId, localSeq)
                 _state.update { st ->
-                    if (st.openRoomId != roomId) st
+                    if (!owns(target, st)) st
                     else {
                         val known = st.messages.map { it.id }.toSet()
                         st.copy(
@@ -464,7 +665,7 @@ class RoomSessionManager(
             }
         } else {
             _state.update { st ->
-                if (st.openRoomId != roomId) st
+                if (!owns(target, st)) st
                 else st.copy(
                     openRoom = ready.room ?: st.openRoom,
                     streaming = ready.room?.busy ?: st.streaming,
@@ -536,9 +737,10 @@ class RoomSessionManager(
             when {
                 state.messages.any { it.id == id } -> state.copy(openRoom = room)
                 // Our own optimistic row (still carrying its local id) is this post: adopt the seq.
-                state.messages.any { it.id.startsWith("u-room-") && it.text == event.text } -> state.copy(
-                    messages = state.messages.map { m ->
-                        if (m.id.startsWith("u-room-") && m.text == event.text) m.copy(id = id) else m
+                state.messages.any { it.id.startsWith("u-room-") && it.text == event.text && it.delivery != app.hermes.companion.model.MessageDelivery.FAILED } -> state.copy(
+                    messages = state.messages.mapIndexed { index, m ->
+                        if (index == state.messages.indexOfFirst { it.id.startsWith("u-room-") && it.text == event.text && it.delivery != app.hermes.companion.model.MessageDelivery.FAILED })
+                            m.copy(id = id, delivery = app.hermes.companion.model.MessageDelivery.SENT) else m
                     },
                     streaming = true,
                     openRoom = room,

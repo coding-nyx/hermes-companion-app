@@ -17,6 +17,7 @@ import app.hermes.companion.model.BusFrame
 import app.hermes.companion.model.ChatEvent
 import app.hermes.companion.model.HudState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -46,9 +47,11 @@ class SyncManager(
     private val onWake: (WakePing) -> Unit,
 ) {
     private val liveScope: CoroutineScope get() = runtime.appScope
+    private var rosterJob: kotlinx.coroutines.Job? = null
     private fun client(origin: String): DashboardClient = clients.forOrigin(origin)
 
     fun stopAll() {
+        rosterJob?.cancel()
         runtime.watchJob?.cancel()
         runtime.watchJob = null
         runtime.hudJob?.cancel()
@@ -152,60 +155,45 @@ class SyncManager(
     }
 
     fun startWatch(origin: String, profileId: String) {
+        rosterJob?.cancel()
         runtime.watchJob?.cancel()
         runtime.watchJob = liveScope.launch {
             var backoff = 1_000L
-            var lastInstance = _state.value.gatewayHello?.instanceId.orEmpty()
-            while (isActive) {
+            while (isActive && _state.value.owns(origin, profileId)) {
                 try {
                     val hello = client(origin).wsHello(origin, profileId)
-                    if (lastInstance.isNotEmpty() && hello.instanceId.isNotEmpty() &&
-                        hello.instanceId != lastInstance
-                    ) {
-                        client(origin).forgetLiveIds()
-                        runCatching {
-                            cache.readSessions(origin, profileId) { client(origin).listSessions(origin, profileId, _state.value.showArchived) }
-                        }.onSuccess { rows ->
-                            _state.update { st ->
-                                if (st.activeProfileId == profileId) st.copy(sessions = SessionLists.normalize(rows)) else st
-                            }
-                        }
-                    }
-                    lastInstance = hello.instanceId
-                    _state.update { it.copy(gatewayHello = hello) }
+                    _state.update { if (!it.owns(origin, profileId)) it else it.copy(gatewayHello = hello) }
                     backoff = 1_000L
-                    runCatching { chat.flushOutbox() }
-                    val openId = _state.value.openSessionId
-                    if (openId != null && DraftThread.isPersisted(openId) && !_state.value.streaming) {
-                        runCatching { client(origin).pageMessages(origin, openId, profileId) }.onSuccess { page ->
-                            runCatching { cache.replaceMessages(origin, profileId, openId, page.messages) }
-                            val merged = chat.withQueued(origin, profileId, openId, page.messages)
-                            _state.update { st ->
-                                if (st.openSessionId != openId) st
-                                else st.copy(messages = merged, historyHasMore = page.hasMore)
-                            }
-                        }
-                    }
                     coroutineScope {
-                        val ping = launch {
-                            if (!hello.heartbeat) return@launch
+                        // Listen before draining outbox: draining may run for an entire agent turn.
+                        val events = launch(start = CoroutineStart.UNDISPATCHED) {
+                            client(origin).bus(profileId).collect { onBus(it, origin, profileId) }
+                        }
+                        val catchUp = launch {
+                            refreshSessions(origin, profileId)
+                            val open = _state.value.openSessionId
+                            if (DraftThread.isPersisted(open)) chat.refreshHistory(origin, profileId, open!!)
+                            chat.flushOutbox()
+                        }
+                        val poll = launch {
                             while (isActive) {
-                                delay(PING_MS)
-                                runCatching { client(origin).ping() }.onFailure {
-                                    client(origin).closeRpc()
-                                }
+                                delay(30_000)
+                                refreshSessions(origin, profileId)
                             }
                         }
-                        try {
-                            client(origin).bus(profileId).collect { frame -> onBus(frame, origin, profileId) }
-                        } finally {
-                            ping.cancel()
+                        val ping = launch {
+                            if (hello.heartbeat) while (isActive) {
+                                delay(PING_MS)
+                                try { client(origin).ping() }
+                                catch (c: CancellationException) { throw c }
+                                catch (_: Throwable) { client(origin).closeRpc(); break }
+                            }
                         }
+                        try { events.join() } finally { catchUp.cancel(); poll.cancel(); ping.cancel() }
                     }
-                } catch (c: CancellationException) {
-                    throw c
-                } catch (_: Throwable) {
-                    _state.update { it.copy(gatewayHello = null) }
+                } catch (c: CancellationException) { throw c }
+                catch (_: Throwable) {
+                    _state.update { if (!it.owns(origin, profileId)) it else it.copy(gatewayHello = null) }
                 }
                 delay(backoff)
                 backoff = (backoff * 2).coerceAtMost(30_000L)
@@ -213,21 +201,29 @@ class SyncManager(
         }
     }
 
+    private suspend fun refreshSessions(origin: String, profile: String) {
+        val archived = _state.value.showArchived
+        try {
+            val rows = chat.retainCreated(origin, profile, client(origin).listSessions(origin, profile, archived))
+            cache.replaceSessions(origin, profile, rows)
+            _state.update { if (!it.owns(origin, profile) || it.showArchived != archived) it else it.copy(sessions = rows, sessionsLoading = false) }
+        } catch (c: CancellationException) { throw c }
+        catch (_: Throwable) { /* Keep the last successful catalog during outages. */ }
+    }
+
     private fun onBus(frame: BusFrame, origin: String, profileId: String) {
+        if (!_state.value.owns(origin, profileId)) return
         when (frame) {
-            BusFrame.SessionRefetch -> scope.launch {
-                runCatching {
-                    cache.readSessions(origin, profileId) { client(origin).listSessions(origin, profileId, _state.value.showArchived) }
-                }.onSuccess { rows ->
-                    _state.update { st ->
-                        if (st.activeProfileId == profileId) st.copy(sessions = SessionLists.normalize(rows)) else st
-                    }
+            BusFrame.SessionRefetch -> {
+                if (rosterJob?.isActive != true) rosterJob = scope.launch {
+                    delay(150)
+                    refreshSessions(origin, profileId)
                 }
             }
             is BusFrame.SessionPatch -> {
                 scope.launch { runCatching { cache.applyChange(origin, profileId, frame.change) } }
                 _state.update { st ->
-                    if (st.activeProfileId != profileId) st
+                    if (!st.owns(origin, profileId)) st
                     else {
                         val next = SessionLists.normalize(
                             ProfileScope.applyChange(st.sessions, frame.change, profileId),
@@ -244,17 +240,20 @@ class SyncManager(
             is BusFrame.Chat -> {
                 val ev = frame.event
                 val open = _state.value.openSessionId
-                val forOpen = frame.sessionId == null || client(origin).matchesSession(open, frame.sessionId)
+                val forOpen = frame.sessionId != null && client(origin).matchesSession(open, frame.sessionId)
                 when (ev) {
                     is ChatEvent.PromptExpired -> _state.update { st ->
-                        if (st.approval?.requestId == ev.requestId) st.copy(approval = null) else st
+                        if (st.owns(origin, profileId) && !st.inRoom && frame.sessionId != null &&
+                            client(origin).matchesSession(st.openSessionId, frame.sessionId) && st.approval?.requestId == ev.requestId)
+                            st.copy(approval = null) else st
                     }
                     is ChatEvent.Approval -> {
                         if (forOpen && open != null) {
-                            _state.update { it.copy(approval = ev.prompt, streaming = false) }
+                            _state.update { if (!it.shows(origin, profileId, open) || it.inRoom) it
+                                else it.copy(approval = ev.prompt, streaming = false) }
                         } else if (frame.sessionId != null) {
                             _state.update { st ->
-                                st.copy(
+                                if (!st.owns(origin, profileId)) st else st.copy(
                                     sessions = st.sessions.map { row ->
                                         if (client(origin).matchesSession(row.id, frame.sessionId)) {
                                             row.copy(unread = true)
@@ -266,9 +265,12 @@ class SyncManager(
                     }
                     else -> {
                         if (!forOpen || open == null) return
-                        if (_state.value.streaming && ev !is ChatEvent.Approval) return
+                        if (streamingFor(_state.value, open)) return
                         val aid = "live-$open"
-                        _state.update { applyEvent(it, ev, aid) }
+                        _state.update { if (!it.shows(origin, profileId, open)) it else applyEvent(it, ev, aid) }
+                        if (ev is ChatEvent.Final || ev is ChatEvent.Completed) {
+                            scope.launch { chat.refreshHistory(origin, profileId, open, turnFinished = true) }
+                        }
                     }
                 }
             }

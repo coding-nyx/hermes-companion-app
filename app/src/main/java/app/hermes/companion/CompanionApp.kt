@@ -21,6 +21,12 @@ class CompanionApp : Application() {
     fun clientFor(origin: String): DashboardClient = clients.forOrigin(origin)
     lateinit var sticky: StickyStore
         private set
+    lateinit var sessionMutations: app.hermes.companion.data.local.SessionMutationStore
+        private set
+    lateinit var roomDeliveries: app.hermes.companion.data.local.RoomDeliveryStore
+        private set
+    lateinit var drafts: app.hermes.companion.data.local.ComposerDraftStore
+        private set
     lateinit var cache: TranscriptCache
         private set
     lateinit var outbox: OutboxStore
@@ -51,6 +57,9 @@ class CompanionApp : Application() {
     override fun onCreate() {
         super.onCreate()
         sticky = StickyStore(this)
+        drafts = app.hermes.companion.data.local.ComposerDraftStore.encrypted(this)
+        roomDeliveries = app.hermes.companion.data.local.RoomDeliveryStore.encrypted(this)
+        sessionMutations = app.hermes.companion.data.local.SessionMutationStore.create(this)
         val db = CompanionDatabase.create(this)
         cache = TranscriptCache(db)
         outbox = OutboxStore(db)

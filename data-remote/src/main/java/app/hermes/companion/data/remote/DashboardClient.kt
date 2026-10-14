@@ -19,6 +19,10 @@ import app.hermes.companion.model.BusFrame
 import app.hermes.companion.model.ChatEvent
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.CompanionHealth
+import app.hermes.companion.model.CompanionAvailability
+import app.hermes.companion.model.NativeVoiceStatus
+import app.hermes.companion.model.SynthesizedSpeech
+import app.hermes.companion.model.SpeechTranscript
 import app.hermes.companion.model.DashboardStatus
 import app.hermes.companion.model.DeviceCommand
 import app.hermes.companion.model.DeviceCred
@@ -32,9 +36,13 @@ import app.hermes.companion.model.RoomPolicySpec
 import app.hermes.companion.model.PeerLink
 import app.hermes.companion.model.RoomRef
 import app.hermes.companion.model.SessionRef
+import app.hermes.companion.model.SessionRuntimeSnapshot
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.withTimeout
@@ -42,6 +50,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -62,7 +71,9 @@ import app.hermes.companion.model.ModelCatalog
 import app.hermes.companion.model.ModelOption
 import app.hermes.companion.model.HermesUpdateStatus
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
@@ -89,7 +100,8 @@ class DashboardClient internal constructor(
     @Volatile
     var gated: Boolean = false
 
-    private val cookies = MemoryCookieJar()
+    private val credentialScope = HostCredentialScope()
+    private val cookies = MemoryCookieJar(credentialScope::permits)
 
     private val http: OkHttpClient = buildHttp(http, attachToken)
 
@@ -112,31 +124,101 @@ class DashboardClient internal constructor(
 
     internal constructor(http: OkHttpClient) : this(http, attachToken = false)
 
+    fun bindOrigin(origin: String) = credentialScope.bind(origin)
+
+    private fun hostMachine(origin: String, path: String): String {
+        bindOrigin(origin)
+        return DashboardUrls.machine(origin, path)
+    }
+    private fun hostRest(origin: String, path: String, profileId: String, extra: Map<String, String> = emptyMap()): String {
+        bindOrigin(origin)
+        return DashboardUrls.rest(origin, path, profileId, extra)
+    }
+    private fun hostWs(origin: String, profileId: String, ticket: String?, token: String?): String {
+        bindOrigin(origin)
+        return DashboardUrls.ws(origin, profileId, ticket, token)
+    }
+    private fun hostDeviceWs(origin: String): String {
+        bindOrigin(origin)
+        return DashboardUrls.deviceWs(origin)
+    }
+
     private val rpcLock = Mutex()
     private val deviceLock = Mutex()
     @Volatile private var rpc: GatewaySocket? = null
     @Volatile private var rpcKey: String? = null
     @Volatile private var deviceWs: DeviceSocket? = null
     private val liveByStored = ConcurrentHashMap<String, String>()
+    private val historyOffsets = ConcurrentHashMap<String, Int>()
+    private val runtimeSnapshots = ConcurrentHashMap<String, SessionRuntimeSnapshot>()
+    private val retiredPrompts = LinkedHashMap<Pair<String, String>, Unit>()
+    private val extensionLock = Mutex()
+    private val extensionAvailability = ConcurrentHashMap<String, CompanionAvailability>()
+    private val speechSupport = ConcurrentHashMap<Pair<String, String>, NativeSpeechSupport>()
+    private val extensionHttp by lazy {
+        this.http.newBuilder().connectTimeout(3, TimeUnit.SECONDS).readTimeout(3, TimeUnit.SECONDS)
+            .callTimeout(4, TimeUnit.SECONDS).build()
+    }
+
+    fun runtimeSnapshot(sessionId: String): SessionRuntimeSnapshot? = runtimeSnapshots[sessionId]
+    fun legacyOperator(): Boolean = rpc?.hello?.instanceId == "companion-standalone"
     /** SSE turn stream: a tool call can sit silent for minutes, so no read timeout. */
     private val sseHttp: OkHttpClient by lazy {
-        http.newBuilder()
+        this.http.newBuilder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .build()
     }
 
     private val wsHttp: OkHttpClient by lazy {
-        http.newBuilder()
+        this.http.newBuilder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .pingInterval(20, TimeUnit.SECONDS)
             .build()
     }
 
     suspend fun probe(origin: String): DashboardStatus =
-        get(DashboardUrls.machine(origin, "/api/status")) { parseStatus(it) }
+        get(hostMachine(origin, "/api/status")) { parseStatus(it) }
+
+    fun invalidateCompanionAvailability(origin: String) {
+        extensionAvailability.remove(origin.trimEnd('/'))
+    }
+
+    /** A missing optional integration must never block native chat. Cache conclusive results only. */
+    suspend fun companionAvailability(origin: String): CompanionAvailability = extensionLock.withLock {
+        val key = origin.trimEnd('/')
+        extensionAvailability[key]?.let { return@withLock it }
+        val availability = withContext(Dispatchers.IO) {
+            try {
+                val request = Request.Builder().url(hostMachine(origin, "/companion/health"))
+                    .header("Accept", "application/json").build()
+                extensionHttp.newCall(request).execute().use { response ->
+                    when {
+                        response.code == 404 || response.code == 405 -> CompanionAvailability.UNAVAILABLE
+                        !response.isSuccessful -> CompanionAvailability.UNKNOWN
+                        else -> {
+                            val body = response.body?.string().orEmpty()
+                            // Native dashboards may serve the SPA with HTTP 200 for unknown GET paths.
+                            val obj = runCatching { DashboardJson.parseToJsonElement(body) as? JsonObject }.getOrNull()
+                            when {
+                                (obj?.get("relay") as? JsonPrimitive)?.contentOrNull == "ok" -> CompanionAvailability.AVAILABLE
+                                body.trimStart().startsWith("<") -> CompanionAvailability.UNAVAILABLE
+                                else -> CompanionAvailability.UNKNOWN
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                currentCoroutineContext().ensureActive()
+                CompanionAvailability.UNKNOWN
+            }
+        }
+        currentCoroutineContext().ensureActive()
+        if (availability != CompanionAvailability.UNKNOWN) extensionAvailability[key] = availability
+        availability
+    }
 
     suspend fun companionHealth(origin: String): CompanionHealth =
-        get(DashboardUrls.machine(origin, "/companion/health")) { body ->
+        get(hostMachine(origin, "/companion/health")) { body ->
             val obj = DashboardJson.parseToJsonElement(body).jsonObject
             CompanionHealth(
                 relay = obj["relay"]?.jsonPrimitive?.contentOrNull.orEmpty(),
@@ -148,6 +230,97 @@ class DashboardClient internal constructor(
             )
         }
 
+    /** Native audio APIs keep provider credentials on the host. Never query voice-config keys. */
+    suspend fun voiceLiveStatus(origin: String, profileId: String): NativeVoiceStatus =
+        get(hostRest(origin, "/api/audio/voice-live/status", profileId)) { body ->
+            val obj = DashboardJson.parseToJsonElement(body).jsonObject
+            NativeVoiceStatus(obj.str("mode"), (obj["available"] as? JsonPrimitive)?.booleanOrNull,
+                obj.str("reason"), obj.str("model"), obj.str("voice"))
+        }
+
+    /** One SDP exchange; failures never replay creation or switch providers. */
+    suspend fun createRealtimeSession(origin: String, profileId: String, sdp: String,
+        history: JsonArray = JsonArray(emptyList())): app.hermes.companion.model.NativeRealtimeAnswer {
+        require(profileId.isNotBlank())
+        require(sdp.startsWith("v=0") && sdp.length <= 262_144 && sdp.contains("m=audio")) { "Valid audio SDP offer required" }
+        require(history.size <= 200 && history.toString().length <= 1_000_000) { "Call history is too large" }
+        val payload = kotlinx.serialization.json.buildJsonObject {
+            put("sdp", JsonPrimitive(sdp)); put("history", history)
+        }.toString()
+        return post(hostRest(origin, "/api/audio/voice-live/session", profileId), payload) { body ->
+            val obj = DashboardJson.parseToJsonElement(body).jsonObject
+            val transport = obj["transport"] as? JsonObject
+            val answer = (transport?.get("sdp") as? JsonPrimitive)?.contentOrNull.orEmpty()
+            val id = ((obj["session"] as? JsonObject)?.get("id") as? JsonPrimitive)?.contentOrNull.orEmpty()
+            if ((obj["ok"] as? JsonPrimitive)?.booleanOrNull == false || transport?.get("type")?.jsonPrimitive?.contentOrNull != "webrtc" ||
+                id.isBlank() || id.length > 256 || !answer.startsWith("v=0") || !answer.contains("m=audio") || answer.length > 262_144)
+                throw DashboardException("realtime_invalid", "Host returned an invalid WebRTC session")
+            app.hermes.companion.model.NativeRealtimeAnswer(id, answer)
+        }
+    }
+
+    suspend fun openSpeechStream(origin: String, profileId: String): NativeSpeechStream {
+        bindOrigin(origin)
+        require(profileId.isNotBlank()) { "speech profile required" }
+        // Match ensureRpc: gated hosts accept tickets; ungated loopback hosts accept their
+        // bootstrap token and explicitly reject tickets. Do not retry a rejected credential.
+        val credential = if (gated) mapOf("ticket" to mintWsTicket(origin)) else {
+            val token = sessionToken?.takeIf { it.isNotBlank() }
+                ?: throw DashboardException("speech_stream_auth", "Authenticate the host before using speech")
+            mapOf("token" to token)
+        }
+        val url = hostRest(origin, "/api/audio/speak-stream", profileId, credential)
+        // A ticket and host credentials must never follow a proxy redirect to another origin.
+        // A PCM reader may be backpressured longer than a ping interval. The speech coordinator
+        // owns first-audio and post-finish idle deadlines, so this socket does not race them.
+        val streamHttp = this.http.newBuilder().followRedirects(false).followSslRedirects(false)
+            .readTimeout(0, TimeUnit.MILLISECONDS).pingInterval(0, TimeUnit.MILLISECONDS).build()
+        val opened = OkHttpNativeSpeechStream(streamHttp, Request.Builder().url(url).build())
+        val key = origin.trim().trimEnd('/') to profileId.trim()
+        return object : NativeSpeechStream by opened {
+            override val events = opened.events.onEach { event ->
+                when (event) {
+                    SpeechStreamEvent.Ready -> speechSupport[key] = NativeSpeechSupport.SUPPORTED
+                    SpeechStreamEvent.Unsupported -> speechSupport[key] = NativeSpeechSupport.UNSUPPORTED
+                    else -> Unit // Auth, network, malformed data and provider failures do not establish absence.
+                }
+            }
+        }
+    }
+
+    fun speechStreamSupport(origin: String, profileId: String): NativeSpeechSupport =
+        speechSupport[origin.trim().trimEnd('/') to profileId.trim()] ?: NativeSpeechSupport.UNKNOWN
+
+    suspend fun synthesizeSpeech(origin: String, profileId: String, text: String): SynthesizedSpeech {
+        require(text.isNotBlank()) { "speech text required" }
+        return post(hostRest(origin, "/api/audio/speak", profileId), """{"text":${text.json()}}""") { body ->
+            val obj = DashboardJson.parseToJsonElement(body).jsonObject
+            val data = obj.str("data_url")
+            val header = data.substringBefore(",")
+            val encoded = data.substringAfter(",", "")
+            if ((obj["ok"] as? JsonPrimitive)?.booleanOrNull != true || !header.startsWith("data:audio/") ||
+                !header.endsWith(";base64") || encoded.isBlank() || encoded.length > 35_000_000) {
+                throw DashboardException("audio_invalid", "Hermes returned no valid speech audio")
+            }
+            val bytes = try { java.util.Base64.getDecoder().decode(encoded) }
+            catch (_: IllegalArgumentException) { throw DashboardException("audio_invalid", "Hermes returned invalid speech audio") }
+            if (bytes.isEmpty() || bytes.size > 25 * 1024 * 1024) throw DashboardException("audio_invalid", "Speech audio is empty or too large")
+            SynthesizedSpeech(bytes, header.removePrefix("data:").removeSuffix(";base64"), obj.str("provider"))
+        }
+    }
+
+    suspend fun transcribeAudio(origin: String, profileId: String, bytes: ByteArray, mime: String): SpeechTranscript {
+        require(bytes.isNotEmpty() && bytes.size <= 25 * 1024 * 1024) { "recording must be between 1 byte and 25 MB" }
+        require(mime.startsWith("audio/") && !mime.contains(';') && !mime.contains(',')) { "audio MIME type required" }
+        val data = "data:$mime;base64," + java.util.Base64.getEncoder().encodeToString(bytes)
+        return post(hostRest(origin, "/api/audio/transcribe", profileId),
+            """{"data_url":${data.json()},"mime_type":${mime.json()}}""") { body ->
+            val obj = DashboardJson.parseToJsonElement(body).jsonObject
+            if ((obj["ok"] as? JsonPrimitive)?.booleanOrNull != true) throw DashboardException("transcription_failed", obj.str("error").ifBlank { "Speech transcription failed" })
+            SpeechTranscript(obj.str("transcript"), obj.str("provider")) // Empty speech is a successful silence result.
+        }
+    }
+
     suspend fun uploadMedia(
         origin: String,
         bytes: ByteArray,
@@ -157,14 +330,14 @@ class DashboardClient internal constructor(
         val b64 = java.util.Base64.getEncoder().encodeToString(bytes)
         val payload = """{"filename":${filename.json()},"mime":${mime.json()},"data":${b64.json()}}"""
         return try {
-            post("$origin/companion/media", payload) { body ->
+            post(hostMachine(origin, "/companion/media"), payload) { body ->
                 val obj = DashboardJson.parseToJsonElement(body).jsonObject
                 val path = obj["url"]?.jsonPrimitive?.contentOrNull.orEmpty()
                 if (path.startsWith("http")) path else origin.trimEnd('/') + path
             }
         } catch (e: DashboardException) {
             if (e.code != "http_404") throw e
-            post("$origin/api/chat/image-upload", payload) { body ->
+            post(hostMachine(origin, "/api/chat/image-upload"), payload) { body ->
                 val obj = DashboardJson.parseToJsonElement(body).jsonObject
                 val path = obj["url"]?.jsonPrimitive?.contentOrNull.orEmpty()
                     .ifBlank { obj["path"]?.jsonPrimitive?.contentOrNull.orEmpty() }
@@ -175,7 +348,9 @@ class DashboardClient internal constructor(
 
     suspend fun fetchBytes(url: String): ByteArray = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(url).get().build()
-        http.newCall(request).execute().use { response ->
+        // Media GET may follow redirects; the network guard removes host credentials on every
+        // hop outside the connection scope. Host mutations and ticket sockets do not redirect.
+        http.newBuilder().followRedirects(true).followSslRedirects(true).build().newCall(request).execute().use { response ->
             val bytes = response.body?.bytes() ?: ByteArray(0)
             if (!response.isSuccessful) {
                 throw httpError(response.code, bytes.decodeToString(), url)
@@ -187,17 +362,19 @@ class DashboardClient internal constructor(
     fun useLoopback() {
         gated = false
         cookies.clear()
+        speechSupport.clear()
     }
 
     fun useGated() {
         gated = true
         sessionToken = null
+        speechSupport.clear()
     }
 
     /** Loopback dashboards inject an ephemeral token into the SPA. Adopt it. */
     suspend fun adoptLoopbackToken(origin: String): String? {
         if (gated) return null
-        val html = runCatching { getHtml(DashboardUrls.machine(origin, "/")) }.getOrNull() ?: return null
+        val html = runCatching { getHtml(hostMachine(origin, "/")) }.getOrNull() ?: return null
         val token = TOKEN_RE.find(html)?.groupValues?.getOrNull(1)
         if (!token.isNullOrBlank()) sessionToken = token
         return token
@@ -209,9 +386,10 @@ class DashboardClient internal constructor(
         password: String,
         provider: String = "basic",
     ) {
+        bindOrigin(origin)
         useGated()
         post(
-            DashboardUrls.machine(origin, "/auth/password-login"),
+            hostMachine(origin, "/auth/password-login"),
             AuthPolicy.jsonLogin(provider, username, password),
         ) { }
     }
@@ -219,20 +397,20 @@ class DashboardClient internal constructor(
     suspend fun offerPair(origin: String, code: String, profileId: String): PairingStatus {
         val id = ProfileScope.requireProfileId(profileId)
         val payload = """{"code":${code.json()},"profile":${id.json()},"protocol_version":1}"""
-        return post(DashboardUrls.machine(origin, "/companion/device/pair"), payload) { parsePairing(it) }
+        return post(hostMachine(origin, "/companion/device/pair"), payload) { parsePairing(it) }
     }
 
     suspend fun pollPair(origin: String, code: String): PairingStatus =
-        get(DashboardUrls.machine(origin, "/companion/device/pair/${code.trim()}")) { parsePairing(it) }
+        get(hostMachine(origin, "/companion/device/pair/${code.trim()}")) { parsePairing(it) }
 
     suspend fun approvePair(origin: String, code: String): PairingStatus {
-        post(DashboardUrls.machine(origin, "/companion/device/pair/${code.trim()}/approve"), "{}") { }
+        post(hostMachine(origin, "/companion/device/pair/${code.trim()}/approve"), "{}") { }
         return pollPair(origin, code)
     }
 
     suspend fun revokeDevice(origin: String, deviceId: String) {
         val payload = """{"device_id":${deviceId.json()}}"""
-        post(DashboardUrls.machine(origin, "/companion/device/revoke"), payload) { }
+        post(hostMachine(origin, "/companion/device/revoke"), payload) { }
     }
 
     suspend fun registerDevice(
@@ -246,6 +424,7 @@ class DashboardClient internal constructor(
         capabilities: List<String> = DeviceLanePolicy.CAPABILITIES,
         wakeTopic: String = "",
     ): DeviceTicket {
+        bindOrigin(origin)
         companionAuth = "${cred.deviceId}:${cred.credential}"
         val payload = DeviceLanePolicy.registerJson(
             deviceId = cred.deviceId,
@@ -259,12 +438,12 @@ class DashboardClient internal constructor(
             protectedPackages = protectedPackages,
             wakeTopic = wakeTopic,
         )
-        return post(DashboardUrls.machine(origin, "/companion/device/register"), payload) { parseDeviceTicket(it) }
+        return post(hostMachine(origin, "/companion/device/register"), payload) { parseDeviceTicket(it) }
     }
 
     suspend fun renameDevice(origin: String, deviceId: String, name: String) {
         val payload = """{"device_id":${deviceId.json()},"name":${name.json()}}"""
-        post(DashboardUrls.machine(origin, "/companion/device/rename"), payload) { }
+        post(hostMachine(origin, "/companion/device/rename"), payload) { }
     }
 
     suspend fun openDeviceLane(
@@ -278,6 +457,7 @@ class DashboardClient internal constructor(
         capabilities: List<String> = DeviceLanePolicy.CAPABILITIES,
         wakeTopic: String = "",
     ) {
+        bindOrigin(origin)
         companionAuth = "${cred.deviceId}:${cred.credential}"
         deviceLock.withLock {
             deviceWs?.close()
@@ -293,7 +473,7 @@ class DashboardClient internal constructor(
             )
             if (ticket.ticket.isBlank()) throw DashboardException("device_ticket", "empty device ticket")
             val socket = DeviceSocket(wsHttp)
-            socket.connect(DashboardUrls.deviceWs(origin), DeviceLanePolicy.protocolHeader(ticket.ticket))
+            socket.connect(hostDeviceWs(origin), DeviceLanePolicy.protocolHeader(ticket.ticket))
             deviceWs = socket
         }
     }
@@ -340,14 +520,36 @@ class DashboardClient internal constructor(
     }
 
     suspend fun mintWsTicket(origin: String): String {
-        val ticket = post(DashboardUrls.machine(origin, "/api/auth/ws-ticket"), "{}") { parseWsTicket(it) }
-        if (ticket.isBlank()) throw DashboardException("ticket", "empty ws ticket")
-        return ticket
+        val url = hostMachine(origin, "/api/auth/ws-ticket")
+        val ticketHttp = http.newBuilder().followRedirects(false).followSslRedirects(false)
+            .callTimeout(15, TimeUnit.SECONDS).build()
+        val request = Request.Builder().url(url).post("{}".toRequestBody("application/json".toMediaType())).build()
+        return kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+            val call = ticketHttp.newCall(request)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: okhttp3.Call, error: java.io.IOException) {
+                    if (continuation.isActive) continuation.resumeWith(Result.failure(
+                        DashboardException("ticket_connection", "Could not authenticate the host WebSocket")))
+                }
+                override fun onResponse(call: okhttp3.Call, response: Response) {
+                    val result = runCatching { response.use {
+                        val body = response.peekBody(65_537).string()
+                        if (body.length > 65_536) throw DashboardException("ticket", "Invalid WebSocket ticket response")
+                        if (!response.isSuccessful) throw httpError(response.code, body, url)
+                        parseWsTicket(body).also { ticket ->
+                            if (ticket.isBlank()) throw DashboardException("ticket", "empty ws ticket")
+                        }
+                    } }
+                    if (continuation.isActive) continuation.resumeWith(result)
+                }
+            })
+        }
     }
 
     /** Machine roster. Not profile-scoped — otherwise the switcher would only see the active agent. */
     suspend fun listProfiles(origin: String): List<ProfileRef> =
-        get(DashboardUrls.machine(origin, "/api/profiles")) { parseProfiles(it) }
+        get(hostMachine(origin, "/api/profiles")) { parseProfiles(it) }
 
     /**
      * Catch-up. Always scoped. Client still filters by profileId.
@@ -359,6 +561,7 @@ class DashboardClient internal constructor(
      * Ordering is not decided here — `SessionLists.normalize` does that once, in the domain.
      */
     suspend fun listSessions(origin: String, profileId: String, includeArchived: Boolean = false): List<SessionRef> {
+        bindOrigin(origin)
         val socket = rpc
         val rpcRows = if (socket != null && socket.isOpen) {
             runCatching { listSessionsRpc(socket, profileId, includeArchived) }.getOrNull()
@@ -380,6 +583,7 @@ class DashboardClient internal constructor(
         limit: Int = HistoryPaging.PAGE,
         ended: Boolean = false,
     ): HistoryPage {
+        bindOrigin(origin)
         val cap = HistoryPaging.cap(limit)
         val socket = rpc
         if (socket != null && socket.isOpen) {
@@ -398,9 +602,11 @@ class DashboardClient internal constructor(
     }
 
     suspend fun pendingApproval(origin: String, sessionId: String, profileId: String): ApprovalPrompt? {
-        val url = DashboardUrls.rest(origin, "/api/sessions/$sessionId/approval", profileId)
+        bindOrigin(origin)
+        runtimeSnapshots[sessionId]?.approval?.takeUnless { promptRetired(sessionId, it.requestId) }?.let { return it }
+        val url = hostRest(origin, "/api/sessions/$sessionId/approval", profileId)
         return try {
-            get(url) { parseApproval(it) }
+            get(url) { parseApproval(it)?.takeUnless { prompt -> promptRetired(sessionId, prompt.requestId) } }
         } catch (e: DashboardException) {
             if (e.code == "http_404") null else throw e
         }
@@ -425,6 +631,7 @@ class DashboardClient internal constructor(
         prompt: ApprovalPrompt,
         decision: String,
     ) {
+        bindOrigin(origin)
         val socket = rpc
         if (socket != null && socket.isOpen) {
             val live = liveSessionId(sessionId)
@@ -442,14 +649,25 @@ class DashboardClient internal constructor(
                 "secret" ->
                     """{"session_id":${live.json()},"request_id":${prompt.requestId.json()},"value":${decision.json()}}"""
                 else ->
-                    """{"session_id":${live.json()},"request_id":${prompt.requestId.json()},"choice":${decision.json()},"decision":${decision.json()}}"""
+                    """{"session_id":${live.json()},"profile":${profileId.json()},"request_id":${prompt.requestId.json()},"choice":${decision.json()}}"""
             }
-            val accepted = runCatching { socket.request(method, params) }.isSuccess
-            if (accepted) return
+            try {
+                val result = socket.request(method, params)
+                val resolved = result["resolved"] as? JsonPrimitive
+                if (resolved?.intOrNull == 0 || resolved?.booleanOrNull == false || result.str("status") == "expired") {
+                    retirePrompt(sessionId, prompt.requestId)
+                    throw DashboardException("request_expired", "This request is no longer pending")
+                }
+                retirePrompt(sessionId, prompt.requestId)
+                return
+            } catch (e: DashboardException) {
+                if (e.code != "rpc_-32601") throw e
+            }
         }
-        val url = DashboardUrls.rest(origin, "/api/sessions/$sessionId/approval", profileId)
+        val url = hostRest(origin, "/api/sessions/$sessionId/approval", profileId)
         val payload = """{"request_id":${prompt.requestId.json()},"decision":${decision.json()},"choice":${decision.json()}}"""
         post(url, payload) { it }
+        retirePrompt(sessionId, prompt.requestId)
     }
 
     suspend fun ping() {
@@ -470,7 +688,7 @@ class DashboardClient internal constructor(
         }
         val job = launch {
             socket.events.collect { ev ->
-                decodeBus(ev, profileId)?.let { trySend(it) }
+                decodeBus(ev, profileId)?.let { send(it) }
             }
         }
         val wait = launch {
@@ -485,6 +703,7 @@ class DashboardClient internal constructor(
 
     fun forgetLiveIds() {
         liveByStored.clear()
+        runtimeSnapshots.clear()
     }
 
     fun matchesSession(storedOrLive: String?, other: String?): Boolean {
@@ -496,12 +715,30 @@ class DashboardClient internal constructor(
     internal fun decodeBus(ev: RpcEvent, profileId: String): BusFrame? {
         if (ev.type == "sessions.changed") {
             val payload = ev.payload ?: return BusFrame.SessionRefetch
-            val change = parseSessionChange(payload, profileId) ?: return BusFrame.SessionRefetch
+            val change = parseSessionChange(payload, "") ?: return BusFrame.SessionRefetch
             if (change.session.profileId.isBlank()) return BusFrame.SessionRefetch
             return BusFrame.SessionPatch(change)
         }
         val chat = RpcCodec.toChatEvent(ev) ?: return null
+        if (chat is ChatEvent.PromptExpired && ev.sessionId != null) retirePrompt(ev.sessionId, chat.requestId)
+        if (chat is ChatEvent.Approval && ev.sessionId != null && promptRetired(ev.sessionId, chat.prompt.requestId)) return null
         return BusFrame.Chat(chat, ev.sessionId)
+    }
+
+    private fun promptRetired(session: String, request: String): Boolean = synchronized(retiredPrompts) {
+        retiredPrompts.keys.any { (sid, id) -> id == request && matchesSession(sid, session) }
+    }
+    fun isPromptRetired(session: String, request: String): Boolean = promptRetired(session, request)
+    private fun retirePrompt(session: String, request: String) {
+        synchronized(retiredPrompts) {
+            retiredPrompts[session to request] = Unit
+            while (retiredPrompts.size > 256) retiredPrompts.remove(retiredPrompts.keys.first())
+        }
+        runtimeSnapshots.entries.forEach { entry ->
+            val snapshot = entry.value
+            if (matchesSession(entry.key, session) && snapshot.approval?.requestId == request)
+                runtimeSnapshots.replace(entry.key, snapshot, snapshot.copy(approval = null))
+        }
     }
 
     suspend fun wsHello(origin: String, profileId: String, ticket: String? = null): GatewayHello {
@@ -514,6 +751,7 @@ class DashboardClient internal constructor(
         rpc = null
         rpcKey = null
         liveByStored.clear()
+        runtimeSnapshots.clear()
     }
 
     suspend fun createSession(
@@ -521,32 +759,202 @@ class DashboardClient internal constructor(
         profileId: String,
         title: String = "",
         model: String? = null,
+        idempotencyKey: String = "",
+        requireRpc: Boolean = false,
     ): SessionRef {
+        bindOrigin(origin)
         val extra = modelField(model)
-        val socket = rpc
+        val keyField = if (idempotencyKey.isBlank()) "" else ""","idempotency_key":${idempotencyKey.json()}"""
+        val socket = if (requireRpc) ensureRpc(origin, profileId) else rpc
         if (socket != null && socket.isOpen) {
-            val result = socket.request(
-                "session.create",
-                """{"profile":${profileId.json()},"title":${title.json()}$extra}""",
-            )
+            val basic = """{"profile":${profileId.json()},"title":${title.json()}$extra}"""
+            val result = try {
+                socket.request("session.create", basic.dropLast(1) + "$keyField}")
+            } catch (e: DashboardException) {
+                // A validation refusal did not create anything, so an older server can safely
+                // retry without the new optional field. Never do this after a lost response.
+                if (keyField.isBlank() || !optionalKeyRejected("session.create", e)) throw e
+                socket.request("session.create", basic)
+            }
             val live = result.str("session_id").ifBlank { result.str("id") }
             val created = parseRpcSession(result, profileId)
             rememberLive(created.id, live.ifBlank { created.id })
             return created
         }
-        val url = DashboardUrls.rest(origin, "/api/sessions", profileId)
+        val url = hostRest(origin, "/api/sessions", profileId)
         val payload = """{"profile":${profileId.json()},"title":${title.json()}$extra}"""
         return post(url, payload) { parseCreatedSession(it, profileId) }
     }
 
     suspend fun deleteSession(origin: String, sessionId: String, profileId: String) {
         ProfileScope.requireProfileId(profileId)
-        delete(DashboardUrls.rest(origin, "/api/sessions/$sessionId", profileId))
+        delete(hostRest(origin, "/api/sessions/$sessionId", profileId))
+    }
+
+    suspend fun updateSession(origin: String, session: SessionRef, title: String? = null, pinned: Boolean? = null, archived: Boolean? = null): SessionRef {
+        val fields = buildList {
+            title?.let { add("\"title\":${it.json()}") }
+            pinned?.let { add("\"pinned\":$it") }
+            archived?.let { add("\"archived\":$it") }
+        }
+        require(fields.isNotEmpty())
+        return patch(hostRest(origin, "/api/sessions/${session.id}", session.profileId), "{${fields.joinToString(",")}}") { body ->
+            val result = DashboardJson.parseToJsonElement(body).jsonObject
+            session.copy(
+                title = title?.let { result.str("title").ifBlank { it } } ?: session.title,
+                pinned = pinned?.let { (result["pinned"] as? JsonPrimitive)?.booleanOrNull ?: it } ?: session.pinned,
+                archived = archived?.let { (result["archived"] as? JsonPrimitive)?.booleanOrNull ?: it } ?: session.archived,
+            )
+        }
+    }
+
+    suspend fun branchSession(origin: String, session: SessionRef, idempotencyKey: String): SessionRef {
+        val socket = ensureRpc(origin, session.profileId)
+        val basic = """{"profile":${session.profileId.json()},"parent_session_id":${session.id.json()}}"""
+        val result = try {
+            socket.request("session.branch_stored", basic.dropLast(1) + ""","idempotency_key":${idempotencyKey.json()}}""",
+                timeoutMs = 120_000)
+        } catch (e: DashboardException) {
+            // Older hosts explicitly reject the optional key before doing any work.
+            // Never retry a timeout/disconnect or an unrelated rejection of the branch.
+            if (!optionalKeyRejected("session.branch_stored", e)) throw e
+            socket.request("session.branch_stored", basic, timeoutMs = 120_000)
+        }
+        val created = parseRpcSession(result, session.profileId)
+        rememberLive(created.id, result.str("session_id"))
+        return created.copy(title = "Branch of ${session.title}")
+    }
+
+    private fun optionalKeyRejected(method: String, error: DashboardException): Boolean {
+        if (error.code == "rpc_-32602") return true // JSON-RPC invalid parameters, before dispatch.
+        if (error.code != "rpc_4000") return false
+        val message = error.message.orEmpty().lowercase()
+        val methodPattern = Regex.escape(method)
+        val shortRejection = Regex(
+            """^(unknown|unexpected|unsupported|extra) (parameter|param|field|input)(s|\(s\))?( for $methodPattern)?: ['\"\[]?idempotency_key['\"\]]?$"""
+        ).matches(message) || message == "idempotency_key: extra inputs are not permitted"
+        // Installed Hermes contracts/registry.py emits this exact extra_forbidden response;
+        // rpc_dispatch.py returns it before invoking the mutation handler. A mention of the
+        // key in an arbitrary provider/business error is not proof of non-delivery.
+        val validation = "invalid params for $method: idempotency_key: extra inputs are not permitted"
+        val versionHint = " — the client and the hermes backend are out of sync (different versions); run `hermes update` and restart both"
+        return shortRejection || message == validation || message == validation + versionHint
+    }
+
+    suspend fun sessionContext(origin: String, session: SessionRef): app.hermes.companion.model.SessionContext {
+        val socket = ensureRpc(origin, session.profileId)
+        if (liveByStored[session.id] == null) resumeSession(session.id, session.profileId)
+        return parseSessionContext(socket.request("session.context_breakdown",
+            """{"session_id":${liveSessionId(session.id).json()},"profile":${session.profileId.json()}}"""))
+    }
+
+    /** Dedicated mutation, deliberately no retries or slash fallback on uncertain delivery.
+     * Not exposed in the operator UI until pending/late acknowledgments are reconciled. */
+    suspend fun compressSession(origin: String, session: SessionRef, focusTopic: String = ""): app.hermes.companion.model.SessionCompression {
+        val socket = ensureRpc(origin, session.profileId)
+        if (liveByStored[session.id] == null) resumeSession(session.id, session.profileId)
+        val topic = focusTopic.trim().takeIf { it.isNotEmpty() }?.let { ",\"focus_topic\":${it.json()}" }.orEmpty()
+        return parseSessionCompression(socket.request("session.compress",
+            """{"session_id":${liveSessionId(session.id).json()},"profile":${session.profileId.json()}$topic}""",
+            timeoutMs = 630_000))
+    }
+
+    private suspend fun nativeSession(origin: String, session: SessionRef): GatewaySocket {
+        require(app.hermes.companion.domain.DraftThread.isPersisted(session.id)) { "Create a host thread first" }
+        ProfileScope.requireProfileId(session.profileId)
+        val socket = ensureRpc(origin, session.profileId)
+        if (liveByStored[session.id] == null) resumeSession(session.id, session.profileId)
+        return socket
+    }
+
+    suspend fun sessionSettings(origin: String, session: SessionRef): app.hermes.companion.model.NativeSessionSettings {
+        val socket = nativeSession(origin, session)
+        val fields = "\"session_id\":${liveSessionId(session.id).json()},\"profile\":${session.profileId.json()}"
+        val model = socket.request("model.options", "{$fields,\"explicit_only\":true}")
+        val reasoning = socket.request("config.get", "{$fields,\"key\":\"reasoning\"}")
+        val fast = socket.request("config.get", "{$fields,\"key\":\"fast\"}")
+        return app.hermes.companion.model.NativeSessionSettings(model.str("model").takeIf { it.isNotBlank() },
+            model.str("provider").takeIf { it.isNotBlank() }, reasoning.str("value").takeIf { it.isNotBlank() },
+            fast.str("value").takeIf { it.isNotBlank() })
+    }
+
+    suspend fun setSessionSetting(origin: String, session: SessionRef, key: String, value: String, confirmed: Boolean = false): app.hermes.companion.model.NativeConfigResult {
+        require(key in setOf("model", "reasoning", "fast")) { "Unsupported session setting" }
+        val socket = nativeSession(origin, session)
+        val result = socket.request("config.set", """{"session_id":${liveSessionId(session.id).json()},"profile":${session.profileId.json()},"scope":"session","key":${key.json()},"value":${value.json()},"confirm_expensive_model":$confirmed}""")
+        return app.hermes.companion.model.NativeConfigResult(result.str("key"), result.str("value").takeIf { it.isNotBlank() },
+            result.str("scope").takeIf { it.isNotBlank() }, (result["deferred"] as? JsonPrimitive)?.booleanOrNull == true,
+            (result["confirm_required"] as? JsonPrimitive)?.booleanOrNull == true, result.str("confirm_message"), result.str("warning"))
+    }
+
+    suspend fun commandCatalog(origin: String, session: SessionRef): List<app.hermes.companion.model.NativeCommand> {
+        val socket = nativeSession(origin, session)
+        val result = socket.request("commands.catalog", """{"session_id":${liveSessionId(session.id).json()},"profile":${session.profileId.json()}}""")
+        return (result["pairs"] as? JsonArray).orEmpty().mapNotNull { pair ->
+            val row = pair as? JsonArray ?: return@mapNotNull null
+            val name = (row.getOrNull(0) as? JsonPrimitive)?.contentOrNull?.trim()?.removePrefix("/") ?: return@mapNotNull null
+            if (name.isBlank() || name.any(Char::isWhitespace)) return@mapNotNull null
+            app.hermes.companion.model.NativeCommand(name, (row.getOrNull(1) as? JsonPrimitive)?.contentOrNull.orEmpty())
+        }.distinctBy { it.name }
+    }
+
+    suspend fun dispatchCommand(origin: String, session: SessionRef, name: String, argument: String): app.hermes.companion.model.NativeCommandResult {
+        require(name.isNotBlank() && name.none(Char::isWhitespace))
+        val socket = nativeSession(origin, session)
+        val params = """{"session_id":${liveSessionId(session.id).json()},"profile":${session.profileId.json()}}"""
+        val command = "/$name" + if (argument.isBlank()) "" else " $argument"
+        val result = try {
+            socket.request("slash.exec", params.dropLast(1) + ",\"command\":${command.json()}}")
+        } catch (error: DashboardException) {
+            // Only an explicit routing refusal/method absence proves nothing ran.
+            if (error.code != "rpc_-32601" && !(error.code.startsWith("rpc_") && error.message.orEmpty().contains("use command.dispatch"))) throw error
+            socket.request("command.dispatch", """{"session_id":${liveSessionId(session.id).json()},"profile":${session.profileId.json()},"name":${name.json()},"arg":${argument.json()}}""")
+        }
+        return app.hermes.companion.model.NativeCommandResult(result.str("type").ifBlank { "exec" }, result.str("output"), result.str("message"),
+            result.str("display"), result.str("target"), result.str("notice"))
+    }
+
+    suspend fun redirectSession(origin: String, session: SessionRef, text: String): app.hermes.companion.model.NativeRedirectResult {
+        require(text.isNotBlank())
+        val socket = nativeSession(origin, session)
+        val result = socket.request("session.redirect", """{"session_id":${liveSessionId(session.id).json()},"profile":${session.profileId.json()},"text":${text.json()}}""")
+        return app.hermes.companion.model.NativeRedirectResult(result.str("status"), result.str("text"))
+    }
+
+    suspend fun steerSession(origin: String, session: SessionRef, text: String) {
+        val socket = ensureRpc(origin, session.profileId)
+        if (liveByStored[session.id] == null) resumeSession(session.id, session.profileId)
+        val result = socket.request("session.steer",
+            """{"session_id":${liveSessionId(session.id).json()},"profile":${session.profileId.json()},"text":${text.json()}}""")
+        if (result.str("status") == "rejected") throw DashboardException("steer_rejected", "Hermes could not steer this turn")
+    }
+
+    /** Stage attachments with the actual native contract; never pass phone-local URLs to Hermes. */
+    suspend fun stageAttachment(origin: String, sessionId: String, profileId: String, bytes: ByteArray, name: String, mime: String): String {
+        require(bytes.isNotEmpty()) { "attachment is empty" }
+        val socket = ensureRpc(origin, profileId)
+        if (liveByStored[sessionId] == null) resumeSession(sessionId, profileId)
+        val encoded = java.util.Base64.getEncoder().encodeToString(bytes)
+        val sid = liveSessionId(sessionId)
+        val image = mime.startsWith("image/")
+        val payload = if (image) {
+            """{"session_id":${sid.json()},"profile":${profileId.json()},"content_base64":${encoded.json()},"filename":${name.json()}}"""
+        } else {
+            """{"session_id":${sid.json()},"profile":${profileId.json()},"data_url":${("data:$mime;base64,$encoded").json()},"name":${name.json()}}"""
+        }
+        val result = socket.request(if (image) "image.attach_bytes" else "file.attach", payload, timeoutMs = 90_000)
+        if ((result["attached"] as? JsonPrimitive)?.booleanOrNull != true) throw DashboardException("attachment_failed", "Hermes did not attach $name")
+        if (image) return ""
+        return result.str("ref_text").ifBlank {
+            val path = result.str("ref_path")
+            if (path.isBlank()) throw DashboardException("attachment_failed", "Hermes returned no reference for $name")
+            "@file:$path"
+        }
     }
 
     suspend fun interruptTurn(origin: String, sessionId: String, profileId: String) {
-        val socket = rpc ?: return
-        if (!socket.isOpen) return
+        val socket = ensureRpc(origin, profileId)
+        if (liveByStored[sessionId] == null) resumeSession(sessionId, profileId)
         val live = liveSessionId(sessionId)
         socket.request("session.interrupt", """{"session_id":${live.json()},"profile":${profileId.json()}}""")
     }
@@ -560,12 +968,12 @@ class DashboardClient internal constructor(
         model: String? = null,
         partsJson: String = "",
         /**
-         * Stable outbox id for this message. The transport is at-least-once, so a host that
-         * records it can recognise a retry instead of appending a second copy of the same
-         * message and running a second turn. Hosts that do not understand the field ignore it.
+         * Legacy SSE id only. Native prompt.submit rejects this field, so native delivery uses
+         * explicit acknowledgments and durable-row reconciliation rather than guessing support.
          */
         clientId: String = "",
     ): Flow<ChatEvent> {
+        bindOrigin(origin)
         val socket = rpc
         if (rewind != null) {
             if (socket == null || !socket.isOpen) {
@@ -588,7 +996,7 @@ class DashboardClient internal constructor(
         partsJson: String = "",
         clientId: String = "",
     ): Flow<ChatEvent> = flow {
-        val url = DashboardUrls.rest(origin, "/api/sessions/$sessionId/chat/stream", profileId)
+        val url = hostRest(origin, "/api/sessions/$sessionId/chat/stream", profileId)
         val idField = if (clientId.isBlank()) "" else ",\"client_id\":${clientId.json()}"
         val payload = """{"input":${text.json()},"profile":${profileId.json()}${modelField(model)}$idField$partsJson}"""
         val request = Request.Builder()
@@ -627,33 +1035,50 @@ class DashboardClient internal constructor(
         clientId: String = "",
     ): Flow<ChatEvent> = callbackFlow {
         if (liveByStored[sessionId] == null) {
-            runCatching { resumeSession(sessionId, profileId) }
+            resumeSession(sessionId, profileId)
         }
         val bound = liveSessionId(sessionId)
         val finished = CompletableDeferred<Unit>()
-        val collectJob = launch {
+        val collectJob = launch(start = CoroutineStart.UNDISPATCHED) {
             socket.events.collect { ev ->
                 if (!ev.belongsTo(sessionId, bound)) return@collect
                 val chat = RpcCodec.toChatEvent(ev) ?: return@collect
-                trySend(chat)
-                if (chat is ChatEvent.Completed && !finished.isCompleted) {
+                send(chat)
+                if ((chat is ChatEvent.Completed || chat is ChatEvent.Final) && !finished.isCompleted) {
                     finished.complete(Unit)
                 }
             }
         }
+        val disconnectJob = launch {
+            socket.awaitDisconnect()
+            close(DashboardException("ws_closed", "connection lost; checking delivery on reconnect"))
+        }
         val submitJob = launch {
             try {
                 val extra = RewindPolicy.jsonExtras(rewind)
-                val idField = if (clientId.isBlank()) "" else ",\"client_id\":${clientId.json()}"
+                val legacyFields = if (socket.hello?.instanceId == "companion-standalone") {
+                    modelField(model) + partsJson + if (clientId.isBlank()) "" else ""","client_id":${clientId.json()}"""
+                } else ""
                 val result = socket.request(
                     "prompt.submit",
-                    """{"session_id":${bound.json()},"text":${text.json()},"profile":${profileId.json()}${modelField(model)}$idField$partsJson$extra}""",
+                    // Native Hermes forbids unknown params. Models belong to the session;
+                    // images/files are staged through native attachment RPCs before submit.
+                    """{"session_id":${bound.json()},"text":${text.json()},"profile":${profileId.json()}$extra$legacyFields}""",
                     timeoutMs = 180_000,
                 )
+                val status = result.str("status").ifBlank { "streaming" }
+                if (status == "rejected" || status == "error") {
+                    throw DashboardException("submit_rejected", result.str("message").ifBlank { "Hermes rejected the message" })
+                }
+                send(ChatEvent.Accepted(status, (result["user_row_id"] as? JsonPrimitive)?.longOrNull))
                 if (rewind != null) {
                     trySend(ChatEvent.Rewound(parseSurvivorRowIds(result).orEmpty()))
                 }
-                withTimeout(180_000) { finished.await() }
+                // Work and approval waits can exceed three minutes. Disconnect/heartbeat owns
+                // liveness; a turn timeout must never cause an acknowledged prompt to be resent.
+                if ((result["voice_stopped"] as? JsonPrimitive)?.booleanOrNull == true) {
+                    send(ChatEvent.Final(status = "interrupted"))
+                } else finished.await()
                 close()
             } catch (t: Throwable) {
                 close(t)
@@ -662,13 +1087,14 @@ class DashboardClient internal constructor(
         awaitClose {
             collectJob.cancel()
             submitJob.cancel()
+            disconnectJob.cancel()
         }
     }.flowOn(Dispatchers.IO)
 
     // ---- Agent rooms (P21) — plugin-owned routes under /companion/rooms -------------------------
 
     suspend fun listRooms(origin: String): List<RoomRef> =
-        get(DashboardUrls.machine(origin, "/companion/rooms")) { RoomJson.rooms(it) }
+        get(hostMachine(origin, "/companion/rooms")) { RoomJson.rooms(it) }
 
     suspend fun createRoom(
         origin: String,
@@ -678,7 +1104,7 @@ class DashboardClient internal constructor(
     ): RoomRef {
         val parts = participants.joinToString(",") { it.json() }
         val payload = """{"title":${title.json()},"participants":[$parts],"policy":${policyJson(policy)}}"""
-        return post(DashboardUrls.machine(origin, "/companion/rooms"), payload) {
+        return post(hostMachine(origin, "/companion/rooms"), payload) {
             RoomJson.roomEnvelope(it) ?: throw DashboardException("room_parse", "room missing in reply")
         }
     }
@@ -695,38 +1121,38 @@ class DashboardClient internal constructor(
             if (title != null) add(""""title":${title.json()}""")
             if (policy != null) add(""""policy":${policyJson(policy)}""")
         }
-        return patch(DashboardUrls.machine(origin, "/companion/rooms/$roomId"), "{${fields.joinToString(",")}}") {
+        return patch(hostMachine(origin, "/companion/rooms/$roomId"), "{${fields.joinToString(",")}}") {
             RoomJson.roomEnvelope(it) ?: throw DashboardException("room_parse", "room missing in reply")
         }
     }
 
     suspend fun setRoomParticipants(origin: String, roomId: String, add: List<String>, remove: List<String>): RoomRef {
         val payload = """{"add":[${add.joinToString(",") { it.json() }}],"remove":[${remove.joinToString(",") { it.json() }}]}"""
-        return post(DashboardUrls.machine(origin, "/companion/rooms/$roomId/participants"), payload) {
+        return post(hostMachine(origin, "/companion/rooms/$roomId/participants"), payload) {
             RoomJson.roomEnvelope(it) ?: throw DashboardException("room_parse", "room missing in reply")
         }
     }
 
     suspend fun pauseRoom(origin: String, roomId: String) {
-        post(DashboardUrls.machine(origin, "/companion/rooms/$roomId/pause"), "{}") { }
+        post(hostMachine(origin, "/companion/rooms/$roomId/pause"), "{}") { }
     }
 
     suspend fun continueRoom(origin: String, roomId: String, turns: Int = 6): RoomRef? =
-        post(DashboardUrls.machine(origin, "/companion/rooms/$roomId/continue"), """{"turns":$turns}""") { RoomJson.roomEnvelope(it) }
+        post(hostMachine(origin, "/companion/rooms/$roomId/continue"), """{"turns":$turns}""") { RoomJson.roomEnvelope(it) }
 
     suspend fun summarizeRoom(origin: String, roomId: String, by: String = ""): RoomRef? =
-        post(DashboardUrls.machine(origin, "/companion/rooms/$roomId/summarize"), """{"by":${by.json()}}""") { RoomJson.roomEnvelope(it) }
+        post(hostMachine(origin, "/companion/rooms/$roomId/summarize"), """{"by":${by.json()}}""") { RoomJson.roomEnvelope(it) }
 
     suspend fun respondRoomApproval(origin: String, roomId: String, requestId: String, decision: String) {
-        post(DashboardUrls.machine(origin, "/companion/rooms/$roomId/approval"), """{"request_id":${requestId.json()},"decision":${decision.json()}}""") { }
+        post(hostMachine(origin, "/companion/rooms/$roomId/approval"), """{"request_id":${requestId.json()},"decision":${decision.json()}}""") { }
     }
 
     // ---- Coding-agent sessions (P23) --------------------------------------------------------------
     suspend fun agentTools(origin: String, refresh: Boolean = false): Triple<List<AgentTool>, Boolean, String> =
-        get(DashboardUrls.machine(origin, "/companion/agents/tools" + if (refresh) "?refresh=1" else "")) { AgentJson.tools(it) }
+        get(hostMachine(origin, "/companion/agents/tools" + if (refresh) "?refresh=1" else "")) { AgentJson.tools(it) }
 
     suspend fun agentSessions(origin: String): List<AgentSession> =
-        get(DashboardUrls.machine(origin, "/companion/agents/sessions")) { AgentJson.sessions(it) }
+        get(hostMachine(origin, "/companion/agents/sessions")) { AgentJson.sessions(it) }
 
     suspend fun startAgentSession(
         origin: String,
@@ -739,42 +1165,42 @@ class DashboardClient internal constructor(
         mode: String = "pty",
     ): AgentSession {
         val payload = """{"tool":${tool.json()},"mode":${mode.json()},"cwd":${cwd.json()},"prompt":${prompt.json()},"title":${title.json()},"cols":$cols,"rows":$rows}"""
-        return post(DashboardUrls.machine(origin, "/companion/agents/sessions"), payload) {
+        return post(hostMachine(origin, "/companion/agents/sessions"), payload) {
             AgentJson.sessionEnvelope(it) ?: throw DashboardException("agent_parse", "session missing in reply")
         }
     }
 
     suspend fun agentPane(origin: String, sessionId: String, cols: Int = 0, rows: Int = 0): Pair<AgentPane, AgentSession?> {
         val q = if (cols > 0 && rows > 0) "?cols=$cols&rows=$rows" else ""
-        return get(DashboardUrls.machine(origin, "/companion/agents/sessions/$sessionId/pane$q")) { AgentJson.paneBody(it) }
+        return get(hostMachine(origin, "/companion/agents/sessions/$sessionId/pane$q")) { AgentJson.paneBody(it) }
     }
 
     suspend fun agentKeys(origin: String, sessionId: String, text: String = "", keys: List<String> = emptyList()) {
         val payload = """{"text":${text.json()},"keys":[${keys.joinToString(",") { it.json() }}]}"""
-        post(DashboardUrls.machine(origin, "/companion/agents/sessions/$sessionId/keys"), payload) { }
+        post(hostMachine(origin, "/companion/agents/sessions/$sessionId/keys"), payload) { }
     }
 
     /** Structured sessions: one prompt = one turn. 409 while a turn is running. */
     /** Directory picker listing under the host's allowed roots. Empty [path] = host default. */
     suspend fun agentDirs(origin: String, path: String = "", hidden: Boolean = false): AgentDirListing {
         val q = "?path=${java.net.URLEncoder.encode(path, "UTF-8")}" + if (hidden) "&hidden=1" else ""
-        return get(DashboardUrls.machine(origin, "/companion/agents/dirs$q")) { AgentJson.dirs(it) }
+        return get(hostMachine(origin, "/companion/agents/dirs$q")) { AgentJson.dirs(it) }
     }
 
     suspend fun agentPrompt(origin: String, sessionId: String, text: String) {
-        post(DashboardUrls.machine(origin, "/companion/agents/sessions/$sessionId/prompt"), """{"text":${text.json()}}""") { }
+        post(hostMachine(origin, "/companion/agents/sessions/$sessionId/prompt"), """{"text":${text.json()}}""") { }
     }
 
     suspend fun agentApproval(origin: String, sessionId: String, requestId: String, decision: String) {
         val payload = """{"request_id":${requestId.json()},"decision":${decision.json()}}"""
-        post(DashboardUrls.machine(origin, "/companion/agents/sessions/$sessionId/approval"), payload) { }
+        post(hostMachine(origin, "/companion/agents/sessions/$sessionId/approval"), payload) { }
     }
 
     suspend fun agentTranscript(origin: String, sessionId: String, after: Int = 0): Triple<List<AgentEvent>, ApprovalPrompt?, AgentSession?> =
-        get(DashboardUrls.machine(origin, "/companion/agents/sessions/$sessionId/transcript?after=$after")) { AgentJson.transcriptBody(it) }
+        get(hostMachine(origin, "/companion/agents/sessions/$sessionId/transcript?after=$after")) { AgentJson.transcriptBody(it) }
 
     suspend fun killAgentSession(origin: String, sessionId: String, forget: Boolean = false) {
-        delete(DashboardUrls.machine(origin, "/companion/agents/sessions/$sessionId" + if (forget) "?forget=1" else ""))
+        delete(hostMachine(origin, "/companion/agents/sessions/$sessionId" + if (forget) "?forget=1" else ""))
     }
 
     /**
@@ -782,7 +1208,7 @@ class DashboardClient internal constructor(
      * transitions. Completes when the socket closes or the session exits; caller reconnects.
      */
     fun agentEvents(origin: String, sessionId: String, cols: Int, rows: Int): Flow<AgentJson.Event> = callbackFlow {
-        val url = DashboardUrls.machine(origin, "/companion/agents/events?session_id=$sessionId&cols=$cols&rows=$rows")
+        val url = hostMachine(origin, "/companion/agents/events?session_id=$sessionId&cols=$cols&rows=$rows")
         val auth = companionAuth
         val request = Request.Builder().url(url).apply { if (!auth.isNullOrBlank()) header("Authorization", "Companion $auth") }.build()
         val socket = wsHttp.newWebSocket(
@@ -810,11 +1236,11 @@ class DashboardClient internal constructor(
 
     // ---- Peer links (A22.11) --------------------------------------------------------------------
     suspend fun listPeers(origin: String): List<PeerLink> =
-        get(DashboardUrls.machine(origin, "/companion/peers")) { RoomJson.peers(it) }
+        get(hostMachine(origin, "/companion/peers")) { RoomJson.peers(it) }
 
     /** Mint a credential on [origin] that another relay (named [forName]) may use to run turns there. */
     suspend fun grantPeer(origin: String, forName: String): Triple<String, String, String> =
-        post(DashboardUrls.machine(origin, "/companion/peers/grant"), """{"name":${forName.json()}}""") { body ->
+        post(hostMachine(origin, "/companion/peers/grant"), """{"name":${forName.json()}}""") { body ->
             val g = (Json.parseToJsonElement(body).jsonObject["grant"] as? JsonObject)
             val hostId = g?.get("host_id")?.jsonPrimitive?.contentOrNull.orEmpty()
             val secret = g?.get("secret")?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -824,28 +1250,28 @@ class DashboardClient internal constructor(
 
     suspend fun addPeer(origin: String, name: String, peerOrigin: String, hostId: String, secret: String) {
         val payload = """{"name":${name.json()},"origin":${peerOrigin.json()},"host_id":${hostId.json()},"secret":${secret.json()}}"""
-        post(DashboardUrls.machine(origin, "/companion/peers"), payload) { }
+        post(hostMachine(origin, "/companion/peers"), payload) { }
     }
 
     suspend fun removePeer(origin: String, name: String) {
-        delete(DashboardUrls.machine(origin, "/companion/peers/$name"))
+        delete(hostMachine(origin, "/companion/peers/$name"))
     }
 
     suspend fun roomHistory(origin: String, roomId: String, after: Int = 0): Pair<RoomRef?, List<ChatMessage>> =
-        get(DashboardUrls.machine(origin, "/companion/rooms/$roomId/history?after=$after")) { RoomJson.history(it) }
+        get(hostMachine(origin, "/companion/rooms/$roomId/history?after=$after")) { RoomJson.history(it) }
 
     /** Posts as the operator; the host starts the agents' turns. Returns the operator line's seq. */
     suspend fun postRoom(origin: String, roomId: String, text: String): Int =
-        post(DashboardUrls.machine(origin, "/companion/rooms/$roomId/post"), """{"text":${text.json()}}""") { body ->
+        post(hostMachine(origin, "/companion/rooms/$roomId/post"), """{"text":${text.json()}}""") { body ->
             (DashboardJson.parseToJsonElement(body) as? JsonObject)?.get("seq")?.jsonPrimitive?.intOrNull ?: 0
         }
 
     suspend fun interruptRoom(origin: String, roomId: String) {
-        post(DashboardUrls.machine(origin, "/companion/rooms/$roomId/interrupt"), "{}") { }
+        post(hostMachine(origin, "/companion/rooms/$roomId/interrupt"), "{}") { }
     }
 
     suspend fun deleteRoom(origin: String, roomId: String) {
-        delete(DashboardUrls.machine(origin, "/companion/rooms/$roomId"))
+        delete(hostMachine(origin, "/companion/rooms/$roomId"))
     }
 
     /**
@@ -853,7 +1279,7 @@ class DashboardClient internal constructor(
      * callers reconnect. Heartbeats and unknown frames are dropped.
      */
     fun roomEvents(origin: String, roomId: String): Flow<ChatEvent> = callbackFlow {
-        val url = DashboardUrls.machine(origin, "/companion/rooms/events?room_id=$roomId")
+        val url = hostMachine(origin, "/companion/rooms/events?room_id=$roomId")
             .replaceFirst("http://", "ws://").replaceFirst("https://", "wss://")
         // Websocket upgrades bypass the REST interceptors on this client, so attach the pairing
         // credential here as well (the relay gates /companion/rooms/events).
@@ -887,11 +1313,13 @@ class DashboardClient internal constructor(
 
     private suspend fun ensureRpc(origin: String, profileId: String, ticket: String? = null): GatewaySocket =
         rpcLock.withLock {
+            bindOrigin(origin)
             val key = "$origin|$profileId"
             val current = rpc
             if (current != null && rpcKey == key && current.isOpen) return@withLock current
             current?.close()
             liveByStored.clear()
+            runtimeSnapshots.clear()
             val next = GatewaySocket(wsHttp)
             val wsTicket = when {
                 !ticket.isNullOrBlank() -> ticket
@@ -899,7 +1327,7 @@ class DashboardClient internal constructor(
                 else -> null
             }
             val wsToken = if (wsTicket.isNullOrBlank()) sessionToken else null
-            next.connect(DashboardUrls.ws(origin, profileId, ticket = wsTicket, token = wsToken))
+            next.connect(hostWs(origin, profileId, ticket = wsTicket, token = wsToken))
             rpc = next
             rpcKey = key
             next
@@ -916,7 +1344,7 @@ class DashboardClient internal constructor(
         var offset = 0
         var total = -1
         while (offset < SESSION_PAGE) {
-            val url = DashboardUrls.rest(
+            val url = hostRest(
                 origin,
                 "/api/sessions",
                 profileId,
@@ -939,10 +1367,9 @@ class DashboardClient internal constructor(
     }
 
     private suspend fun listSessionsRpc(socket: GatewaySocket, profileId: String, includeArchived: Boolean): List<SessionRef> {
-        val archived = if (includeArchived) ""","include_archived":true""" else ""
         val result = socket.request(
             "session.list",
-            """{"profile":${profileId.json()},"limit":$SESSION_PAGE$archived}""",
+            """{"profile":${profileId.json()},"limit":$SESSION_PAGE}""",
         )
         return stampProfile(parseSessions(result.toString()), profileId)
     }
@@ -954,15 +1381,27 @@ class DashboardClient internal constructor(
         limit: Int,
         beforeId: String?,
     ): HistoryPage {
+        val cursor = beforeId?.let { historyOffsets["$profileId|$sessionId|$it"] }
         val extra = buildMap {
             put("limit", limit.toString())
             put("order", "latest")
-            if (!beforeId.isNullOrBlank()) put("before", beforeId)
+            if (cursor != null) put("offset", cursor.toString())
+            else if (!beforeId.isNullOrBlank()) put("before", beforeId)
         }
         return try {
             get(
-                DashboardUrls.rest(origin, "/api/sessions/$sessionId/messages", profileId, extra),
-            ) { HistoryPaging.clip(parseMessages(it), beforeId, limit) }
+                hostRest(origin, "/api/sessions/$sessionId/messages", profileId, extra),
+            ) { body ->
+                val rows = parseMessages(body)
+                val root = DashboardJson.parseToJsonElement(body) as? JsonObject
+                if (root?.get("pagination") is JsonObject) {
+                    rows.firstOrNull()?.let { historyOffsets["$profileId|$sessionId|${it.id}"] = (cursor ?: 0) + limit }
+                    HistoryPage(rows, rows.size >= limit)
+                } else {
+                    val anchorPresent = beforeId != null && rows.any { it.id == beforeId }
+                    HistoryPaging.clip(rows, beforeId.takeIf { anchorPresent }, limit)
+                }
+            }
         } catch (e: DashboardException) {
             // Brand-new sessions (and some gateways) have no transcript resource yet.
             // Treat 404 as empty history so openSession does not show "history failed".
@@ -978,24 +1417,36 @@ class DashboardClient internal constructor(
         limit: Int,
         beforeId: String?,
     ): HistoryPage {
-        val before = if (beforeId.isNullOrBlank()) "" else ""","before":${beforeId.json()}"""
         val result = socket.request(
             "session.history",
-            """{"session_id":${liveId.json()},"profile":${profileId.json()},"limit":$limit$before}""",
+            """{"session_id":${liveId.json()},"profile":${profileId.json()}}""",
         )
         return HistoryPaging.clip(parseMessages(result.toString()), beforeId, limit)
     }
 
     private suspend fun resumeSession(sessionId: String, profileId: String): Pair<String, List<ChatMessage>> {
         val socket = rpc ?: throw DashboardException("ws_closed", "gateway not connected")
-        val result = socket.request(
-            "session.resume",
-            """{"session_id":${sessionId.json()},"profile":${profileId.json()}}""",
-        )
+        val basic = """{"session_id":${sessionId.json()},"profile":${profileId.json()}}"""
+        val result = try {
+            socket.request("session.resume", basic.dropLast(1) + ""","omit_messages":true,"defer_history":true,"inline_images":false}""")
+        } catch (e: DashboardException) {
+            if (e.code != "rpc_4000" && e.code != "rpc_-32602") throw e
+            socket.request("session.resume", basic)
+        }
         val live = result.str("session_id").ifBlank { sessionId }
         val stored = result.str("stored_session_id").ifBlank { sessionId }
         rememberLive(stored, live)
         rememberLive(sessionId, live)
+        val inflight = result["inflight"] as? JsonObject
+        val running = (result["running"] as? JsonPrimitive)?.booleanOrNull == true ||
+            result.str("status") in setOf("working", "waiting", "streaming") ||
+            (inflight?.get("streaming") as? JsonPrimitive)?.booleanOrNull == true
+        val snapshot = SessionRuntimeSnapshot(running, inflight?.str("assistant").orEmpty(),
+            (result["pending_approval"] as? JsonObject)?.let { parseApproval(it.toString()) }
+                ?.takeUnless { promptRetired(stored, it.requestId) || promptRetired(live, it.requestId) })
+        runtimeSnapshots[stored] = snapshot
+        runtimeSnapshots[sessionId] = snapshot
+        runtimeSnapshots[live] = snapshot
         return live to parseMessages(result.toString())
     }
 
@@ -1012,7 +1463,7 @@ class DashboardClient internal constructor(
     }
 
     private fun RpcEvent.belongsTo(stored: String, live: String): Boolean {
-        val sid = sessionId ?: return true
+        val sid = sessionId ?: return false
         return sid == stored || sid == live
     }
 
@@ -1021,6 +1472,8 @@ class DashboardClient internal constructor(
 
     private fun buildHttp(base: OkHttpClient, attachToken: Boolean): OkHttpClient =
         base.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
             .cookieJar(cookies)
             // Cleartext only toward LAN / Tailscale hosts. The manifest network-security config
             // cannot express IP ranges, so the policy lives in OriginPolicy and is enforced here
@@ -1033,15 +1486,24 @@ class DashboardClient internal constructor(
                 val req = chain.request().newBuilder()
                 val auth = companionAuth
                 val token = sessionToken
-                if (!auth.isNullOrBlank() && url.encodedPath.startsWith("/companion/")) {
+                if (!auth.isNullOrBlank() && credentialScope.pluginRoute(url)) {
                     // Plugin routes: the pairing credential is the identity. Must not be
                     // overwritten by the dashboard bearer below.
                     req.header("Authorization", "Companion $auth")
-                } else if (attachToken && !gated && !token.isNullOrBlank()) {
+                } else if (credentialScope.permits(url) && attachToken && !gated && !token.isNullOrBlank()) {
                     req.header("X-Hermes-Session-Token", token)
                     req.header("Authorization", "Bearer $token")
                 }
                 chain.proceed(req.build())
+            }
+            .addNetworkInterceptor { chain ->
+                val request = chain.request()
+                if (!request.url.isHttps && !OriginPolicy.privateHost(request.url.host))
+                    throw java.io.IOException(OriginPolicy.CLEARTEXT_DENIED)
+                val scoped = if (credentialScope.permits(request.url)) request else request.newBuilder()
+                    .removeHeader("Authorization").removeHeader("X-Hermes-Session-Token")
+                    .removeHeader("Cookie").build()
+                chain.proceed(scoped)
             }
             .build()
 
@@ -1116,54 +1578,59 @@ class DashboardClient internal constructor(
 
     suspend fun getHostMetrics(origin: String): HostMetrics {
         return try {
-            get("$origin/companion/host/metrics") { body ->
+            getNativeHostMetrics(origin)
+        } catch (e: DashboardException) {
+            // Compatibility is explicit: auth/provider/network failures must not switch services.
+            if (e.code !in setOf("http_404", "http_405", "http_501")) throw e
+            if (companionAvailability(origin) != CompanionAvailability.AVAILABLE) throw e
+            get(hostMachine(origin, "/companion/host/metrics")) { body ->
                 val obj = Json.parseToJsonElement(body).jsonObject
-                val metricsObj = obj["metrics"] ?: return@get HostMetrics()
+                val metricsObj = obj["metrics"] ?: throw DashboardException("metrics_parse", "host metrics missing")
                 Json { ignoreUnknownKeys = true }.decodeFromJsonElement(HostMetrics.serializer(), metricsObj)
-            }
-        } catch (e: Exception) {
-            // Fallback to native Hermes /api/system/stats
-            get("$origin/api/system/stats") { body ->
-                val obj = Json.parseToJsonElement(body).jsonObject
-                val cpuPercent = obj["cpu_percent"]?.jsonPrimitive?.doubleOrNull ?: 0.0
-                val cpuCount = obj["cpu_count"]?.jsonPrimitive?.intOrNull ?: 1
-                val loadAvg = obj["load_avg"]?.jsonArray?.mapNotNull { it.jsonPrimitive.doubleOrNull } ?: emptyList()
-                val memObj = obj["memory"]?.jsonObject
-                val memTotal = memObj?.get("total")?.jsonPrimitive?.longOrNull ?: 0L
-                val memUsed = memObj?.get("used")?.jsonPrimitive?.longOrNull ?: 0L
-                val memAvail = memObj?.get("available")?.jsonPrimitive?.longOrNull ?: 0L
-                val memPercent = memObj?.get("percent")?.jsonPrimitive?.doubleOrNull ?: 0.0
-                val diskObj = obj["disk"]?.jsonObject
-                val diskTotal = diskObj?.get("total")?.jsonPrimitive?.longOrNull ?: 0L
-                val diskUsed = diskObj?.get("used")?.jsonPrimitive?.longOrNull ?: 0L
-                val diskFree = diskObj?.get("free")?.jsonPrimitive?.longOrNull ?: 0L
-                val diskPercent = diskObj?.get("percent")?.jsonPrimitive?.doubleOrNull ?: 0.0
-                val os = obj["os"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                val hostname = obj["hostname"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                val arch = obj["arch"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                val pyVer = obj["python_version"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                val uptime = obj["uptime_seconds"]?.jsonPrimitive?.longOrNull ?: 0L
-                val procObj = obj["process"]?.jsonObject
-                val pid = procObj?.get("pid")?.jsonPrimitive?.intOrNull ?: 0
-                HostMetrics(
-                    cpu = HostCpuMetrics(percent = cpuPercent, cores = cpuCount, loadAvg = loadAvg),
-                    memory = HostMemoryMetrics(totalBytes = memTotal, usedBytes = memUsed, freeBytes = memAvail, percent = memPercent),
-                    disk = HostDiskMetrics(totalBytes = diskTotal, usedBytes = diskUsed, freeBytes = diskFree, percent = diskPercent),
-                    system = HostSystemMetrics(platform = "$os ($hostname)", release = arch, pythonVersion = pyVer, uptimeSeconds = uptime),
-                    hermes = HostHermesProcess(pid = pid, status = "online"),
-                )
             }
         }
     }
 
+    private suspend fun getNativeHostMetrics(origin: String): HostMetrics =
+        get(hostMachine(origin, "/api/system/stats")) { body ->
+            val obj = Json.parseToJsonElement(body).jsonObject
+            val cpuPercent = obj["cpu_percent"]?.jsonPrimitive?.doubleOrNull ?: 0.0
+            val cpuCount = obj["cpu_count"]?.jsonPrimitive?.intOrNull ?: 1
+            val loadAvg = obj["load_avg"]?.jsonArray?.mapNotNull { it.jsonPrimitive.doubleOrNull } ?: emptyList()
+            val memObj = obj["memory"]?.jsonObject
+            val memTotal = memObj?.get("total")?.jsonPrimitive?.longOrNull ?: 0L
+            val memUsed = memObj?.get("used")?.jsonPrimitive?.longOrNull ?: 0L
+            val memAvail = memObj?.get("available")?.jsonPrimitive?.longOrNull ?: 0L
+            val memPercent = memObj?.get("percent")?.jsonPrimitive?.doubleOrNull ?: 0.0
+            val diskObj = obj["disk"]?.jsonObject
+            val diskTotal = diskObj?.get("total")?.jsonPrimitive?.longOrNull ?: 0L
+            val diskUsed = diskObj?.get("used")?.jsonPrimitive?.longOrNull ?: 0L
+            val diskFree = diskObj?.get("free")?.jsonPrimitive?.longOrNull ?: 0L
+            val diskPercent = diskObj?.get("percent")?.jsonPrimitive?.doubleOrNull ?: 0.0
+            val os = obj["os"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val hostname = obj["hostname"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val arch = obj["arch"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val pyVer = obj["python_version"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val uptime = obj["uptime_seconds"]?.jsonPrimitive?.longOrNull ?: 0L
+            val procObj = obj["process"]?.jsonObject
+            val pid = procObj?.get("pid")?.jsonPrimitive?.intOrNull ?: 0
+            HostMetrics(
+                cpu = HostCpuMetrics(percent = cpuPercent, cores = cpuCount, loadAvg = loadAvg),
+                memory = HostMemoryMetrics(totalBytes = memTotal, usedBytes = memUsed, freeBytes = memAvail, percent = memPercent),
+                disk = HostDiskMetrics(totalBytes = diskTotal, usedBytes = diskUsed, freeBytes = diskFree, percent = diskPercent),
+                system = HostSystemMetrics(platform = "$os ($hostname)", release = arch, pythonVersion = pyVer, uptimeSeconds = uptime),
+                hermes = HostHermesProcess(pid = pid, status = "online"),
+            )
+        }
+
     suspend fun getGitStatus(origin: String, repoPath: String = ""): GitStatus {
         return try {
-            get("$origin/companion/git/status") { body ->
+            get(hostMachine(origin, "/companion/git/status")) { body ->
                 Json { ignoreUnknownKeys = true }.decodeFromString(GitStatus.serializer(), body)
             }
         } catch (e: Exception) {
             val query = if (repoPath.isNotBlank()) "?path=$repoPath" else ""
-            get("$origin/api/git/status$query") { body ->
+            get(hostMachine(origin, "/api/git/status$query")) { body ->
                 val obj = Json.parseToJsonElement(body).jsonObject
                 val branch = obj["branch"]?.jsonPrimitive?.contentOrNull ?: "main"
                 val files = obj["files"]?.jsonArray ?: emptyList()
@@ -1184,34 +1651,34 @@ class DashboardClient internal constructor(
 
     suspend fun getGitDiff(origin: String, file: String? = null, staged: Boolean = false): GitDiffSummary =
         get(buildString {
-            append("$origin/companion/git/diff?staged=$staged")
+            append(hostMachine(origin, "/companion/git/diff?staged=$staged"))
             if (!file.isNullOrBlank()) append("&file=$file")
         }) { body ->
             Json { ignoreUnknownKeys = true }.decodeFromString(GitDiffSummary.serializer(), body)
         }
 
     suspend fun getGitBranches(origin: String): GitBranches =
-        get("$origin/companion/git/branches") { body ->
+        get(hostMachine(origin, "/companion/git/branches")) { body ->
             Json { ignoreUnknownKeys = true }.decodeFromString(GitBranches.serializer(), body)
         }
 
     suspend fun stageGitFile(origin: String, path: String, stage: Boolean = true): Boolean =
-        post("$origin/companion/git/stage", """{"path":"$path","stage":$stage}""") { body ->
+        post(hostMachine(origin, "/companion/git/stage"), """{"path":"$path","stage":$stage}""") { body ->
             Json.parseToJsonElement(body).jsonObject["ok"]?.jsonPrimitive?.booleanOrNull ?: false
         }
 
     suspend fun commitGit(origin: String, message: String): Boolean =
-        post("$origin/companion/git/commit", """{"message":${message.json()}}""") { body ->
+        post(hostMachine(origin, "/companion/git/commit"), """{"message":${message.json()}}""") { body ->
             Json.parseToJsonElement(body).jsonObject["ok"]?.jsonPrimitive?.booleanOrNull ?: false
         }
 
     suspend fun executeTerminalCommand(origin: String, cmd: String): TerminalExecResult =
-        post("$origin/companion/terminal/exec", """{"cmd":${cmd.json()}}""") { body ->
+        post(hostMachine(origin, "/companion/terminal/exec"), """{"cmd":${cmd.json()}}""") { body ->
             Json { ignoreUnknownKeys = true }.decodeFromString(TerminalExecResult.serializer(), body)
         }
 
     suspend fun listWorkspaceFiles(origin: String, path: String = ""): List<RemoteFsItem> =
-        get("$origin/companion/fs/tree?path=$path") { body ->
+        get(hostMachine(origin, "/companion/fs/tree?path=$path")) { body ->
             val obj = Json.parseToJsonElement(body).jsonObject
             val items = obj["items"]?.jsonArray ?: return@get emptyList()
             Json { ignoreUnknownKeys = true }.decodeFromJsonElement(
@@ -1221,12 +1688,12 @@ class DashboardClient internal constructor(
         }
 
     suspend fun readWorkspaceFile(origin: String, path: String): String =
-        get("$origin/companion/fs/read?path=$path") { body ->
+        get(hostMachine(origin, "/companion/fs/read?path=$path")) { body ->
             Json.parseToJsonElement(body).jsonObject["content"]?.jsonPrimitive?.content.orEmpty()
         }
 
     suspend fun getCronJobs(origin: String): List<CronJob> =
-        get("$origin/api/cron/jobs") { body ->
+        get(hostMachine(origin, "/api/cron/jobs")) { body ->
             Json { ignoreUnknownKeys = true }.decodeFromString(
                 kotlinx.serialization.builtins.ListSerializer(CronJob.serializer()),
                 body,
@@ -1234,15 +1701,15 @@ class DashboardClient internal constructor(
         }
 
     suspend fun triggerCronJob(origin: String, jobId: String): Boolean =
-        post("$origin/api/cron/jobs/$jobId/trigger", "{}") { true }
+        post(hostMachine(origin, "/api/cron/jobs/$jobId/trigger"), "{}") { true }
 
     suspend fun toggleCronJob(origin: String, jobId: String, pause: Boolean): Boolean {
         val endpoint = if (pause) "pause" else "resume"
-        return post("$origin/api/cron/jobs/$jobId/$endpoint", "{}") { true }
+        return post(hostMachine(origin, "/api/cron/jobs/$jobId/$endpoint"), "{}") { true }
     }
 
     suspend fun getModelCatalog(origin: String): ModelCatalog =
-        get("$origin/api/model/options") { body ->
+        get(hostMachine(origin, "/api/model/options")) { body ->
             val obj = Json.parseToJsonElement(body).jsonObject
             val currentModel = obj["model"]?.jsonPrimitive?.contentOrNull.orEmpty()
             val currentProvider = obj["provider"]?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -1268,14 +1735,14 @@ class DashboardClient internal constructor(
     suspend fun switchModel(origin: String, model: String, provider: String, profile: String? = null): Boolean {
         val payload = """{"model":${model.json()},"provider":${provider.json()}}"""
         return if (!profile.isNullOrBlank()) {
-            post("$origin/api/profiles/$profile/model", payload) { true }
+            post(hostMachine(origin, "/api/profiles/$profile/model"), payload) { true }
         } else {
-            post("$origin/api/model/set", payload) { true }
+            post(hostMachine(origin, "/api/model/set"), payload) { true }
         }
     }
 
     suspend fun checkHermesUpdate(origin: String): HermesUpdateStatus =
-        get("$origin/api/hermes/update/check") { body ->
+        get(hostMachine(origin, "/api/hermes/update/check")) { body ->
             val obj = Json.parseToJsonElement(body).jsonObject
             val currentVer = obj["current_version"]?.jsonPrimitive?.contentOrNull.orEmpty()
             val updateAvail = obj["update_available"]?.jsonPrimitive?.booleanOrNull ?: false
@@ -1295,18 +1762,19 @@ class DashboardClient internal constructor(
         }
 
     suspend fun applyHermesUpdate(origin: String): Boolean =
-        post("$origin/api/hermes/update", "{}") { true }
+        post(hostMachine(origin, "/api/hermes/update"), "{}") { true }
 
     private fun httpError(code: Int, body: String, url: String): DashboardException {
         val err = runCatching {
-            DashboardJson.parseToJsonElement(body).jsonObject["error"]?.jsonPrimitive?.contentOrNull
+            val obj = DashboardJson.parseToJsonElement(body).jsonObject
+            (obj["error"] as? JsonPrimitive)?.contentOrNull ?: (obj["detail"] as? JsonPrimitive)?.contentOrNull
         }.getOrNull()
         if (code == 502 && err == "dashboard_unreachable") {
             val host = url.substringAfter("://").substringBefore("/").substringBefore(':')
             return DashboardException("host_dashboard_down", "start hermes dashboard on $host")
         }
         val path = url.substringAfter("://").substringAfter("/", missingDelimiterValue = url)
-        return DashboardException("http_$code", "http $code · /$path")
+        return DashboardException("http_$code", err?.take(512)?.takeIf { it.isNotBlank() } ?: "http $code · /$path")
     }
 
     companion object {
@@ -1319,19 +1787,7 @@ class DashboardClient internal constructor(
         private val sseJson = Json { ignoreUnknownKeys = true }
         private val TOKEN_RE = Regex("""__HERMES_SESSION_TOKEN__\s*=\s*"([^"]+)"""")
 
-        private fun String.json(): String = buildString {
-            append('"')
-            for (ch in this@json) {
-                when (ch) {
-                    '\\' -> append("\\\\")
-                    '"' -> append("\\\"")
-                    '\n' -> append("\\n")
-                    '\r' -> append("\\r")
-                    else -> append(ch)
-                }
-            }
-            append('"')
-        }
+        private fun String.json(): String = JsonPrimitive(this).toString()
 
         internal fun parseSse(event: String, data: String): ChatEvent? {
             if (data.isBlank() || data == "[DONE]") {
@@ -1361,7 +1817,9 @@ class DashboardClient internal constructor(
                     ChatEvent.Approval(prompt)
                 }
                 event.contains("complete") || event == "run.completed" || event == "done" ->
-                    ChatEvent.Completed
+                    if (obj.isNullOrEmpty()) ChatEvent.Completed else ChatEvent.Final(
+                        text = text, status = obj.str("status").ifBlank { "complete" }, error = obj.str("error"))
+                event == "error" -> ChatEvent.Final(status = "error", error = obj.str("message").ifBlank { text })
                 else -> if (text.isNotBlank()) ChatEvent.AssistantDelta(text) else null
             }
         }

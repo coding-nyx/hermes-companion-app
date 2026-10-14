@@ -14,6 +14,9 @@ data class WakePing(
 /** Parsed `hermes-companion://open` link. [origin] empty = "whatever host is active" (pre-A8.5 links). */
 data class DeepLink(val sessionId: String, val profile: String, val origin: String = "", val roomId: String = "")
 
+/** Parsed `hermes-companion://pair` link. Origin and code required. */
+data class PairDeepLink(val origin: String, val code: String, val profile: String = "default")
+
 /** ntfy/gotify pings. Payload is type + session_id + profile only — never transcript. */
 object WakePolicy {
     const val SCHEME = "hermes-companion"
@@ -67,6 +70,23 @@ object WakePolicy {
         val session = parts["session"]?.takeIf { it.isNotBlank() } ?: return null
         val profile = parts["profile"]?.takeIf { it.isNotBlank() } ?: return null
         return DeepLink(sessionId = session, profile = profile, origin = parts["host"].orEmpty().trim(), roomId = parts["room"].orEmpty().trim())
+    }
+
+    fun pairDeepLink(origin: String, code: String, profile: String = "default"): String =
+        "$SCHEME://pair?origin=${enc(origin.trim())}&code=${enc(code.trim().uppercase())}&profile=${enc(profile.trim())}"
+
+    fun parsePairDeepLink(uri: String): PairDeepLink? {
+        val trimmed = uri.trim()
+        if (!trimmed.startsWith("$SCHEME://pair")) return null
+        val query = trimmed.substringAfter('?', "")
+        val parts = query.split('&').mapNotNull { part ->
+            val i = part.indexOf('=')
+            if (i <= 0) null else part.substring(0, i) to dec(part.substring(i + 1))
+        }.toMap()
+        val code = parts["code"]?.takeIf { it.isNotBlank() } ?: return null
+        val origin = parts["origin"]?.takeIf { it.isNotBlank() } ?: parts["host"]?.takeIf { it.isNotBlank() } ?: return null
+        val profile = parts["profile"]?.takeIf { it.isNotBlank() } ?: "default"
+        return PairDeepLink(origin = origin.trim(), code = code.trim().uppercase(), profile = profile.trim())
     }
 
     private fun enc(v: String): String =

@@ -36,6 +36,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import app.hermes.companion.device.CompanionAccessibilityService
 import app.hermes.companion.device.LiveOverlay
 import app.hermes.companion.design.CompanionTheme
 import app.hermes.companion.domain.DeviceLanePolicy
@@ -86,13 +87,11 @@ class MainActivity : FragmentActivity() {
                 val state by vm.state.collectAsStateWithLifecycle()
                 val reconnect by reconnectNonce.collectAsStateWithLifecycle()
                 val overlay = remember { LiveOverlay(app) }
-                val voiceManager = remember { VoiceInputManager(this@MainActivity) }
                 // Activity-result pickers briefly ON_STOP the activity; skip biometric lock while outstanding.
                 var pickerOutstanding by remember { mutableStateOf(false) }
                 DisposableEffect(Unit) {
                     onDispose {
                         overlay.hide()
-                        voiceManager.stopListening()
                     }
                 }
 
@@ -102,9 +101,13 @@ class MainActivity : FragmentActivity() {
                         if (event == Lifecycle.Event.ON_START) vm.setFleetHealthForeground(true)
                         if (event == Lifecycle.Event.ON_STOP) {
                             vm.setFleetHealthForeground(false)
+                            vm.cancelDictation()
+                            vm.stopVoiceStream(clearError = false)
                             if (!pickerOutstanding) vm.lockIfEnabled()
                         }
                         if (event == Lifecycle.Event.ON_RESUME) {
+                            if (app.sticky.keepA11yOn) CompanionAccessibilityService.ensureEnabled(this@MainActivity)
+                            vm.refreshKeepA11yAvailable()
                             val enabled = Settings.Secure.getString(
                                 contentResolver,
                                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
@@ -138,7 +141,16 @@ class MainActivity : FragmentActivity() {
                 }
 
                 LaunchedEffect(reconnect, intent.dataString, intent.action) {
-                    WakePolicy.parseDeepLink(intent.dataString.orEmpty())?.let { link ->
+                    val rawUri = intent.dataString.orEmpty()
+                    WakePolicy.parsePairDeepLink(rawUri)?.let { pairLink ->
+                        // BROWSABLE: any page or app can fire this, and pairing grants the named host a
+                        // device lane. Never pair on an external intent without the user confirming the host.
+                        if (trusted(intent, app)) vm.pairWithLink(pairLink.origin, pairLink.code, pairLink.profile)
+                        else vm.requestPairLink(pairLink.origin, pairLink.code, pairLink.profile)
+                        intent.data = null
+                        return@LaunchedEffect
+                    }
+                    WakePolicy.parseDeepLink(rawUri)?.let { link ->
                         if (trusted(intent, app)) {
                             if (link.roomId.isNotBlank()) vm.openRoomWake(link.origin, link.roomId)
                             else vm.openWake(link.origin, link.profile, link.sessionId)
@@ -252,6 +264,19 @@ class MainActivity : FragmentActivity() {
                     onTab = vm::selectTab,
                     onOpenSession = vm::openSession,
                     onNewThread = vm::newThread,
+                    onResumeLocalDraft = vm::resumeLocalDraft,
+                    onRenameSession = vm::renameSession,
+                    onPinSession = vm::pinSession,
+                    onArchiveSession = vm::archiveSession,
+                    onBranchSession = vm::branchSession,
+                    onSessionContext = vm::showSessionContext,
+                    onDismissSessionContext = vm::dismissSessionContext,
+                    onSessionControls = vm::showSessionControls,
+                    onDismissSessionControls = vm::dismissSessionControls,
+                    onSetSessionSetting = vm::setSessionSetting,
+                    onRedirectSession = vm::redirectSession,
+                    onNativeCommand = vm::dispatchNativeCommand,
+                    onRetryMessage = vm::retryMessage,
                     onRetrySessions = vm::reloadSessions,
                     onThreadSort = vm::setThreadSort,
                     onToggleArchived = vm::setShowArchived,
@@ -311,6 +336,7 @@ class MainActivity : FragmentActivity() {
                     onRewind = vm::beginRewind,
                     onCancelRewind = vm::cancelRewind,
                     onPair = vm::startPair,
+                    onPairLink = vm::requestPairLink,
                     onRepairPair = vm::repair,
                     onApprovePair = vm::approvePair,
                     onCancelPair = vm::cancelPair,
@@ -350,6 +376,7 @@ class MainActivity : FragmentActivity() {
                     onNtfyTopicChange = vm::onNtfyTopicChange,
                     onSaveNtfy = vm::saveNtfy,
                     onToggleStay = vm::toggleStayConnected,
+                    onToggleKeepA11y = vm::toggleKeepA11yOn,
                     onDisconnect = vm::disconnect,
                     onToggleAwakeOnVoice = vm::toggleAwakeOnVoice,
                     onToggleLockedAccess = vm::toggleLockedAccess,
@@ -373,6 +400,8 @@ class MainActivity : FragmentActivity() {
                     },
                     onConfirmDeepLink = vm::confirmDeepLink,
                     onDismissDeepLink = vm::dismissDeepLink,
+                    onConfirmPairLink = vm::confirmPairLink,
+                    onDismissPairLink = vm::dismissPairLink,
                     onExecuteTerminal = vm::executeTerminal,
                     onClearTerminal = vm::clearTerminalLogs,
                     onRefreshGit = vm::loadGitStatus,
@@ -389,17 +418,15 @@ class MainActivity : FragmentActivity() {
                     onAddGateway = vm::addSavedGateway,
                     onCheckUpdate = vm::checkUpdates,
                     onApplyUpdate = vm::applyUpdate,
+                    onReadAloud = vm::readMessageAloud,
+                    onSpeechBackend = vm::setSpeechBackend,
                     onVoiceClick = {
                         val action = {
-                            vm.setVoiceListening(true)
-                            voiceManager.startListening(
-                                onPartial = { vm.onDraftChange(it) },
-                                onResult = { vm.onVoiceTranscript(it) },
-                                onError = { vm.setVoiceListening(false) },
-                                onStateChange = { vm.setVoiceListening(it) },
-                            )
+                            vm.beginDictation()
                         }
-                        if (ContextCompat.checkSelfPermission(
+                        if (vm.state.value.isListeningVoice) {
+                            vm.cancelDictation()
+                        } else if (ContextCompat.checkSelfPermission(
                                 this@MainActivity,
                                 Manifest.permission.RECORD_AUDIO,
                             ) == PackageManager.PERMISSION_GRANTED
@@ -407,11 +434,12 @@ class MainActivity : FragmentActivity() {
                             action()
                         } else {
                             pendingPermissionAction = action
-                            pendingPermissionDeny = null
+                            pendingPermissionDeny = { vm.cancelDictation("Microphone permission denied") }
                             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     },
                     onToggleVoiceStream = {
+                        vm.cancelDictation()
                         val action = {
                             vm.toggleVoiceStream()
                         }
@@ -423,10 +451,11 @@ class MainActivity : FragmentActivity() {
                             action()
                         } else {
                             pendingPermissionAction = action
-                            pendingPermissionDeny = null
+                            pendingPermissionDeny = { vm.cancelDictation("Microphone permission denied") }
                             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     },
+                    onToggleVoiceSpeaker = vm::toggleVoiceSpeaker,
                     onToggleAttach = vm::toggleAttach,
                     onPickPhoto = {
                         pickerOutstanding = true

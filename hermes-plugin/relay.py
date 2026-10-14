@@ -871,7 +871,12 @@ class CompanionHandler(BaseHTTPRequestHandler):
         try:
             if path == "/companion/device/pair" and self.command == "POST":
                 body = self._read_json()
-                code = self.state.pairing.offer(str(body.get("code") or ""), str(body.get("profile") or "default"))
+                code_req = str(body.get("code") or "").strip()
+                profile = str(body.get("profile") or "default")
+                if code_req:
+                    code = self.state.pairing.offer(code_req, profile)
+                else:
+                    code = self.state.pairing.issue(profile)
                 return self._json({"code": code, "status": "pending"})
             if path.startswith("/companion/device/pair/") and path.endswith("/approve") and self.command == "POST":
                 code = path.rstrip("/").rsplit("/", 2)[-2]

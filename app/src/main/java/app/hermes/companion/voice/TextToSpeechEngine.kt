@@ -14,16 +14,18 @@ import java.util.concurrent.atomic.AtomicInteger
  * Buffers streaming LLM response tokens and synthesizes speech clause-by-clause
  * on punctuation boundaries ([.!?\n:]), so the user hears speech in real-time
  * without waiting for the full response to finish generating.
- * Supports zero-latency instant cancellation for barge-in.
+ * Stops queued playback on explicit interruption.
  */
 class TextToSpeechEngine(
     private val context: Context,
     private val onStart: () -> Unit = {},
     private val onAllCompleted: () -> Unit = {},
     private val onError: (String) -> Unit = {},
-) {
+    private val audioAttributes: android.media.AudioAttributes? = null,
+) : SpeechOutput {
     private var tts: TextToSpeech? = null
     private var isReady = false
+    private var initializationFailed = false
     private val utteranceSeq = AtomicInteger(0)
     private var pendingBuffer = StringBuilder()
     private var endOfFeedReached = false
@@ -44,14 +46,15 @@ class TextToSpeechEngine(
                     }
                     engine.setSpeechRate(1.05f)
                     engine.setPitch(1.0f)
+                    audioAttributes?.let { engine.setAudioAttributes(it) }
                     engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                         override fun onStart(utteranceId: String?) {
-                            onStart()
+                            synchronized(lock) { if (utteranceId in queuedUtterances) onStart() }
                         }
 
                         override fun onDone(utteranceId: String?) {
                             synchronized(lock) {
-                                utteranceId?.let { queuedUtterances.remove(it) }
+                                if (utteranceId == null || !queuedUtterances.remove(utteranceId)) return
                                 if (endOfFeedReached && queuedUtterances.isEmpty()) {
                                     onAllCompleted()
                                 }
@@ -61,7 +64,8 @@ class TextToSpeechEngine(
                         @Deprecated("Deprecated in Java")
                         override fun onError(utteranceId: String?) {
                             synchronized(lock) {
-                                utteranceId?.let { queuedUtterances.remove(it) }
+                                if (utteranceId == null || !queuedUtterances.remove(utteranceId)) return
+                                onError("Speech playback failed")
                                 if (endOfFeedReached && queuedUtterances.isEmpty()) {
                                     onAllCompleted()
                                 }
@@ -69,9 +73,9 @@ class TextToSpeechEngine(
                         }
 
                         override fun onError(utteranceId: String?, errorCode: Int) {
-                            onError("TTS error code: $errorCode")
                             synchronized(lock) {
-                                utteranceId?.let { queuedUtterances.remove(it) }
+                                if (utteranceId == null || !queuedUtterances.remove(utteranceId)) return
+                                onError("TTS error code: $errorCode")
                                 if (endOfFeedReached && queuedUtterances.isEmpty()) {
                                     onAllCompleted()
                                 }
@@ -80,15 +84,14 @@ class TextToSpeechEngine(
                     })
                     synchronized(lock) {
                         isReady = true
-                        if (pendingBuffer.isNotEmpty()) {
-                            processBuffer(flushAll = endOfFeedReached)
-                            if (endOfFeedReached && queuedUtterances.isEmpty()) {
-                                onAllCompleted()
-                            }
+                        if (pendingBuffer.isNotEmpty()) processBuffer(flushAll = endOfFeedReached)
+                        if (endOfFeedReached && queuedUtterances.isEmpty()) {
+                            onAllCompleted()
                         }
                     }
                 }
             } else {
+                initializationFailed = true
                 onError("TextToSpeech initialization failed: $status")
             }
         }
@@ -98,9 +101,10 @@ class TextToSpeechEngine(
      * Feed an incremental text delta from the streaming LLM turn.
      * Extracts completed clauses on punctuation boundaries and queues them to speak.
      */
-    fun feedToken(delta: String) {
+    override fun feedToken(delta: String) {
         if (delta.isEmpty()) return
         synchronized(lock) {
+            if (initializationFailed) { onError("Speech playback is unavailable"); return }
             pendingBuffer.append(delta)
             if (isReady) {
                 processBuffer(flushAll = false)
@@ -112,8 +116,9 @@ class TextToSpeechEngine(
      * Signals that the assistant has finished generating the full turn.
      * Flushes any remaining text in the buffer and marks completion.
      */
-    fun finishFeed() {
+    override fun finishFeed() {
         synchronized(lock) {
+            if (initializationFailed) { onError("Speech playback is unavailable"); return }
             endOfFeedReached = true
             if (isReady) {
                 processBuffer(flushAll = true)
@@ -157,14 +162,17 @@ class TextToSpeechEngine(
         val params = Bundle().apply {
             putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, id)
         }
-        tts?.speak(cleaned, TextToSpeech.QUEUE_ADD, params, id)
+        if (tts?.speak(cleaned, TextToSpeech.QUEUE_ADD, params, id) == TextToSpeech.ERROR) {
+            queuedUtterances.remove(id)
+            onError("Speech playback failed")
+        }
     }
 
     /**
      * Instantly halt any playing or queued speech.
      * Used for barge-in when the user speaks or interrupts.
      */
-    fun stop() {
+    override fun stop() {
         synchronized(lock) {
             pendingBuffer.clear()
             endOfFeedReached = false
@@ -173,7 +181,7 @@ class TextToSpeechEngine(
         }
     }
 
-    fun shutdown() {
+    override fun shutdown() {
         stop()
         tts?.shutdown()
         tts = null

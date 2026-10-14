@@ -7,6 +7,8 @@ import app.hermes.companion.data.remote.HostClientPool
 import app.hermes.companion.domain.OriginPolicy
 import app.hermes.companion.model.SavedGateway
 import app.hermes.companion.model.TerminalExecResult
+import app.hermes.companion.model.NativeVoiceStatus
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
@@ -80,6 +82,19 @@ class HostToolsController(
                     modelOverride = override,
                 )
             }
+        }
+    }
+
+    fun loadVoiceStatus() {
+        val origin = _state.value.origin ?: return
+        val profile = _state.value.activeProfileId ?: return
+        scope.launch {
+            val status = try { client(origin).voiceLiveStatus(origin, profile) }
+            catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                NativeVoiceStatus(reason = "Voice readiness could not be checked")
+            }
+            _state.update { if (!it.owns(origin, profile)) it else it.copy(nativeVoiceStatus = status) }
         }
     }
 

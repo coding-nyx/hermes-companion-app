@@ -26,3 +26,6 @@ kc.sqlite
 keystore.properties
 *.keystore
 *.jks
+
+# Machine-specific Firebase client configuration; server keys remain outside this checkout.
+app/firebase-client.json

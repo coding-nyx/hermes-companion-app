@@ -48,8 +48,10 @@ import app.hermes.companion.design.CompanionType
 import app.hermes.companion.design.FetchPane
 import app.hermes.companion.design.Hairline
 import app.hermes.companion.design.HairlineField
+import androidx.compose.ui.platform.LocalClipboardManager
 import app.hermes.companion.domain.GatewayBook
 import app.hermes.companion.domain.OriginPolicy
+import app.hermes.companion.domain.WakePolicy
 import app.hermes.companion.model.GatewayChoice
 
 @Composable
@@ -59,6 +61,7 @@ fun ConnectScreen(
     error: String?,
     onOriginChange: (String) -> Unit,
     onConnect: () -> Unit,
+    onPairLink: ((String, String, String) -> Unit)? = null,
     authRequired: Boolean = false,
     username: String = "",
     password: String = "",
@@ -69,6 +72,17 @@ fun ConnectScreen(
     onForgetGateway: (GatewayChoice) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val clipboard = LocalClipboardManager.current
+    val handleOriginInput: (String) -> Unit = { input ->
+        val pairLink = WakePolicy.parsePairDeepLink(input)
+        if (pairLink != null) {
+            onOriginChange(pairLink.origin)
+            onPairLink?.invoke(pairLink.origin, pairLink.code, pairLink.profile)
+        } else {
+            onOriginChange(input)
+        }
+    }
+
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
@@ -125,15 +139,36 @@ fun ConnectScreen(
             )
             Spacer(Modifier.height(CompanionSpace.Lg))
         }
-        Text(
-            text = "origin",
-            style = CompanionType.MonoSmall,
-            modifier = Modifier.align(Alignment.Start),
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "origin",
+                style = CompanionType.MonoSmall,
+            )
+            Text(
+                text = "PASTE PAIR LINK",
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                modifier = Modifier
+                    .testTag("connect.paste_link")
+                    .clickable {
+                        val clip = clipboard.getText()?.text?.trim().orEmpty()
+                        val pairLink = WakePolicy.parsePairDeepLink(clip)
+                        if (pairLink != null) {
+                            onOriginChange(pairLink.origin)
+                            onPairLink?.invoke(pairLink.origin, pairLink.code, pairLink.profile)
+                        } else if (clip.startsWith("http://") || clip.startsWith("https://")) {
+                            onOriginChange(clip)
+                        }
+                    },
+            )
+        }
         Spacer(Modifier.height(CompanionSpace.Sm))
         HairlineField(
             value = origin,
-            onValueChange = onOriginChange,
+            onValueChange = handleOriginInput,
             onDone = onConnect,
             modifier = Modifier.testTag("connect.origin"),
         )

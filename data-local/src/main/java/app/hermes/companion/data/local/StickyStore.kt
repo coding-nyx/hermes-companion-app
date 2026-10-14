@@ -10,6 +10,11 @@ import android.content.Context
 class StickyStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("companion.sticky", Context.MODE_PRIVATE)
 
+    /** Explicit phone-wide speech choice. An unset choice takes the rollout default. */
+    var speechBackend: String?
+        get() = prefs.getString("speech_backend", null)
+        set(value) { prefs.edit().putString("speech_backend", value).apply() }
+
     /** Last origin the user *attempted*. Prefer [lastGoodOrigin] for auto-connect. */
     var origin: String?
         get() = prefs.getString(KEY_ORIGIN, null)
@@ -60,6 +65,15 @@ class StickyStore(context: Context) {
     var stayConnected: Boolean
         get() = prefs.getBoolean(KEY_STAY, false)
         set(value) { prefs.edit().putBoolean(KEY_STAY, value).apply() }
+
+    /**
+     * Opt-in: with WRITE_SECURE_SETTINGS granted over adb, write the Hands accessibility service
+     * back into Settings whenever it drops out. Off by default — while on, turning Hermes off in
+     * Android's accessibility settings does not stick, so the user must choose it knowingly.
+     */
+    var keepA11yOn: Boolean
+        get() = prefs.getBoolean(KEY_KEEP_A11Y, false)
+        set(value) { prefs.edit().putBoolean(KEY_KEEP_A11Y, value).apply() }
 
     /** Phone-wide: lock the operator UI behind biometric / device PIN (A12.3). */
     var biometricLock: Boolean
@@ -122,6 +136,7 @@ class StickyStore(context: Context) {
         private const val KEY_PROFILE = "profile_id"
         private const val KEY_NTFY = "ntfy_topic"
         private const val KEY_STAY = "stay_connected"
+        private const val KEY_KEEP_A11Y = "keep_a11y_on"
         private const val KEY_BIOMETRIC = "biometric_lock"
         private const val KEY_NOTIF_STREAM = "notif_stream_enabled"
         private const val KEY_NOTIF_STREAM_ORIGIN = "notif_stream_origin"

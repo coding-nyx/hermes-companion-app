@@ -27,6 +27,13 @@ Confirm paths against the running Hermes version during A0.5. Ticket mint in par
 
 On close codes: `4401` ticket rejected; `4403` host/peer guard. Re-login and mint a fresh ticket. Never reuse a gated ticket.
 
+Optional Companion integration is discovered independently through `/companion/health`.
+Only a valid `relay: "ok"` report enables room/peer fetching. Missing routes and an HTML SPA
+response with HTTP 200 mean unavailable; transport, authentication, and malformed JSON failures
+remain unknown and can be retried. Discovery cannot block native chat connection. Host telemetry
+uses `/api/system/stats` first; only an explicitly unsupported native route plus a verified
+Companion extension allows the legacy metrics fallback.
+
 ## JSON-RPC shape
 
 Newline-delimited JSON-RPC 2.0, same dialect as the Ink TUI.
@@ -50,11 +57,14 @@ Heartbeat: `gateway.ping` → `{ "ok": true }`. Send on an interval only if `gat
 | Method | When |
 |---|---|
 | `session.list` | Thread rail, catch-up |
-| `session.create` | New thread |
-| `session.history` | Open a thread. Always send `limit` (≤ 500). Page older with `before` (message id). Resume may still dump a full transcript — client keeps only the last page. |
+| `session.create` | NEW or first-send draft promotion. Reuse an `idempotency_key` for a retry; retry without it only after explicit validation refusal on an older host. |
+| `session.resume` | Bind stored/runtime ids; request `omit_messages`, `defer_history`, and `inline_images=false` where supported. Restore running/inflight state and pending approval. |
+| `session.history` | Native params are only session id and profile. Clip/page this full transcript locally; do not send unsupported `limit` or `before`. |
 | `session.interrupt` | Stop in-flight turn |
-| `session.steer` | Mid-turn guidance (later) |
-| `prompt.submit` | Send. Destructive rewind only with `truncate_before_row_id` + `confirm_truncate` |
+| `session.steer` | Composer guidance during an active turn |
+| `session.branch_stored` | Non-destructive whole-conversation branch with an idempotency key |
+| `image.attach_bytes` / `file.attach` | Stage native attachments before sending; files return a reference to append to the prompt |
+| `prompt.submit` | Native send carries session id, profile, and text. Do not add unsupported `model`, `client_id`, or `parts`. Destructive rewind adds `truncate_before_row_id` + `confirm_truncate`. |
 | `approval.respond` | Approval strip |
 | `clarify.respond` | Clarify strip |
 | `sudo.respond` / `secret.respond` | Same strip family |
@@ -67,7 +77,9 @@ Do **not** call from the phone in v1: `cli.exec`, `config.set`, `reload.env`, an
 | Event | UI |
 |---|---|
 | `gateway.ready` | HUD live; reset replay cursor if instance id changed |
-| `message.delta` / `message.complete` | Transcript |
+| `message.delta` / `message.complete` | Deltas plus authoritative final text, status, and error; final-only replies are valid |
+| `message.interim` | Seal an intermediate response while the agent keeps working |
+| `reasoning.delta` | Separate collapsible reasoning row; never spoken as the final answer |
 | `tool.start` / `tool.progress` / `tool.complete` | Tool rows |
 | `approval.request` / `clarify.request` / `sudo.request` / `secret.request` | Strip. Expiry events clear only the matching `request_id` |
 | `sessions.changed` | Reconcile thread list. Expected payload fields: `id`, `profile`, `op` (`upsert`/`delete`), `updated_at`, optional `started_at`/`title`. Without `id` or `profile` → full refetch (H4). Patches are **merged** into the known row (`SessionLists.merge`): a missing title or timestamp never erases what the rail already knows. |
@@ -84,8 +96,8 @@ Do **not** call from the phone in v1: `cli.exec`, `config.set`, `reload.env`, an
 | `GET /api/profiles` | Machine roster for the switcher. **No** `?profile=` — that would hide the other agents. |
 | `GET /api/sessions?profile=&limit=100&offset=[&archived=include]` | Catch-up (`archived=include` only while the ARCHIVED chip is on). Required. Client also filters by `profileId`. Dashboard: default 20 rows, `limit ≤ 100` (422 above), returns `total`; the client pages `offset` until `total` / short page / 500 rows. The standalone relay mirrors the shape. The rail is the **union** of this and `session.list` keyed by id — the gateway hides `subagent` rows, REST has them; neither alone is exhaustive. |
 | `GET /api/sessions/{id}/messages?profile=` | History. 403 if the session is not in that profile. |
-| `POST /api/sessions/{id}/chat/stream?profile=` | SSE turn: `assistant.delta`, `tool.started`/`completed`, `run.completed`. |
-| `POST /api/sessions?profile=` | New thread under the active profile. |
+| `POST /api/sessions/{id}/chat/stream?profile=` | Legacy SSE compatibility only; native chat uses `prompt.submit` over RPC. |
+| `POST /api/sessions?profile=` | Legacy compatibility only. Native NEW uses `session.create` over RPC. |
 | `GET /api/sessions/{id}/approval?profile=` | Pending approval/clarify. 404 if none. 403 if wrong profile. |
 | `POST /api/sessions/{id}/approval?profile=` | `{request_id, decision}` (`once`/`deny`). JSON-RPC `approval.respond` is the live Hermes equivalent. |
 | `GET /api/ws?profile=` | JSON-RPC. First event `gateway.ready` (`change_events`, `heartbeat`, `instance_id`). Gated mode: mint `POST /api/auth/ws-ticket` and pass `?ticket=`. |
@@ -106,7 +118,21 @@ A thread is keyed `(host, profile, session_id)`. The UI never mixes two profiles
 
 ## Offline
 
-Room is a cache. Outbox holds unsent `prompt.submit` payloads. On reconnect: replay outbox, then `session.history` for open threads. Server transcript wins. Drafts never upload until send.
+Room is a cache. On reconnect, subscribe to live events, reconcile the catalog and open history, then drain eligible unsent inputs. Uncertain attempts are reconciled before any retry. The host transcript is authoritative; drafts never upload until send.
+
+The outbox removes an input on host acknowledgment, not on successful generation. Before
+submission it persists the baseline durable user-row ids. A lost acknowledgment is reconciled
+against a new matching row, not an identical historical message. An uncertain attempt is held
+for Check; it is never blindly replayed. Exhausted or rejected sends remain available for
+explicit Retry. Cache migration 6→7 preserves outbox rows.
+
+Native REST history uses `limit`, `order=latest`, and `offset`; its pagination envelope
+marks an already-paged response. The preceding page need not contain the newer-page anchor.
+Legacy REST history that supports `before` remains a compatibility path.
+
+Session mutations use profile-scoped `PATCH /api/sessions/{id}` with title, pinned, or
+archived. A new native RPC session can be lazy until its first prompt; the app retains it on
+the rail while waiting for the host catalog to include it.
 
 ## Rewind
 

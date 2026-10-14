@@ -7,6 +7,8 @@ import androidx.compose.ui.Modifier
 import android.graphics.Canvas
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -16,11 +18,13 @@ import androidx.compose.ui.unit.dp
 import app.hermes.companion.design.CompanionTheme
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
+import app.hermes.companion.model.MessageDelivery
 import app.hermes.companion.model.RoomRef
 import androidx.compose.ui.test.assertTextEquals
 import app.hermes.companion.model.RoomParticipant
 import androidx.compose.ui.test.onAllNodesWithText
 import java.io.File
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -58,6 +62,14 @@ class ChatScreenRenderTest {
         participants: List<RoomParticipant> = emptyList(),
         pendingSpeaker: String? = null,
         roomRef: RoomRef? = null,
+        draft: String = "",
+        submitting: Boolean = false,
+        creatingThread: Boolean = false,
+        onReadAloud: (ChatMessage) -> Unit = {},
+        readAloudMessageId: String? = null,
+        approval: app.hermes.companion.model.ApprovalPrompt? = null,
+        approvalBusy: Boolean = false,
+        onApproval: (String) -> Unit = {},
     ) {
         rule.mainClock.autoAdvance = false
         rule.setContent {
@@ -65,14 +77,19 @@ class ChatScreenRenderTest {
                 Box(Modifier.size(360.dp, 720.dp)) {
                     ChatScreen(
                         messages = messages,
-                        draft = "",
+                        draft = draft,
                         streaming = streaming,
+                        submitting = submitting,
+                        creatingThread = creatingThread,
+                        onReadAloud = onReadAloud,
+                        readAloudMessageId = readAloudMessageId,
                         error = null,
-                        approval = null,
+                        approval = approval,
+                        approvalBusy = approvalBusy,
                         onDraftChange = {},
                         onSend = {},
                         onInterrupt = {},
-                        onApproval = {},
+                        onApproval = onApproval,
                         threadId = "s1",
                         participants = participants,
                         pendingSpeaker = pendingSpeaker,
@@ -86,6 +103,62 @@ class ChatScreenRenderTest {
     }
 
     private val room = listOf(RoomParticipant("coder", "COD"), RoomParticipant("ops", "OPS"), RoomParticipant("ash", "ASH"))
+
+    @Test fun pendingDecisionShowsSubmissionAndDisablesRepeatedActions() {
+        val choices = mutableListOf<String>()
+        mount(emptyList(), streaming = false, draft = "**preserved**", approvalBusy = true,
+            approval = app.hermes.companion.model.ApprovalPrompt("fixture", command = "Synthetic"), onApproval = choices::add)
+        rule.onNodeWithTag("chat.approval.submitting").assertExists()
+        rule.onNodeWithTag("chat.approval.allow").assertIsNotEnabled()
+        rule.onNodeWithTag("chat.approval.deny").assertIsNotEnabled()
+        assertTrue(choices.isEmpty())
+    }
+
+    @Test fun readAloudTargetsTheCompletedMessageAndNeverAnInFlightReply() {
+        val selected = mutableListOf<ChatMessage>()
+        mount(listOf(agentDone, agentLive), streaming = true, onReadAloud = selected::add)
+        rule.onNodeWithTag("chat.read.a2").assertDoesNotExist()
+        rule.onNodeWithTag("chat.read.a1").performClick()
+        assertTrue(selected == listOf(agentDone))
+    }
+    @Test fun playingReadAloudOffersStopWithoutHidingRichTextFormatting() {
+        mount(listOf(agentDone), streaming = false, readAloudMessageId = agentDone.id)
+        rule.onNodeWithText("STOP AUDIO").assertIsDisplayed()
+        rule.onNodeWithTag("chat.fmt.bold").assertIsDisplayed()
+    }
+
+    @Test fun failedInputOffersRetryAndDoesNotPretendItWasSent() {
+        mount(listOf(user.copy(delivery = MessageDelivery.FAILED)), streaming = false)
+        rule.onNodeWithText("failed").assertIsDisplayed()
+        rule.onNodeWithText("RETRY").assertIsDisplayed()
+    }
+
+    @Test fun anUncertainInputOffersCheckRatherThanAnAutomaticResend() {
+        mount(listOf(user.copy(delivery = MessageDelivery.UNCERTAIN)), streaming = false)
+        rule.onNodeWithText("checking delivery").assertIsDisplayed()
+        rule.onNodeWithText("CHECK").assertIsDisplayed()
+    }
+
+    @Test fun aDraftDuringGenerationSteersTheActiveTurn() {
+        mount(listOf(user, agentLive), streaming = true, draft = "use the other directory")
+        rule.onNodeWithText("STEER").assertIsDisplayed()
+    }
+
+    @Test fun sendingAndCreationShowTheirOwnComposerState() {
+        mount(listOf(user), streaming = false, submitting = true)
+        rule.onNodeWithText("SENDING").assertIsDisplayed()
+    }
+
+    @Test fun restoredComposerKeepsRichTextControlsVisible() {
+        mount(emptyList(), streaming = false, draft = "A readable message")
+        for (tag in listOf("bold", "italic", "code", "list")) {
+            rule.onNodeWithTag("chat.fmt.$tag").assertIsDisplayed()
+        }
+        rule.onNodeWithTag("chat.slash").assertIsDisplayed()
+        rule.onNodeWithText("MIC").assertIsDisplayed()
+        rule.onNodeWithText("SEND").assertIsDisplayed()
+        snap("13-restored-rich-text-composer")
+    }
 
     @Test
     fun roomBarShowsFloorStateAndActions() {
@@ -176,7 +249,7 @@ class ChatScreenRenderTest {
         rule.onNodeWithText("HERMES").assertIsDisplayed()
         rule.onAllNodesWithTag("chat.cursor").assertCountEquals(0)
         rule.onAllNodesWithTag("chat.pending").assertCountEquals(0)
-        rule.onNodeWithText("SEND").assertIsDisplayed()
+        rule.onNodeWithText("MIC").assertIsDisplayed()
         snap("01-idle")
     }
 

@@ -1,9 +1,11 @@
 package app.hermes.companion.data.local
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.SessionChange
 import app.hermes.companion.model.SessionRef
+import app.hermes.companion.domain.SessionLists
 
 /**
  * Read-through Room cache. Hermes is source of truth.
@@ -36,7 +38,8 @@ class TranscriptCache(private val dao: CompanionDao) {
         if (op == "delete" || op == "remove") {
             deleteSession(origin, profileId, change.session.id)
         } else {
-            upsertSession(origin, change.session)
+            val existing = sessions(origin, profileId).find { it.id == change.session.id }
+            upsertSession(origin, if (existing == null) change.session else SessionLists.mergeChange(existing, change))
         }
     }
 
@@ -89,6 +92,7 @@ class TranscriptCache(private val dao: CompanionDao) {
         return try {
             remote().also { write(it) }
         } catch (t: Throwable) {
+            if (t is CancellationException) throw t
             val hit = cached()
             if (hit.isNotEmpty()) hit else throw t
         }

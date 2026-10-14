@@ -36,7 +36,7 @@ class ChatReentryTest {
         // transcript already carries the user turn while the item sits pending on attempt 0.
         val server = listOf(user("row-9", "what is the status"))
 
-        val merged = mergeQueued(server, listOf(pending("u-1", "what is the status")))
+        val merged = mergeQueued(server, listOf(pending("u-1", "what is the status").copy(baselineUserIds = emptyList())))
 
         assertEquals(listOf("what is the status"), merged.map { it.text })
         assertFalse("no stale queued badge on a turn the host has", merged.single().queued)

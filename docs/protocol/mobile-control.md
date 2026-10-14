@@ -76,8 +76,9 @@ the `CompanionAccessibilityService` to be bound. The agent prefers L0
 whenever the task maps to one of these; the a11y lane stays the fallback for
 interacting with arbitrary 3rd-party app UI. Passive L0 reads
 (`device.audio.volume.get`, `device.media.sessions`, `device.media.now_playing`,
-`device.clipboard.get`, `device.device.info`) are allowed while DISARMED;
-destructive L0 still requires `ARMED`.
+`device.device.info`) are allowed while DISARMED; destructive L0 and personal-data
+reads (`device.clipboard.get`, sms/call log/contacts, calendar, location, app usage)
+still require `ARMED`.
 
 `device.clipboard.get` is the one L0 action the platform can refuse outright:
 Android 10+ withholds the primary clip from any app that is neither the focused

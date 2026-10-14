@@ -59,4 +59,34 @@ class WakePolicyTest {
         )
         assertEquals(DeepLink("sess-1", "coder", "http://100.88.4.63:9120"), WakePolicy.parseDeepLink(hosted))
     }
+
+    @Test
+    fun pairDeepLinkRoundTrip() {
+        val link = WakePolicy.pairDeepLink("http://100.83.141.111:9120", "X7K2M9", "ops")
+        assertEquals(
+            "hermes-companion://pair?origin=http%3A%2F%2F100.83.141.111%3A9120&code=X7K2M9&profile=ops",
+            link,
+        )
+        val parsed = WakePolicy.parsePairDeepLink(link)
+        assertEquals(PairDeepLink("http://100.83.141.111:9120", "X7K2M9", "ops"), parsed)
+
+        // Handles lowercase code normalization and alternative host param
+        val alt = "hermes-companion://pair?host=http://lab:9120&code=abcdef"
+        val parsedAlt = WakePolicy.parsePairDeepLink(alt)
+        assertEquals(PairDeepLink("http://lab:9120", "ABCDEF", "default"), parsedAlt)
+
+        // Rejects non-pair links
+        assertNull(WakePolicy.parsePairDeepLink("hermes-companion://open?session=s1&profile=p1"))
+        assertNull(WakePolicy.parsePairDeepLink("https://example.com/pair?origin=h&code=c"))
+    }
+
+    @Test
+    fun pairDeepLinkMatchesPluginEncoding() {
+        // Verbatim from hermes-plugin qr.pair_deep_link (test_pair_deep_link_encodes_awkward_origins).
+        val fromCli = "hermes-companion://pair?origin=https%3A%2F%2Fhermes.example.ts.net%2Fhub%3Fx%3D1%26y%3D2%23frag" +
+            "&code=X7K2M9&profile=ops%20team"
+        val origin = "https://hermes.example.ts.net/hub?x=1&y=2#frag"
+        assertEquals(PairDeepLink(origin, "X7K2M9", "ops team"), WakePolicy.parsePairDeepLink(fromCli))
+        assertEquals(fromCli, WakePolicy.pairDeepLink(origin, "x7k2m9", "ops team"))
+    }
 }

@@ -27,6 +27,25 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [31], qualifiers = "w360dp-h720dp-xhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ThreadsScreenRenderTest {
+    @Test
+    fun nativeHostKeepsNewThreadWithoutOfferingUnsupportedRoomCreation() {
+        rule.setContent {
+            CompanionTheme { ThreadsScreen(sessions = emptyList(), roomsAvailable = false) }
+        }
+        rule.onNodeWithTag("threads.new").assertIsDisplayed()
+        rule.onNodeWithTag("threads.newroom").assertDoesNotExist()
+    }
+    @Test fun recoveringAnUnsentDraftIsSeparateFromCreatingAThread() {
+        var resumed = 0
+        var created = 0
+        rule.setContent { CompanionTheme { ThreadsScreen(sessions = emptyList(), roomsAvailable = false,
+            hasLocalDraft = true, onResumeLocalDraft = { resumed++ }, onNew = { created++ }) } }
+        assertEquals(0, resumed); assertEquals(0, created)
+        rule.onNodeWithTag("threads.resumeDraft").assertIsDisplayed().performClick()
+        assertEquals(1, resumed); assertEquals(0, created)
+        rule.onNodeWithTag("threads.new").performClick()
+        assertEquals(1, created)
+    }
     @get:Rule
     val rule = createAndroidComposeRule<ComponentActivity>()
 

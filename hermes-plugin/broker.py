@@ -130,13 +130,13 @@ L0_NO_A11Y = frozenset(
 
 # L0 actions that may run even when the device is DISARMED. Read-only / passive.
 # sms.list, calls.log and contacts.search are reads but are deliberately excluded: arming is
-# the user's consent, and one sms.list discloses the whole message history.
+# the user's consent, and one sms.list discloses the whole message history. clipboard.get is
+# excluded too: clipboards routinely hold just-copied passwords and one-time codes.
 L0_PASSIVE = frozenset(
     {
         "device.audio.volume.get",
         "device.media.sessions",
         "device.media.now_playing",
-        "device.clipboard.get",
         "device.device.info",
         "device.notifications.nls",
         "device.notifications.nls.enable",

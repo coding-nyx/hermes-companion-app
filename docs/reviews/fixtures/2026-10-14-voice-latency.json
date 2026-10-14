@@ -1,0 +1,283 @@
+{
+  "date": "2026-10-14",
+  "installed_apk_sha256": "42b9140b3ae201f1c72f8aa00b4c0d976362d05e86f5ce6ccca44185b94dd8bc",
+  "host": {
+    "default": {
+      "profile": "ash",
+      "clock": "monotonic",
+      "microphone_used": false,
+      "http": [
+        105.5,
+        108.2,
+        106.1,
+        106.1,
+        108.1
+      ],
+      "speech": [
+        {
+          "sample": 1,
+          "whole_file_tts_ms": 1347.7,
+          "tts_provider": "xai",
+          "audio_bytes": 57216,
+          "synthetic_file_stt_ms": 1260.8,
+          "transcript_nonempty": true,
+          "stt_provider": "local",
+          "speech_upgrade_ms": 1.8,
+          "stream_first_pcm_ms": 1595.9,
+          "stream_terminal": "end",
+          "stream_complete_ms": 8538.4,
+          "pcm_bytes": 168000
+        },
+        {
+          "sample": 2,
+          "whole_file_tts_ms": 1050.4,
+          "tts_provider": "xai",
+          "audio_bytes": 57216,
+          "synthetic_file_stt_ms": 1256.9,
+          "transcript_nonempty": true,
+          "stt_provider": "local",
+          "speech_upgrade_ms": 1.9,
+          "stream_first_pcm_ms": 1831.9,
+          "stream_terminal": "end",
+          "stream_complete_ms": 9097.0,
+          "pcm_bytes": 168000
+        }
+      ],
+      "chat": [
+        {
+          "sample": 1,
+          "tool_events": 0,
+          "submit_ack_ms": 26.1,
+          "first_text_ms": 9530.2,
+          "first_system_clause_ms": 9530.9,
+          "terminal_ms": 10499.3,
+          "text_chars": 41
+        },
+        {
+          "sample": 2,
+          "tool_events": 0,
+          "submit_ack_ms": 7.2,
+          "first_text_ms": 4422.9,
+          "first_system_clause_ms": 4424.6,
+          "terminal_ms": 4452.3,
+          "text_chars": 41
+        }
+      ],
+      "live_status": {
+        "mode": "chained",
+        "available": false,
+        "reason": "no OpenAI API key (set OPENAI_API_KEY or voice.gpt_live.api_key)",
+        "model": "gpt-live-1"
+      },
+      "rpc_upgrade_ms": 4.5,
+      "session_create_ms": 19.3,
+      "session_model": null,
+      "synthetic_session_deleted": true
+    },
+    "low": {
+      "profile": "ash",
+      "clock": "monotonic",
+      "microphone_used": false,
+      "http": [
+        106.2,
+        108.3,
+        106.3,
+        105.6,
+        107.9
+      ],
+      "speech": [],
+      "chat": [
+        {
+          "sample": 1,
+          "tool_events": 0,
+          "submit_ack_ms": 20.2,
+          "first_text_ms": 6286.2,
+          "first_system_clause_ms": 6286.9,
+          "terminal_ms": 6904.7,
+          "text_chars": 41
+        },
+        {
+          "sample": 2,
+          "tool_events": 0,
+          "submit_ack_ms": 228.1,
+          "first_text_ms": 4671.7,
+          "first_system_clause_ms": 4672.0,
+          "terminal_ms": 4796.9,
+          "text_chars": 41
+        }
+      ],
+      "live_status": {
+        "mode": "chained",
+        "available": false,
+        "reason": "no OpenAI API key (set OPENAI_API_KEY or voice.gpt_live.api_key)",
+        "model": "gpt-live-1"
+      },
+      "rpc_upgrade_ms": 3.8,
+      "session_create_ms": 17.2,
+      "session_model": "grok-4.7",
+      "reasoning_override": {
+        "key": "reasoning",
+        "value": "low",
+        "scope": null
+      },
+      "synthetic_session_deleted": true
+    },
+    "high_control": {
+      "profile": "ash",
+      "clock": "monotonic",
+      "microphone_used": false,
+      "http": [
+        106.4,
+        106.6,
+        108.5,
+        107.2,
+        108.0
+      ],
+      "speech": [],
+      "chat": [
+        {
+          "sample": 1,
+          "tool_events": 0,
+          "submit_ack_ms": 12.0,
+          "first_text_ms": 8467.6,
+          "first_system_clause_ms": 8468.3,
+          "terminal_ms": 8611.0,
+          "text_chars": 41
+        },
+        {
+          "sample": 2,
+          "tool_events": 0,
+          "submit_ack_ms": 225.4,
+          "first_text_ms": 3702.1,
+          "first_system_clause_ms": 3702.3,
+          "terminal_ms": 3771.1,
+          "text_chars": 41
+        }
+      ],
+      "live_status": {
+        "mode": "chained",
+        "available": false,
+        "reason": "no OpenAI API key (set OPENAI_API_KEY or voice.gpt_live.api_key)",
+        "model": "gpt-live-1"
+      },
+      "rpc_upgrade_ms": 3.9,
+      "session_create_ms": 21.2,
+      "session_model": "grok-4.7",
+      "reasoning_override": {
+        "key": "reasoning",
+        "value": "high",
+        "scope": null
+      },
+      "synthetic_session_deleted": true
+    }
+  },
+  "device": [
+    {
+      "boundary": "true",
+      "first_playback_callback_ms": 3909,
+      "finish_feed_ms": 248,
+      "complete_ms": 5955
+    },
+    {
+      "boundary": "false",
+      "first_playback_callback_ms": 3397,
+      "finish_feed_ms": 1510,
+      "complete_ms": 5470
+    },
+    {
+      "boundary": "true",
+      "first_playback_callback_ms": 1847,
+      "finish_feed_ms": 13,
+      "complete_ms": 3905
+    },
+    {
+      "boundary": "false",
+      "first_playback_callback_ms": 1753,
+      "finish_feed_ms": 1514,
+      "complete_ms": 3797
+    },
+    {
+      "boundary": "true",
+      "first_playback_callback_ms": 2394,
+      "finish_feed_ms": 184,
+      "complete_ms": 4509
+    },
+    {
+      "boundary": "false",
+      "first_playback_callback_ms": 1724,
+      "finish_feed_ms": 1517,
+      "complete_ms": 3780
+    },
+    {
+      "boundary": "true",
+      "first_playback_callback_ms": 1371,
+      "finish_feed_ms": 8,
+      "complete_ms": 3429
+    },
+    {
+      "boundary": "false",
+      "first_playback_callback_ms": 1708,
+      "finish_feed_ms": 1513,
+      "complete_ms": 3765
+    },
+    {
+      "platform_ready_ms": 1129,
+      "engine": "com.google.android.tts",
+      "voice": "en-IN-language",
+      "network_voice": "false"
+    },
+    {
+      "reused_turn": 1,
+      "first_playback_callback_ms": 2149,
+      "complete_ms": 4176
+    },
+    {
+      "reused_turn": 2,
+      "first_playback_callback_ms": 17,
+      "complete_ms": 2024
+    },
+    {
+      "reused_turn": 3,
+      "first_playback_callback_ms": 20,
+      "complete_ms": 2077
+    }
+  ],
+  "unit": {
+    "app.hermes.companion.voice.MessageReadAloudTest": {
+      "tests": 4,
+      "errors": 0,
+      "failures": 0
+    },
+    "app.hermes.companion.voice.VoiceStreamEngineTest": {
+      "tests": 15,
+      "errors": 0,
+      "failures": 0
+    },
+    "app.hermes.companion.voice.HostSpeechTest": {
+      "tests": 13,
+      "errors": 0,
+      "failures": 0
+    },
+    "app.hermes.companion.domain.VoiceTextFilterTest": {
+      "tests": 7,
+      "errors": 0,
+      "failures": 0
+    }
+  },
+  "final_device_tests": 3,
+  "microphone_used": false,
+  "phone_to_host_ping_ms": {
+    "min": 11.162,
+    "average": 16.712,
+    "max": 22.604,
+    "loss_percent": 0
+  },
+  "cleanup": {
+    "synthetic_sessions_remaining": 0,
+    "profile_default_reasoning": "high",
+    "test_package_removed": true,
+    "app_relaunched": true,
+    "saved_profile": "ash",
+    "saved_origin": "http://100.85.151.99:9120"
+  }
+}

@@ -11,15 +11,18 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import java.util.Locale
 
-class VoiceInputManager(private val context: Context) {
+class VoiceInputManager(private val context: Context) : SpeechInput {
     private var recognizer: SpeechRecognizer? = null
+    private var generation = 0L
 
-    fun startListening(
-        onPartial: (String) -> Unit = {},
+    override fun startListening(
+        onPartial: (String) -> Unit,
         onResult: (String) -> Unit,
-        onError: (String) -> Unit = {},
-        onErrorCode: ((Int) -> Unit)? = null,
-        onStateChange: (Boolean) -> Unit = {},
+        onError: (String) -> Unit,
+        onErrorCode: ((Int) -> Unit)?,
+        onStateChange: (Boolean) -> Unit,
+        onActivity: () -> Unit,
+        onProcessing: () -> Unit,
     ) {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
             onErrorCode?.invoke(-1)
@@ -28,6 +31,7 @@ class VoiceInputManager(private val context: Context) {
         }
 
         stopListening()
+        val current = generation
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -55,27 +59,37 @@ class VoiceInputManager(private val context: Context) {
 
         recognizer = speechRecognizer.apply {
             setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) { onStateChange(true) }
-                override fun onBeginningOfSpeech() {}
+                override fun onReadyForSpeech(params: Bundle?) { if (current == generation) onStateChange(true) }
+                override fun onBeginningOfSpeech() { if (current == generation) onActivity() }
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() { onStateChange(false) }
+                override fun onEndOfSpeech() { if (current == generation) { onStateChange(false); onProcessing() } }
                 override fun onError(error: Int) {
+                    if (current != generation) return
                     onStateChange(false)
                     onErrorCode?.invoke(error)
-                    onError("Speech error: $error")
+                    onError(when (error) {
+                        SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
+                            "No speech recognized. Try again after listening starts."
+                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission denied"
+                        SpeechRecognizer.ERROR_AUDIO -> "Microphone recording failed"
+                        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
+                            "Speech recognition network failed. Check your connection and try again."
+                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Speech recognition is busy. Try again."
+                        else -> "Speech recognition failed ($error)"
+                    })
                 }
 
                 override fun onResults(results: Bundle?) {
+                    if (current != generation) return
                     onStateChange(false)
                     val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     val text = matches?.firstOrNull().orEmpty()
-                    if (text.isNotBlank()) {
-                        onResult(text)
-                    }
+                    onResult(text)
                 }
 
                 override fun onPartialResults(partialResults: Bundle?) {
+                    if (current != generation) return
                     val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     val text = matches?.firstOrNull().orEmpty()
                     if (text.isNotBlank()) {
@@ -89,7 +103,8 @@ class VoiceInputManager(private val context: Context) {
         }
     }
 
-    fun stopListening() {
+    override fun stopListening() {
+        generation++
         runCatching { recognizer?.cancel() }
         runCatching { recognizer?.destroy() }
         recognizer = null

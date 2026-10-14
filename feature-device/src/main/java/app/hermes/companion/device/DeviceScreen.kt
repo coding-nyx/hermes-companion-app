@@ -4,8 +4,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.text.font.FontWeight
+import app.hermes.companion.design.LiveDot
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -170,171 +173,373 @@ fun DeviceScreen(
                 }
             }
             PairingPhase.PAIRED -> {
-                Text(
-                    text = "PAIRED",
-                    style = CompanionType.Mono.copy(color = CompanionColor.Signal),
-                    modifier = Modifier.testTag("device.status"),
-                )
-                Spacer(Modifier.height(CompanionSpace.Md))
-                if (!deviceId.isNullOrBlank()) {
-                    Text(text = deviceId, style = CompanionType.Mono, modifier = Modifier.testTag("device.id"))
-                }
-                var labelDraft by rememberSaveable(deviceId, deviceLabel) { mutableStateOf(deviceLabel) }
-                val dismissKeyboard = rememberDismissKeyboard()
-                Spacer(Modifier.height(CompanionSpace.Sm))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
+                // 1. HUD Header: Device status & identity card
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(CompanionSpace.Hairline, CompanionColor.LineStrong)
+                        .background(CompanionColor.VoidElevated)
+                        .padding(CompanionSpace.Md),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    HairlineField(
-                        value = labelDraft,
-                        onValueChange = { labelDraft = it },
-                        modifier = Modifier.weight(1f).testTag("device.label"),
-                        keyboardType = KeyboardType.Text,
-                        placeholder = "friendly name",
-                        onDone = {
-                            onRenameDevice(labelDraft)
-                            dismissKeyboard()
-                        },
-                    )
-                    Text(
-                        text = "SAVE",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                        modifier = Modifier
-                            .clickable {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            LiveDot(color = CompanionColor.Signal)
+                            Text(
+                                text = "PAIRED",
+                                style = CompanionType.MonoSmall.copy(
+                                    color = CompanionColor.Signal,
+                                    fontWeight = FontWeight.Bold,
+                                ),
+                                modifier = Modifier.testTag("device.status"),
+                            )
+                        }
+                        if (!deviceId.isNullOrBlank()) {
+                            Text(
+                                text = deviceId,
+                                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+                                modifier = Modifier.testTag("device.id"),
+                            )
+                        }
+                    }
+
+                    var labelDraft by rememberSaveable(deviceId, deviceLabel) { mutableStateOf(deviceLabel) }
+                    val dismissKeyboard = rememberDismissKeyboard()
+                    Spacer(Modifier.height(CompanionSpace.Sm))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
+                    ) {
+                        HairlineField(
+                            value = labelDraft,
+                            onValueChange = { labelDraft = it },
+                            modifier = Modifier.weight(1f).testTag("device.label"),
+                            keyboardType = KeyboardType.Text,
+                            placeholder = "friendly device name",
+                            onDone = {
                                 onRenameDevice(labelDraft)
                                 dismissKeyboard()
-                            }
-                            .padding(CompanionSpace.Sm)
-                            .testTag("device.label.save"),
-                    )
-                }
-                if (!deviceProfileId.isNullOrBlank()) {
-                    Text(text = deviceProfileId, style = CompanionType.MonoSmall)
-                }
-                Spacer(Modifier.height(CompanionSpace.Sm))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = if (laneOpen) "LANE  live" else "LANE  connecting",
-                        style = CompanionType.Mono.copy(
-                            color = if (laneOpen) CompanionColor.Signal else CompanionColor.TextDim,
-                        ),
-                        modifier = Modifier.testTag("device.lane"),
-                    )
-                    if (!laneOpen) {
-                        Spacer(Modifier.width(CompanionSpace.Sm))
-                        SignalCursor()
+                            },
+                        )
+                        Text(
+                            text = "SAVE",
+                            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                            modifier = Modifier
+                                .clickable {
+                                    onRenameDevice(labelDraft)
+                                    dismissKeyboard()
+                                }
+                                .padding(CompanionSpace.Sm)
+                                .testTag("device.label.save"),
+                        )
+                    }
+                    if (!deviceProfileId.isNullOrBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = "Profile: $deviceProfileId",
+                            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                            modifier = Modifier.align(Alignment.Start),
+                        )
                     }
                 }
-                Text(
-                    text = if (a11yBound) "A11Y     on" else "A11Y     off",
-                    style = CompanionType.Mono.copy(
-                        color = if (a11yBound) CompanionColor.Signal else CompanionColor.Warn,
-                    ),
-                    modifier = Modifier.testTag("device.a11y"),
-                )
-                Text(
-                    text = if (overlayGranted) "OVERLAY  on" else "OVERLAY  off",
-                    style = CompanionType.Mono.copy(
-                        color = if (overlayGranted) CompanionColor.Signal else CompanionColor.Warn,
-                    ),
-                    modifier = Modifier.testTag("device.overlay"),
-                )
-                Text(
-                    text = if (notifyGranted) "NOTIFY   on" else "NOTIFY   off",
-                    style = CompanionType.Mono.copy(
-                        color = if (notifyGranted) CompanionColor.Signal else CompanionColor.Warn,
-                    ),
-                    modifier = Modifier.testTag("device.notify"),
-                )
-                Text(
-                    text = "ARM      ${arm.name.lowercase()}",
-                    style = CompanionType.Mono.copy(
-                        color = if (arm == DeviceArm.DISARMED) CompanionColor.TextMute else CompanionColor.Signal,
-                    ),
-                    modifier = Modifier.testTag("device.arm"),
-                )
-                if (foregroundApp.isNotBlank()) {
-                    Text(
-                        text = "FG    $foregroundApp",
-                        style = CompanionType.MonoSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.testTag("device.foreground"),
-                    )
-                }
-                if (lastAudit.isNotBlank()) {
-                    Text(
-                        text = lastAudit,
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.testTag("device.audit"),
-                    )
-                }
-                Spacer(Modifier.height(CompanionSpace.Lg))
-                if (!a11yBound) {
-                    Action("ENABLE A11Y", "device.a11y.enable", onEnableA11y)
-                    Spacer(Modifier.height(CompanionSpace.Sm))
-                    Text(
-                        text = "Installed apps → Hermes Companion",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                        modifier = Modifier.testTag("device.a11y.hint"),
-                    )
-                    Spacer(Modifier.height(CompanionSpace.Sm))
-                } else if (arm != DeviceArm.DISARMED) {
-                    Action("DISARM", "device.disarm", onDisarm)
-                    Spacer(Modifier.height(CompanionSpace.Sm))
-                    Text(
-                        text = "double volume-down to disarm",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                    )
-                    Spacer(Modifier.height(CompanionSpace.Sm))
-                } else if (!notifyGranted) {
-                    Action("ENABLE NOTIFY", "device.notify.enable", onEnableNotify)
-                    Spacer(Modifier.height(CompanionSpace.Sm))
-                } else {
-                    Action("ARM", "device.arm.go", onArm)
-                    Spacer(Modifier.height(CompanionSpace.Sm))
-                }
-                if (!overlayGranted) {
-                    Action("ENABLE OVERLAY", "device.overlay.enable", onEnableOverlay)
-                    Spacer(Modifier.height(CompanionSpace.Sm))
-                }
-                Spacer(Modifier.height(CompanionSpace.Sm))
-                Text(
-                    text = if (awakeOnVoice) "AWAKE ON VOICE  on" else "AWAKE ON VOICE  off",
-                    style = CompanionType.Mono.copy(
-                        color = if (awakeOnVoice) CompanionColor.Signal else CompanionColor.TextMute,
-                    ),
+
+                Spacer(Modifier.height(CompanionSpace.Md))
+
+                // 2. Master Hands Control Deck
+                val isArmed = arm != DeviceArm.DISARMED
+                Column(
                     modifier = Modifier
-                        .testTag("device.awake.voice")
-                        .clickable(onClick = onToggleAwakeOnVoice)
-                        .padding(vertical = CompanionSpace.Xs),
-                )
-                Spacer(Modifier.height(CompanionSpace.Sm))
-                Text(
-                    text = if (lockedAccess) "LOCKED ACCESS  on" else "LOCKED ACCESS  off",
-                    style = CompanionType.Mono.copy(
-                        color = if (lockedAccess) CompanionColor.Signal else CompanionColor.TextMute,
-                    ),
+                        .fillMaxWidth()
+                        .border(
+                            CompanionSpace.Hairline,
+                            if (isArmed) CompanionColor.Warn else CompanionColor.SignalDim,
+                        )
+                        .background(CompanionColor.VoidElevated)
+                        .padding(CompanionSpace.Md),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        if (isArmed) {
+                            LiveDot(color = CompanionColor.Warn)
+                        }
+                        Text(
+                            text = "ARM      ${arm.name.lowercase()}",
+                            style = CompanionType.Mono.copy(
+                                color = if (isArmed) CompanionColor.Warn else CompanionColor.Signal,
+                                fontWeight = FontWeight.Bold,
+                            ),
+                            modifier = Modifier.testTag("device.arm"),
+                        )
+                    }
+                    Spacer(Modifier.height(CompanionSpace.Xs))
+                    Text(
+                        text = if (isArmed) {
+                            "HERMES HAS HANDS · double volume-down to instant kill switch"
+                        } else {
+                            "Hands disarmed · Agent cannot touch screen or execute mobile gestures"
+                        },
+                        style = CompanionType.MonoSmall.copy(
+                            color = if (isArmed) CompanionColor.Warn else CompanionColor.TextMute,
+                        ),
+                        modifier = Modifier.padding(horizontal = CompanionSpace.Sm),
+                    )
+                    Spacer(Modifier.height(CompanionSpace.Sm))
+                    if (!a11yBound) {
+                        Action("ENABLE A11Y", "device.a11y.enable", onEnableA11y)
+                        Spacer(Modifier.height(CompanionSpace.Xs))
+                        Text(
+                            text = "Installed apps → Hermes Companion",
+                            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                            modifier = Modifier.testTag("device.a11y.hint"),
+                        )
+                    } else if (isArmed) {
+                        Action("DISARM", "device.disarm", onDisarm)
+                        Spacer(Modifier.height(CompanionSpace.Xs))
+                        Text(
+                            text = "double volume-down to disarm",
+                            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                        )
+                    } else if (!notifyGranted) {
+                        Action("ENABLE NOTIFY", "device.notify.enable", onEnableNotify)
+                    } else {
+                        Action("ARM", "device.arm.go", onArm)
+                    }
+                    if (!overlayGranted) {
+                        Spacer(Modifier.height(CompanionSpace.Sm))
+                        Action("ENABLE OVERLAY", "device.overlay.enable", onEnableOverlay)
+                    }
+                }
+
+                Spacer(Modifier.height(CompanionSpace.Md))
+
+                // 3. Subsystem Matrix (2x2 Grid)
+                Column(
                     modifier = Modifier
-                        .testTag("device.locked.access")
-                        .clickable(onClick = onToggleLockedAccess)
-                        .padding(vertical = CompanionSpace.Xs),
-                )
-                Spacer(Modifier.height(CompanionSpace.Sm))
-                Text(
-                    text = if (biometricLock) "BIOMETRIC LOCK  on" else "BIOMETRIC LOCK  off",
-                    style = CompanionType.Mono.copy(
-                        color = if (biometricLock) CompanionColor.Signal else CompanionColor.TextMute,
-                    ),
+                        .fillMaxWidth()
+                        .border(CompanionSpace.Hairline, CompanionColor.Line)
+                        .background(CompanionColor.VoidElevated)
+                        .padding(CompanionSpace.Md),
+                ) {
+                    Text(
+                        text = "DEVICE SUBSYSTEMS",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontSize = 10.sp),
+                    )
+                    Spacer(Modifier.height(CompanionSpace.Sm))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = if (laneOpen) "LANE  live" else "LANE  connecting",
+                                style = CompanionType.Mono.copy(
+                                    color = if (laneOpen) CompanionColor.Signal else CompanionColor.TextDim,
+                                ),
+                                modifier = Modifier.testTag("device.lane"),
+                            )
+                            if (!laneOpen) {
+                                Spacer(Modifier.width(CompanionSpace.Sm))
+                                SignalCursor()
+                            }
+                        }
+                        Text(
+                            text = if (a11yBound) "A11Y     on" else "A11Y     off",
+                            style = CompanionType.Mono.copy(
+                                color = if (a11yBound) CompanionColor.Signal else CompanionColor.Warn,
+                            ),
+                            modifier = Modifier.testTag("device.a11y"),
+                        )
+                    }
+                    Spacer(Modifier.height(CompanionSpace.Sm))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = if (overlayGranted) "OVERLAY  on" else "OVERLAY  off",
+                            style = CompanionType.Mono.copy(
+                                color = if (overlayGranted) CompanionColor.Signal else CompanionColor.Warn,
+                            ),
+                            modifier = Modifier.testTag("device.overlay"),
+                        )
+                        Text(
+                            text = if (notifyGranted) "NOTIFY   on" else "NOTIFY   off",
+                            style = CompanionType.Mono.copy(
+                                color = if (notifyGranted) CompanionColor.Signal else CompanionColor.Warn,
+                            ),
+                            modifier = Modifier.testTag("device.notify"),
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(CompanionSpace.Md))
+
+                // 4. Live Sensor Context & Foreground App
+                Column(
                     modifier = Modifier
-                        .testTag("device.biometric.lock")
-                        .clickable(onClick = onToggleBiometricLock)
-                        .padding(vertical = CompanionSpace.Xs),
-                )
+                        .fillMaxWidth()
+                        .border(CompanionSpace.Hairline, CompanionColor.Line)
+                        .background(CompanionColor.VoidElevated)
+                        .padding(CompanionSpace.Md),
+                ) {
+                    Text(
+                        text = "FOREGROUND SENSORS",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontSize = 10.sp),
+                    )
+                    Spacer(Modifier.height(CompanionSpace.Sm))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = if (foregroundApp.isNotBlank()) "FG    $foregroundApp" else "FG    (home / desktop)",
+                            style = CompanionType.MonoSmall.copy(
+                                color = if (foregroundApp.isNotBlank()) CompanionColor.Text else CompanionColor.TextMute,
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.testTag("device.foreground"),
+                        )
+                    }
+                    if (lastAudit.isNotBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = lastAudit,
+                            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.testTag("device.audit"),
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(CompanionSpace.Md))
+
+                // 5. Phone Superpowers (Agent Capability Catalog)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(CompanionSpace.Hairline, CompanionColor.LineStrong)
+                        .background(CompanionColor.VoidElevated)
+                        .padding(CompanionSpace.Md),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "PHONE SUPERPOWERS",
+                            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontSize = 10.sp),
+                        )
+                        Text(
+                            text = if (isArmed) "READY" else "STANDBY",
+                            style = CompanionType.MonoSmall.copy(
+                                color = if (isArmed) CompanionColor.Signal else CompanionColor.TextDim,
+                                fontSize = 9.sp,
+                            ),
+                        )
+                    }
+                    Spacer(Modifier.height(CompanionSpace.Sm))
+                    val superpowers = listOf(
+                        "📸 Snapshot" to "a11y tree & screenshot",
+                        "👆 Click & Swipe" to "human touches & gestures",
+                        "⌨ Type & Press" to "input injection & hardware keys",
+                        "📱 Open App" to "app navigation & recents",
+                        "🔔 Shade Stream" to "push alerts & wake agent",
+                        "🛡 Protection" to "banking & privacy shields",
+                    )
+                    superpowers.chunked(2).forEach { pair ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
+                        ) {
+                            pair.forEach { (name, desc) ->
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .border(CompanionSpace.Hairline, CompanionColor.Line)
+                                        .background(CompanionColor.Void)
+                                        .padding(6.dp),
+                                ) {
+                                    Text(
+                                        text = name,
+                                        style = CompanionType.MonoSmall.copy(
+                                            color = CompanionColor.Signal,
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 11.sp,
+                                        ),
+                                    )
+                                    Text(
+                                        text = desc,
+                                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute, fontSize = 9.sp),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(CompanionSpace.Md))
+
+                // 6. Autonomous Safety Policies
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(CompanionSpace.Hairline, CompanionColor.Line)
+                        .background(CompanionColor.VoidElevated)
+                        .padding(CompanionSpace.Md),
+                ) {
+                    Text(
+                        text = "AUTONOMOUS & SENSING POLICIES",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontSize = 10.sp),
+                    )
+                    Spacer(Modifier.height(CompanionSpace.Sm))
+                    Text(
+                        text = if (awakeOnVoice) "AWAKE ON VOICE  on" else "AWAKE ON VOICE  off",
+                        style = CompanionType.Mono.copy(
+                            color = if (awakeOnVoice) CompanionColor.Signal else CompanionColor.TextMute,
+                        ),
+                        modifier = Modifier
+                            .testTag("device.awake.voice")
+                            .clickable(onClick = onToggleAwakeOnVoice)
+                            .padding(vertical = CompanionSpace.Xs),
+                    )
+                    Text(
+                        text = if (lockedAccess) "LOCKED ACCESS  on" else "LOCKED ACCESS  off",
+                        style = CompanionType.Mono.copy(
+                            color = if (lockedAccess) CompanionColor.Signal else CompanionColor.TextMute,
+                        ),
+                        modifier = Modifier
+                            .testTag("device.locked.access")
+                            .clickable(onClick = onToggleLockedAccess)
+                            .padding(vertical = CompanionSpace.Xs),
+                    )
+                    Text(
+                        text = if (biometricLock) "BIOMETRIC LOCK  on" else "BIOMETRIC LOCK  off",
+                        style = CompanionType.Mono.copy(
+                            color = if (biometricLock) CompanionColor.Signal else CompanionColor.TextMute,
+                        ),
+                        modifier = Modifier
+                            .testTag("device.biometric.lock")
+                            .clickable(onClick = onToggleBiometricLock)
+                            .padding(vertical = CompanionSpace.Xs),
+                    )
+                }
+
                 Spacer(Modifier.height(CompanionSpace.Lg))
 
                 Text(

@@ -770,13 +770,11 @@ class DashboardClientTest {
             server.enqueue(
                 MockResponse().setBody(
                     """
-                    {"ok":true,"metrics":{
-                        "cpu":{"percent":18.5,"cores":8,"load_avg":[1.2,1.5,1.8]},
-                        "memory":{"total_bytes":16000000000,"used_bytes":8000000000,"free_bytes":8000000000,"percent":50.0},
-                        "disk":{"total_bytes":500000000000,"used_bytes":200000000000,"free_bytes":300000000000,"percent":40.0},
-                        "system":{"platform":"Linux","release":"6.1","architecture":"x86_64","python_version":"3.11","uptime_seconds":3600},
-                        "hermes":{"pid":4242,"status":"running"}
-                    }}
+                    {"cpu_percent":18.5,"cpu_count":8,"load_avg":[1.2,1.5,1.8],
+                     "memory":{"total":16000000000,"used":8000000000,"available":8000000000,"percent":50.0},
+                     "disk":{"total":500000000000,"used":200000000000,"free":300000000000,"percent":40.0},
+                     "os":"Linux","hostname":"lab","arch":"x86_64","python_version":"3.11","uptime_seconds":3600,
+                     "process":{"pid":4242}}
                     """.trimIndent(),
                 ),
             )
@@ -802,7 +800,7 @@ class DashboardClientTest {
             val metrics = client.getHostMetrics(origin)
             assertEquals(18.5, metrics.cpu.percent, 0.01)
             assertEquals(4242, metrics.hermes.pid)
-            assertEquals("running", metrics.hermes.status)
+            assertEquals("online", metrics.hermes.status)
 
             val git = client.getGitStatus(origin)
             assertEquals("feat/term", git.branch)

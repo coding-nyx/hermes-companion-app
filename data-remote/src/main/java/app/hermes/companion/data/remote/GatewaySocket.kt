@@ -27,7 +27,7 @@ internal class GatewaySocket(private val http: OkHttpClient) {
     // tokens during bursts (visible as missing text). Keep enough headroom for a whole turn.
     private val _events = MutableSharedFlow<RpcEvent>(
         extraBufferCapacity = EVENT_BUFFER,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+        onBufferOverflow = BufferOverflow.SUSPEND,
     )
     val events: SharedFlow<RpcEvent> = _events.asSharedFlow()
 
@@ -66,6 +66,11 @@ internal class GatewaySocket(private val http: OkHttpClient) {
                     failAll(
                         DashboardException("ws_$code", reason.ifBlank { "websocket closed" }),
                     )
+                }
+
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    failAll(DashboardException("ws_$code", reason.ifBlank { "websocket closing" }))
+                    webSocket.close(code, reason)
                 }
             },
         )
@@ -116,7 +121,11 @@ internal class GatewaySocket(private val http: OkHttpClient) {
                     opened.set(true)
                     if (!helloDone.isCompleted) helloDone.complete(ready)
                 }
-                _events.tryEmit(inbound.event)
+                if (!_events.tryEmit(inbound.event)) {
+                    // Reconnect and hydrate history instead of silently dropping tokens or decisions.
+                    failAll(DashboardException("ws_overflow", "gateway event buffer overflow; reconnecting"))
+                    ws?.cancel()
+                }
             }
             null -> Unit
         }

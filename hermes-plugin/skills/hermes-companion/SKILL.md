@@ -48,7 +48,7 @@ The plugin exposes **two lanes** for controlling the phone. Prefer L0 whenever t
 | `mobile_media_sessions` | list of `{package, is_active, playback_state}` | yes | requires the user to grant Companion notification access (NLS) in Android Settings |
 | `mobile_media_now_playing` `session_id=<owning package>` | `{title, artist, album, duration_ms}` | yes | same NLS gate |
 | `mobile_media_control` `session_id=…` `action=play\|pause\|toggle\|next\|prev\|stop\|seek` (`position_ms=` for seek) | fires the transport action | no (destructive) | the session must currently be active |
-| `mobile_clipboard_get` | plain text, or `clipboard_read_blocked` | yes | **Usually fails.** Android 10+ refuses the read unless Companion is the focused app or the default IME, which it normally is not. To read what the user is looking at, `mobile_snapshot` and read the focused field instead. A successful read also shows the user a paste toast on Android 12+. |
+| `mobile_clipboard_get` | plain text, or `clipboard_read_blocked` | no (personal data — clipboards hold passwords/OTPs) | **Usually fails.** Android 10+ refuses the read unless Companion is the focused app or the default IME, which it normally is not. To read what the user is looking at, `mobile_snapshot` and read the focused field instead. A successful read also shows the user a paste toast on Android 12+. |
 | `mobile_clipboard_set` `text=…` | writes | no (destructive) | never log the value |
 | `mobile_device_info` | `{manufacturer, model, sdk_int, screen_w/h, refresh_rate_hz, locale, battery_pct, ringer_mode, a11y_bound, nls_bound}` | yes | health / identity / connectivity check |
 | `mobile_notifications_nls` | `{nls_bound, listener_component, enabled_listeners}` | yes | check whether the user has granted NLS yet |
@@ -69,13 +69,13 @@ The L0 lane **does not require** `CompanionAccessibilityService` to be bound and
 `policy_denied` — `mobile_audio_ringer mode=silent` failed because Do Not Disturb access is not granted. Ask the user to grant it in Settings.
 `invalid_stream` / `invalid_mode` / `missing_stream` / `missing_level` / `missing_session` / `missing_args` — bad arguments. Check the table above.
 
-Host CLI (outside chat): `hermes companion list`, `hermes companion approve CODE`, `hermes companion revoke DEVICE_ID`, `hermes companion lanes`.
+Host CLI (outside chat): `hermes companion qr`, `hermes companion list`, `hermes companion approve CODE`, `hermes companion revoke DEVICE_ID`, `hermes companion lanes`.
 
 ## Always this order (arm-first)
 
 1. **`mobile_status`** / **`mobile_devices`** — paired? a11y? overlay? armed? which lanes?
 2. If multi-device or ambiguous: **`mobile_select_device`** (or pass `device=` on later calls).
-3. If unpaired: tell the user to PAIR on the Device tab (6-char code) and approve on the host. Stop.
+3. If unpaired: tell the user to run `hermes companion qr` on the host to scan or tap the link, or tap PAIR on the Device tab and approve on host. Stop.
 4. If `a11y_bound` is false: tell the user to enable **Installed apps → Hermes Companion** in Accessibility. You cannot grant it. Stop.
 5. **`mobile_arm` immediately** — before long planning text and before other tools — so the phone does not lock / sleep while you think. Arming never needs accessibility; it returns `lanes`: **`l0+l1`** means the a11y lane is available too, **`l0`** means direct-API tools only. If you get `l0`, do not plan a snapshot/tap sequence — either use an L0 tool for the job or tell the user accessibility is off.
 6. **`mobile_snapshot`** — work from `@eN` refs. Prefer snapshot over screenshot.
@@ -85,7 +85,7 @@ Host CLI (outside chat): `hermes companion list`, `hermes companion approve CODE
 
 **Allowed while disarmed:** `mobile_status`, `mobile_devices`, `mobile_select_device`, `mobile_arm`, `mobile_disarm`, `mobile_notifications`, `mobile_notifications_inject`.
 
-**Require armed:** snapshot, click, type, swipe, scroll, press, open_app, screenshot, wait, the destructive L0 tools (volume set, ringer, media control, clipboard write, notification action/reply/dismiss/snooze, stream set) — and any other control. Control ops refuse with `disarmed` + hint to call `mobile_arm` first; they do not auto-arm.
+**Require armed:** snapshot, click, type, swipe, scroll, press, open_app, screenshot, wait, the destructive L0 tools (volume set, ringer, media control, clipboard write, notification action/reply/dismiss/snooze, stream set), the personal-data reads (sms, call log, contacts, calendar, location, app usage, clipboard read) — and any other control. Control ops refuse with `disarmed` + hint to call `mobile_arm` first; they do not auto-arm.
 
 **Arming and accessibility are separate.** Arming is the user's consent plus the kill switch; accessibility is a capability. In an `l0`-only armed session the direct-API tools work normally and only the L1 tools (snapshot/click/type/swipe/scroll/press) answer `a11y_unavailable`.
 

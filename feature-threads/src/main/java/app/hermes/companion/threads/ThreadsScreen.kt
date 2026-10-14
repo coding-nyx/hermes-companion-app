@@ -1,6 +1,7 @@
 package app.hermes.companion.threads
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -10,10 +11,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -22,8 +26,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,9 +77,12 @@ fun ThreadsScreen(
     unreadRooms: Set<String> = emptySet(),
     onOpenRoom: (RoomRef) -> Unit = {},
     onNewRoom: () -> Unit = {},
+    roomsAvailable: Boolean = true,
     onDeleteRoom: (RoomRef) -> Unit = {},
     onOpen: (SessionRef) -> Unit = {},
     onNew: () -> Unit = {},
+    hasLocalDraft: Boolean = false,
+    onResumeLocalDraft: () -> Unit = {},
     onRetry: (() -> Unit)? = null,
     onDeleteRequest: (SessionRef) -> Unit = {},
     onConfirmDelete: () -> Unit = {},
@@ -101,8 +110,21 @@ fun ThreadsScreen(
             loading = loading,
             onNew = onNew,
             onNewRoom = onNewRoom,
+            roomsAvailable = roomsAvailable,
             onRefresh = onRefresh,
         )
+        if (hasLocalDraft) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).testTag("threads.resumeDraft")
+                .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onResumeLocalDraft)
+                .padding(horizontal = CompanionSpace.Lg, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Continue unsent draft", style = CompanionType.Body, color = CompanionColor.Text)
+                    Text("Saved for this host and profile", style = androidx.compose.material3.MaterialTheme.typography.bodySmall, color = CompanionColor.TextDim)
+                }
+                Text("›", color = CompanionColor.Signal)
+            }
+        }
         Hairline()
         SortRow(
             sort = sort,
@@ -204,8 +226,8 @@ internal fun railItems(sessions: List<SessionRef>, sort: ThreadSort, nowMs: Long
     var lastGroup: String? = null
     for (session in sessions) {
         val key = if (sort == ThreadSort.ACTIVE) SessionLists.activeKey(session) else SessionLists.createdKey(session)
-        if (sort != ThreadSort.TITLE) {
-            val group = ThreadTime.dayGroup(key, nowMs)
+        if (sort != ThreadSort.TITLE || session.pinned) {
+            val group = if (session.pinned) "PINNED" else ThreadTime.dayGroup(key, nowMs)
             if (group != lastGroup) {
                 out += RailItem.Group(group)
                 lastGroup = group
@@ -224,45 +246,70 @@ private fun Toolbar(
     loading: Boolean,
     onNew: () -> Unit,
     onNewRoom: () -> Unit,
+    roomsAvailable: Boolean,
     onRefresh: (() -> Unit)?,
 ) {
+    val pillShape = RoundedCornerShape(16.dp)
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
     ) {
-        Text(
-            text = "NEW",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+        Box(
             modifier = Modifier
                 .testTag("threads.new")
+                .clip(pillShape)
+                .background(CompanionColor.SignalDim)
+                .border(CompanionSpace.Hairline, CompanionColor.Signal, pillShape)
                 .clickable(onClick = onNew)
-                .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md),
-        )
-        Text(
-            text = "NEW ROOM",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                .padding(horizontal = 14.dp, vertical = 6.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "NEW",
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontWeight = FontWeight.Bold),
+            )
+        }
+        if (roomsAvailable) Box(
             modifier = Modifier
                 .testTag("threads.newroom")
+                .clip(pillShape)
+                .background(CompanionColor.VoidElevated)
+                .border(CompanionSpace.Hairline, CompanionColor.LineStrong, pillShape)
                 .clickable(onClick = onNewRoom)
-                .padding(horizontal = CompanionSpace.Sm, vertical = CompanionSpace.Md),
-        )
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "NEW ROOM",
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontWeight = FontWeight.SemiBold),
+            )
+        }
         Spacer(Modifier.weight(1f))
         Text(
             text = if (filtering) "$shown/$total" else total.toString(),
-            style = CompanionType.MonoSmall,
+            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
             modifier = Modifier.testTag("threads.count"),
         )
         if (onRefresh != null) {
-            Text(
-                text = "↻",
-                style = CompanionType.Mono.copy(
-                    color = if (loading) CompanionColor.TextMute else CompanionColor.Signal,
-                ),
+            Box(
                 modifier = Modifier
-                    .testTag("threads.refresh")
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(CompanionColor.VoidElevated)
                     .clickable(enabled = !loading, onClick = onRefresh)
-                    .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md),
-            )
+                    .testTag("threads.refresh"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "↻",
+                    style = CompanionType.Mono.copy(
+                        color = if (loading) CompanionColor.TextMute else CompanionColor.Signal,
+                    ),
+                )
+            }
         } else {
             Spacer(Modifier.width(CompanionSpace.Lg))
         }
@@ -283,42 +330,53 @@ private fun SortRow(
     telegramOnly: Boolean,
     onToggleTelegram: (Boolean) -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().testTag("threads.sort")) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .testTag("threads.sort")
+            .padding(vertical = 4.dp),
+    ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs),
+                .padding(horizontal = CompanionSpace.Lg, vertical = 2.dp),
         ) {
             Text(text = "SORT", style = CompanionType.MonoSmall)
             Spacer(Modifier.width(CompanionSpace.Md))
             ThreadSort.entries.forEach { option ->
                 val selected = option == sort
+                val chipShape = RoundedCornerShape(10.dp)
                 Text(
                     text = if (selected) "${option.label} ▾" else option.label,
                     style = CompanionType.MonoSmall.copy(
                         color = if (selected) CompanionColor.Signal else CompanionColor.TextDim,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                     ),
                     maxLines = 1,
                     softWrap = false,
                     modifier = Modifier
                         .testTag("threads.sort.${option.name.lowercase()}")
+                        .clip(chipShape)
+                        .background(if (selected) CompanionColor.SignalDim else CompanionColor.VoidElevated)
+                        .border(CompanionSpace.Hairline, if (selected) CompanionColor.Signal else CompanionColor.Line, chipShape)
                         .clickable { onSort(option) }
-                        .padding(horizontal = CompanionSpace.Sm, vertical = CompanionSpace.Sm),
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
                 )
+                Spacer(Modifier.width(4.dp))
             }
         }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = CompanionSpace.Lg)
-                .padding(bottom = CompanionSpace.Xs)
+                .padding(horizontal = CompanionSpace.Lg, vertical = 2.dp)
                 .testTag("threads.show"),
         ) {
             Text(text = "SHOW", style = CompanionType.MonoSmall)
             Spacer(Modifier.width(CompanionSpace.Md))
             FilterChip(label = "TELEGRAM", on = telegramOnly, tag = "threads.filter.telegram", onToggle = onToggleTelegram)
+            Spacer(Modifier.width(4.dp))
             FilterChip(label = "ARCHIVED", on = showArchived, tag = "threads.filter.archived", onToggle = onToggleArchived)
         }
     }
@@ -326,15 +384,22 @@ private fun SortRow(
 
 @Composable
 private fun FilterChip(label: String, on: Boolean, tag: String, onToggle: (Boolean) -> Unit) {
+    val chipShape = RoundedCornerShape(10.dp)
     Text(
         text = (if (on) "■ " else "□ ") + label,
-        style = CompanionType.MonoSmall.copy(color = if (on) CompanionColor.Signal else CompanionColor.TextDim),
+        style = CompanionType.MonoSmall.copy(
+            color = if (on) CompanionColor.Signal else CompanionColor.TextDim,
+            fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+        ),
         maxLines = 1,
         softWrap = false,
         modifier = Modifier
             .testTag(tag)
+            .clip(chipShape)
+            .background(if (on) CompanionColor.SignalDim else CompanionColor.VoidElevated)
+            .border(CompanionSpace.Hairline, if (on) CompanionColor.Signal else CompanionColor.Line, chipShape)
             .clickable { onToggle(!on) }
-            .padding(horizontal = CompanionSpace.Sm, vertical = CompanionSpace.Sm),
+            .padding(horizontal = 8.dp, vertical = 4.dp),
     )
 }
 
@@ -342,7 +407,7 @@ private fun FilterChip(label: String, on: Boolean, tag: String, onToggle: (Boole
 private fun GroupHeader(label: String) {
     Text(
         text = label,
-        style = CompanionType.MonoSmall,
+        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontWeight = FontWeight.SemiBold),
         modifier = Modifier
             .fillMaxWidth()
             .background(CompanionColor.Void)
@@ -365,32 +430,40 @@ private fun ThreadRow(
     val meta = buildList {
         if (session.messageCount > 0) add("${session.messageCount} msgs")
         if (session.source.isNotBlank()) add(session.source.lowercase())
+        if (session.pinned) add("pinned")
     }.joinToString(" · ")
+    val cardShape = RoundedCornerShape(10.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(horizontal = CompanionSpace.Lg, vertical = 3.dp)
+            .clip(cardShape)
+            .background(if (session.unread) CompanionColor.VoidElevated else CompanionColor.Void)
+            .border(CompanionSpace.Hairline, if (session.unread) CompanionColor.LineStrong else CompanionColor.Line.copy(alpha = 0.4f), cardShape)
             .pointerInput(session.id) {
                 detectTapGestures(
                     onTap = { onOpen(session) },
                     onLongPress = { onDeleteRequest(session) },
                 )
             }
-            .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
+            .padding(horizontal = 12.dp, vertical = 10.dp)
             .testTag("threads.row.${session.id}"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             Modifier
                 .padding(end = CompanionSpace.Sm)
-                .width(2.dp)
-                .height(if (meta.isNotBlank()) 34.dp else 18.dp)
-                .background(if (session.unread) CompanionColor.Signal else CompanionColor.Void),
+                .width(3.dp)
+                .height(if (meta.isNotBlank()) 32.dp else 18.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(if (session.unread) CompanionColor.Signal else CompanionColor.Line),
         )
         Column(Modifier.weight(1f)) {
             Text(
                 text = session.title.ifBlank { session.id },
                 style = CompanionType.Body.copy(
                     color = if (session.unread) CompanionColor.Text else CompanionColor.TextDim,
+                    fontWeight = if (session.unread) FontWeight.SemiBold else FontWeight.Normal,
                 ),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -456,7 +529,7 @@ private fun RoomsSection(
     Column(Modifier.testTag("threads.rooms")) {
         Text(
             text = "ROOMS",
-            style = CompanionType.MonoSmall,
+            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontWeight = FontWeight.SemiBold),
             modifier = Modifier.padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
         )
         if (loading && rooms.isEmpty()) {
@@ -473,24 +546,34 @@ private fun RoomsSection(
         }
         rooms.forEach { room ->
             val isUnread = room.id in unread
+            val roomShape = RoundedCornerShape(10.dp)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(horizontal = CompanionSpace.Lg, vertical = 3.dp)
+                    .clip(roomShape)
+                    .background(CompanionColor.VoidElevated)
+                    .border(
+                        CompanionSpace.Hairline,
+                        if (room.busy || isUnread) CompanionColor.SignalDim else CompanionColor.Line.copy(alpha = 0.5f),
+                        roomShape,
+                    )
                     .pointerInput(room.id) {
                         detectTapGestures(
                             onTap = { onOpen(room) },
                             onLongPress = { onDelete(room) },
                         )
                     }
-                    .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
                     .testTag("threads.room.${room.id}"),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
                     Modifier
                         .padding(end = CompanionSpace.Sm)
-                        .width(2.dp)
+                        .width(3.dp)
                         .height(34.dp)
+                        .clip(RoundedCornerShape(2.dp))
                         .background(if (room.busy || isUnread) CompanionColor.Signal else CompanionColor.SignalDim),
                 )
                 Column(Modifier.weight(1f)) {

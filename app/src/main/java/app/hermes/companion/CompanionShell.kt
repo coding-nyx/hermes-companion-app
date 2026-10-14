@@ -27,18 +27,24 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,6 +57,7 @@ import app.hermes.companion.console.AgentConsoleScreen
 import app.hermes.companion.model.AgentSession
 import app.hermes.companion.console.ConsoleScreen
 import app.hermes.companion.device.DeviceScreen
+import app.hermes.companion.domain.PairDeepLink
 import app.hermes.companion.domain.SessionLists
 import app.hermes.companion.domain.ThreadSort
 import app.hermes.companion.domain.ThreadTime
@@ -95,6 +102,19 @@ fun CompanionShell(
     onTab: (MainTab) -> Unit,
     onOpenSession: (SessionRef) -> Unit,
     onNewThread: () -> Unit,
+    onResumeLocalDraft: () -> Unit = {},
+    onRenameSession: (String) -> Unit = {},
+    onPinSession: () -> Unit = {},
+    onArchiveSession: () -> Unit = {},
+    onBranchSession: () -> Unit = {},
+    onSessionContext: () -> Unit = {},
+    onDismissSessionContext: () -> Unit = {},
+    onSessionControls: () -> Unit = {},
+    onDismissSessionControls: () -> Unit = {},
+    onSetSessionSetting: (String, String, Boolean) -> Unit = { _, _, _ -> },
+    onRedirectSession: (String) -> Unit = {},
+    onNativeCommand: (String) -> Unit = {},
+    onRetryMessage: (String) -> Unit = {},
     onRetrySessions: () -> Unit = {},
     onThreadSort: (ThreadSort) -> Unit = {},
     onToggleArchived: (Boolean) -> Unit = {},
@@ -138,8 +158,11 @@ fun CompanionShell(
     onLoadOlder: () -> Unit = {},
     onRewind: (ChatMessage) -> Unit = {},
     onCancelRewind: () -> Unit = {},
+    onReadAloud: (ChatMessage) -> Unit = {},
+    onSpeechBackend: (app.hermes.companion.model.SpeechBackend) -> Unit = {},
     onVoiceClick: () -> Unit = {},
     onToggleVoiceStream: () -> Unit = {},
+    onToggleVoiceSpeaker: () -> Unit = {},
     onPair: () -> Unit = {},
     onCancelPair: () -> Unit = {},
     onRevokePair: () -> Unit = {},
@@ -157,6 +180,7 @@ fun CompanionShell(
     onNtfyTopicChange: (String) -> Unit = {},
     onSaveNtfy: () -> Unit = {},
     onToggleStay: () -> Unit = {},
+    onToggleKeepA11y: () -> Unit = {},
     onDisconnect: () -> Unit = {},
     onToggleAwakeOnVoice: () -> Unit = {},
     onToggleLockedAccess: () -> Unit = {},
@@ -166,6 +190,8 @@ fun CompanionShell(
     onRenameDevice: (String) -> Unit = {},
     onConfirmDeepLink: () -> Unit = {},
     onDismissDeepLink: () -> Unit = {},
+    onConfirmPairLink: () -> Unit = {},
+    onDismissPairLink: () -> Unit = {},
     onExecuteTerminal: (String) -> Unit = {},
     onClearTerminal: () -> Unit = {},
     onRefreshGit: () -> Unit = {},
@@ -191,14 +217,21 @@ fun CompanionShell(
     onOpenMedia: (app.hermes.companion.model.ChatBlock) -> Unit = {},
     onFetchMedia: suspend (String) -> ByteArray? = { null },
     onDismissError: () -> Unit = {},
+    onPairLink: (String, String, String) -> Unit = { _, _, _ -> },
 ) {
     if (state.origin == null) {
+        // Parent takes the status bar so ConnectScreen's own inset padding doesn't double under the strip.
+        Column(Modifier.fillMaxSize().background(CompanionColor.Void).statusBarsPadding()) {
+        state.pendingPairLink?.let { req ->
+            PairLinkStrip(req, onConfirmPairLink, onDismissPairLink)
+        }
         ConnectScreen(
             origin = state.originInput,
             loading = state.loading,
             error = state.error,
             onOriginChange = onOriginChange,
             onConnect = onConnect,
+            onPairLink = onPairLink,
             authRequired = state.authRequired,
             username = state.username,
             password = state.password,
@@ -207,7 +240,9 @@ fun CompanionShell(
             gateways = state.connectChoices,
             onSelectGateway = onSelectConnectGateway,
             onForgetGateway = onForgetConnectGateway,
+            modifier = Modifier.weight(1f),
         )
+        }
         return
     }
 
@@ -229,6 +264,8 @@ fun CompanionShell(
         var showProfileSheet by rememberSaveable { mutableStateOf(false) }
         var showModelSheet by rememberSaveable { mutableStateOf(false) }
         var showSettingsSheet by rememberSaveable { mutableStateOf(false) }
+        var showSessionSheet by remember(state.openSessionId) { mutableStateOf(false) }
+        var showMoreSheet by rememberSaveable { mutableStateOf(false) }
 
         LaunchedEffect(showModelSheet, showSettingsSheet) {
             if ((showModelSheet || showSettingsSheet) && state.modelCatalog == null) {
@@ -241,8 +278,33 @@ fun CompanionShell(
             onCloseChat = onCloseChat,
             onProfileTap = { showProfileSheet = true },
             onOpenSettings = { showSettingsSheet = true },
+            onSessionActions = { showSessionSheet = true },
+            onToggleVoice = onToggleVoiceStream,
         )
         Hairline()
+        if (showSessionSheet && !state.inRoom) {
+            state.openSession?.takeUnless { app.hermes.companion.domain.DraftThread.isDraft(it) }?.let { session ->
+                app.hermes.companion.settings.SessionBottomSheet(
+                    session, state.sessionActionsBusy, state.streaming,
+                    onRenameSession, onPinSession, onArchiveSession, onBranchSession,
+                    onDismiss = { showSessionSheet = false },
+                    onContext = onSessionContext, onControls = onSessionControls,
+                )
+            }
+        }
+        state.sessionControls?.let { panel ->
+            app.hermes.companion.settings.SessionControlsBottomSheet(panel, onSessionControls, onSetSessionSetting,
+                onRedirectSession, onNativeCommand, onDismissSessionControls)
+        }
+        state.contextPanel?.let { panel ->
+            app.hermes.companion.settings.SessionContextBottomSheet(panel, onSessionContext, onDismissSessionContext)
+        }
+        if (showMoreSheet) {
+            NavigationMoreSheet(state, { tab ->
+                if (inChat) onCloseChat()
+                onTab(tab)
+            }, { showSettingsSheet = true }, { showMoreSheet = false })
+        }
         if (showProfileSheet) {
             ProfileBottomSheet(
                 profiles = state.profiles,
@@ -297,7 +359,9 @@ fun CompanionShell(
                     if (inChat) onCloseChat()
                     onTab(tab)
                 },
+                onSpeechBackend = onSpeechBackend,
                 onToggleStay = onToggleStay,
+                onToggleKeepA11y = onToggleKeepA11y,
                 onNtfyTopicChange = onNtfyTopicChange,
                 onSaveNtfy = onSaveNtfy,
                 onDisconnect = onDisconnect,
@@ -306,6 +370,10 @@ fun CompanionShell(
         }
         state.pendingDeepLink?.let { req ->
             DeepLinkStrip(req, onConfirmDeepLink, onDismissDeepLink)
+            Hairline()
+        }
+        state.pendingPairLink?.let { req ->
+            PairLinkStrip(req, onConfirmPairLink, onDismissPairLink)
             Hairline()
         }
         // Tabs without an error slot of their own surface host failures here (threads/chat/device have one).
@@ -330,11 +398,16 @@ fun CompanionShell(
             )
         } else if (inChat) {
             ChatScreen(
+                nativeCommands = if (state.nativeCommandsOwner?.let { it.origin == state.origin && it.profile == state.activeProfileId && it.session == state.openSessionId } == true) state.nativeCommands else emptyList(),
                 messages = state.messages,
                 draft = state.draft,
                 streaming = state.streaming,
+                submitting = state.submitting,
+                creatingThread = state.creatingThread,
+                onRetryMessage = onRetryMessage,
                 error = state.error,
                 approval = state.approval,
+                approvalBusy = state.approval != null && state.approvalSubmittingRequestId == state.approval.requestId,
                 onDraftChange = onDraftChange,
                 onSend = onSend,
                 onInterrupt = onInterrupt,
@@ -346,6 +419,8 @@ fun CompanionShell(
                 onRewind = onRewind,
                 onCancelRewind = onCancelRewind,
                 isListeningVoice = state.isListeningVoice,
+                onReadAloud = onReadAloud,
+                readAloudMessageId = state.readAloudMessageId,
                 onVoiceClick = onVoiceClick,
                 loading = state.transcriptLoading,
                 historySource = state.historySource,
@@ -377,6 +452,8 @@ fun CompanionShell(
                 onRoomAddParticipant = onRoomAddParticipant,
                 onRoomRemoveParticipant = onRoomRemoveParticipant,
                 onRoomRename = onRoomRename,
+                onArm = onArm,
+                onDisarm = onDisarm,
                 modifier = body,
             )
         } else {
@@ -393,6 +470,7 @@ fun CompanionShell(
                     onRefresh = onRetrySessions,
                     pendingDelete = state.pendingDelete,
                     rooms = state.rooms,
+                    roomsAvailable = state.companionAvailability == app.hermes.companion.model.CompanionAvailability.AVAILABLE,
                     roomsLoading = state.roomsLoading,
                     roomsError = state.roomsError,
                     unreadRooms = state.unreadRooms,
@@ -401,6 +479,8 @@ fun CompanionShell(
                     onDeleteRoom = onDeleteRoom,
                     onOpen = onOpenSession,
                     onNew = onNewThread,
+                    hasLocalDraft = state.hasLocalDraft,
+                    onResumeLocalDraft = onResumeLocalDraft,
                     onRetry = onRetrySessions,
                     onDeleteRequest = onRequestDelete,
                     onConfirmDelete = onConfirmDelete,
@@ -481,6 +561,7 @@ fun CompanionShell(
                 MainTab.GATEWAY -> GatewayScreen(
                     status = state.status,
                     hud = state.hud,
+                    nativeVoiceStatus = state.nativeVoiceStatus,
                     hostMetrics = state.hostMetrics,
                     modelCatalog = state.modelCatalog,
                     modelOverride = state.modelOverride,
@@ -562,17 +643,23 @@ fun CompanionShell(
         }
         // The bar gives its height to the keyboard while typing (A18.4 / A18.7).
         if (!imeVisible) {
+            if (state.voiceStreamState != VoiceStreamState.IDLE) {
+                VoiceStageHud(
+                    state = state.voiceStreamState,
+                    onStop = onToggleVoiceStream,
+                    speaker = state.voiceSpeaker,
+                    onSpeaker = onToggleVoiceSpeaker,
+                )
+            }
             Hairline()
-            NavBar(
+            AppNavigationBar(
                 state = state,
                 inChat = inChat,
                 onTab = { tab ->
-                    if (inChat && tab != MainTab.THREADS) {
-                        onCloseChat()
-                    }
+                    if (inChat) onCloseChat()
                     onTab(tab)
                 },
-                onToggleVoiceStream = onToggleVoiceStream,
+                onMore = { showMoreSheet = true },
             )
         }
     }
@@ -627,9 +714,13 @@ private fun ProfilePicker(state: CompanionState, onSelect: (String) -> Unit, onO
 /** External deep link wants to switch profile / open a session. Nothing moves until the user says so. */
 @Composable
 private fun DeepLinkStrip(req: DeepLinkRequest, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val stripShape = RoundedCornerShape(12.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
+            .clip(stripShape)
+            .border(CompanionSpace.Hairline, CompanionColor.Warn.copy(alpha = 0.5f), stripShape)
             .background(CompanionColor.VoidElevated)
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm)
             .testTag("deeplink.strip"),
@@ -646,13 +737,54 @@ private fun DeepLinkStrip(req: DeepLinkRequest, onConfirm: () -> Unit, onDismiss
         )
         Text(
             text = "OPEN",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontWeight = FontWeight.Bold),
             modifier = Modifier.testTag("deeplink.open").clickable(onClick = onConfirm).padding(CompanionSpace.Xs),
         )
         Text(
             text = "DISMISS",
             style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
             modifier = Modifier.testTag("deeplink.dismiss").clickable(onClick = onDismiss).padding(CompanionSpace.Xs),
+        )
+    }
+}
+
+/** External pair link: pairing gives that host a device-control lane, so the user must confirm who it is. */
+@Composable
+private fun PairLinkStrip(
+    req: PairDeepLink,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val stripShape = RoundedCornerShape(12.dp)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
+            .clip(stripShape)
+            .border(CompanionSpace.Hairline, CompanionColor.Warn.copy(alpha = 0.5f), stripShape)
+            .background(CompanionColor.VoidElevated)
+            .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm)
+            .testTag("pairlink.strip"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
+    ) {
+        Text(
+            text = "pair this phone with ${req.origin.substringAfter("://")} · ${req.profile}?",
+            style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = "PAIR",
+            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontWeight = FontWeight.Bold),
+            modifier = Modifier.testTag("pairlink.pair").clickable(onClick = onConfirm).padding(CompanionSpace.Xs),
+        )
+        Text(
+            text = "DISMISS",
+            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+            modifier = Modifier.testTag("pairlink.dismiss").clickable(onClick = onDismiss).padding(CompanionSpace.Xs),
         )
     }
 }
@@ -664,6 +796,8 @@ private fun Header(
     onCloseChat: () -> Unit,
     onProfileTap: () -> Unit,
     onOpenSettings: () -> Unit = {},
+    onSessionActions: () -> Unit = {},
+    onToggleVoice: () -> Unit = {},
 ) {
     Row(
         modifier = Modifier
@@ -682,14 +816,21 @@ private fun Header(
             )
         }
         if (inChat) {
-            Text(
-                text = "◂",
-                style = CompanionType.Mono.copy(color = CompanionColor.Signal),
+            Box(
                 modifier = Modifier
-                    .testTag("chat.back")
-                    .clickable(onClick = onCloseChat)
-                    .padding(end = CompanionSpace.Sm),
-            )
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(CompanionColor.VoidElevated)
+                    .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onCloseChat)
+                    .semantics { contentDescription = "Back to chats" }
+                    .testTag("chat.back"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "◂",
+                    style = CompanionType.Mono.copy(color = CompanionColor.Signal, fontSize = 16.sp),
+                )
+            }
         }
         val hostPrefix = if (inChat || state.hostName.isBlank()) "" else "${state.hostName} · "
         val title = hostPrefix + when {
@@ -704,10 +845,12 @@ private fun Header(
             else -> "device"
         }
         val meta = if (inChat && state.openRoom == null) threadMeta(state.openSession) else ""
-        Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.weight(1f)
+            .clickable(enabled = inChat && !state.inRoom && app.hermes.companion.domain.DraftThread.isPersisted(state.openSessionId), onClick = onSessionActions)
+            .testTag("header.session.actions")) {
             Text(
-                text = title,
-                style = CompanionType.Body,
+                text = title + if (inChat && !state.inRoom) " ▾" else "",
+                style = CompanionType.Body.copy(fontWeight = FontWeight.SemiBold),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -721,15 +864,21 @@ private fun Header(
                 )
             }
         }
-        LinkPill(state)
-        HudGlyph("GW", state.hud.gateway)
-        HudGlyph("TG", state.hud.telegram)
-        HudGlyph("DC", state.hud.discord)
-        HudGlyph("API", state.hud.api)
+        if ((inChat || state.tab == MainTab.THREADS) && !state.inRoom) {
+            androidx.compose.material3.TextButton(onClick = onToggleVoice,
+                modifier = Modifier.testTag("header.voice").semantics {
+                    contentDescription = if (state.isVoiceStreamActive) "End voice chat" else "Start voice chat"
+                }) {
+                Text(if (state.isVoiceStreamActive) "End voice" else "Voice", color = CompanionColor.Signal)
+            }
+        } else LinkPill(state)
         Box(
             modifier = Modifier
-                .size(36.dp)
+                .size(48.dp)
+                .clip(CircleShape)
+                .background(CompanionColor.VoidElevated)
                 .clickable(onClick = onOpenSettings)
+                .semantics { contentDescription = "Settings" }
                 .testTag("header.settings"),
             contentAlignment = Alignment.Center,
         ) {
@@ -775,12 +924,15 @@ private fun LinkPill(state: CompanionState) {
     val syncing = state.loading || state.sessionsLoading
     val down = !syncing && state.gatewayHello == null
     if (!syncing && !down) return
+    val pillShape = RoundedCornerShape(10.dp)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         modifier = Modifier
-            .border(CompanionSpace.Hairline, if (syncing) CompanionColor.Signal else CompanionColor.Warn)
-            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .clip(pillShape)
+            .background(CompanionColor.VoidElevated)
+            .border(CompanionSpace.Hairline, if (syncing) CompanionColor.Signal else CompanionColor.Warn, pillShape)
+            .padding(horizontal = 8.dp, vertical = 3.dp)
             .testTag(if (syncing) "header.sync" else "header.linkdown"),
     ) {
         if (syncing) LiveDot(size = 5.dp) else LiveDot(size = 5.dp, color = CompanionColor.Warn)
@@ -802,169 +954,73 @@ private fun HudGlyph(label: String, state: HudState) {
 }
 
 @Composable
-private fun NavBar(
-    state: CompanionState,
-    inChat: Boolean,
-    onTab: (MainTab) -> Unit,
-    onToggleVoiceStream: () -> Unit,
+private fun VoiceStageHud(
+    state: VoiceStreamState,
+    onStop: () -> Unit,
+    speaker: Boolean,
+    onSpeaker: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
+    if (state == VoiceStreamState.IDLE) return
+    val stateLabel = when (state) {
+        VoiceStreamState.LISTENING -> "LISTENING"
+        VoiceStreamState.TRANSCRIBING -> "TRANSCRIBING…"
+        VoiceStreamState.THINKING -> "THINKING…"
+        VoiceStreamState.SPEAKING -> "SPEAKING"
+        VoiceStreamState.IDLE -> ""
+    }
+    val wave = when (state) {
+        VoiceStreamState.LISTENING -> "ılı.lıllılı.ıllı."
+        VoiceStreamState.SPEAKING -> " ▃▅▇█▇▅▃ "
+        VoiceStreamState.TRANSCRIBING -> "◐"
+        VoiceStreamState.THINKING -> "◐ ◓ ◑ ◒"
+        VoiceStreamState.IDLE -> ""
+    }
+    val hudShape = RoundedCornerShape(14.dp)
+    val btnShape = RoundedCornerShape(8.dp)
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
+            .padding(horizontal = CompanionSpace.Sm, vertical = 4.dp)
+            .clip(hudShape)
             .background(CompanionColor.VoidElevated)
-            .navigationBarsPadding()
-            .height(56.dp)
-            .padding(horizontal = CompanionSpace.Sm),
+            .border(CompanionSpace.Hairline, if (state == VoiceStreamState.LISTENING) CompanionColor.Signal else CompanionColor.Warn, hudShape)
+            .padding(horizontal = CompanionSpace.Md, vertical = 8.dp)
+            .testTag("voice.stage"),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Xs),
+        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Row(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            NavGlyphItem(
-                glyph = "▤",
-                label = "chat",
-                tab = MainTab.THREADS,
-                isSelected = (state.tab == MainTab.THREADS && !inChat) || inChat,
-                hasBadge = state.sessions.isNotEmpty(),
-                badgeColor = CompanionColor.Signal,
-                onTab = onTab,
-            )
-            NavGlyphItem(
-                glyph = ">_",
-                label = "term",
-                tab = MainTab.CONSOLE,
-                isSelected = state.tab == MainTab.CONSOLE && !inChat,
-                onTab = onTab,
-            )
-            NavGlyphItem(
-                glyph = "±",
-                label = "diff",
-                tab = MainTab.REVIEW,
-                isSelected = state.tab == MainTab.REVIEW && !inChat,
-                onTab = onTab,
-            )
-            NavGlyphItem(
-                glyph = "◷",
-                label = "cron",
-                tab = MainTab.REMINDERS,
-                isSelected = state.tab == MainTab.REMINDERS && !inChat,
-                onTab = onTab,
-            )
-            NavGlyphItem(
-                glyph = "⌂",
-                label = "host",
-                tab = MainTab.GATEWAY,
-                isSelected = state.tab == MainTab.GATEWAY && !inChat,
-                hasBadge = state.hud.gateway != HudState.ON,
-                badgeColor = CompanionColor.Warn,
-                onTab = onTab,
-            )
-            NavGlyphItem(
-                glyph = "✋",
-                label = "hands",
-                tab = MainTab.DEVICE,
-                isSelected = state.tab == MainTab.DEVICE && !inChat,
-                hasBadge = state.arm != DeviceArm.DISARMED,
-                badgeColor = CompanionColor.Warn,
-                onTab = onTab,
-            )
-        }
-
-        // Zone 3: Live Conversational Stream Toggle
-        VoiceStreamButton(
-            state = state.voiceStreamState,
-            onClick = onToggleVoiceStream,
-        )
-    }
-}
-
-@Composable
-private fun NavGlyphItem(
-    glyph: String,
-    label: String,
-    tab: MainTab,
-    isSelected: Boolean,
-    hasBadge: Boolean = false,
-    badgeColor: Color = CompanionColor.Signal,
-    onTab: (MainTab) -> Unit,
-) {
-    val fg = if (isSelected) CompanionColor.Signal else CompanionColor.TextMute
-    Column(
-        modifier = Modifier
-            .testTag("nav.${tab.name.lowercase()}")
-            .clickable { onTab(tab) }
-            .padding(horizontal = 2.dp, vertical = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Box(contentAlignment = Alignment.TopEnd) {
+            LiveDot(color = if (state == VoiceStreamState.LISTENING) CompanionColor.Signal else CompanionColor.Warn)
             Text(
-                text = glyph,
-                style = CompanionType.Mono.copy(
-                    color = fg,
-                    fontSize = 13.sp,
+                text = "Voice · $stateLabel",
+                style = CompanionType.MonoSmall.copy(
+                    color = CompanionColor.Signal,
+                    fontWeight = FontWeight.Bold,
                 ),
-                maxLines = 1,
             )
-            if (hasBadge) {
-                Box(
-                    modifier = Modifier
-                        .padding(start = 12.dp)
-                        .size(4.dp)
-                        .background(badgeColor, CircleShape),
-                )
-            }
+            Text(
+                text = wave,
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+            )
         }
         Text(
-            text = label,
-            style = CompanionType.MonoSmall.copy(
-                color = fg,
-                fontSize = 9.sp,
-            ),
-            maxLines = 1,
+            text = if (speaker) "Speaker" else "Auto",
+            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+            modifier = Modifier.testTag("voice.stage.speaker").clickable(onClick = onSpeaker).padding(8.dp),
         )
-        Spacer(Modifier.height(2.dp))
-        Box(
-            modifier = Modifier
-                .width(16.dp)
-                .height(2.dp)
-                .background(if (isSelected) CompanionColor.Signal else Color.Transparent),
-        )
-    }
-}
-
-@Composable
-private fun VoiceStreamButton(
-    state: VoiceStreamState,
-    onClick: () -> Unit,
-) {
-    val isActive = state != VoiceStreamState.IDLE
-    val borderColor = if (isActive) CompanionColor.Signal else CompanionColor.LineStrong
-    val bgColor = if (isActive) CompanionColor.SignalDim else CompanionColor.Void
-    val iconColor = if (isActive) CompanionColor.Signal else CompanionColor.TextDim
-
-    val iconText = when (state) {
-        VoiceStreamState.LISTENING -> "ılı."
-        VoiceStreamState.SPEAKING -> "🔊"
-        VoiceStreamState.THINKING -> "◐"
-        VoiceStreamState.IDLE -> "🎙"
-    }
-
-    Box(
-        modifier = Modifier
-            .size(36.dp)
-            .border(CompanionSpace.Hairline, borderColor)
-            .background(bgColor)
-            .testTag("nav.stream")
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
         Text(
-            text = iconText,
-            style = CompanionType.Mono.copy(color = iconColor, fontSize = 13.sp),
+            text = "End",
+            style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn, fontWeight = FontWeight.Bold),
+            modifier = Modifier
+                .testTag("voice.stage.stop")
+                .clip(btnShape)
+                .background(CompanionColor.Warn.copy(alpha = 0.15f))
+                .clickable(onClick = onStop)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
         )
     }
 }

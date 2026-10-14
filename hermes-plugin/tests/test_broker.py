@@ -135,7 +135,8 @@ class BrokerTests(unittest.TestCase):
     def test_private_history_reads_are_not_passive(self):
         # Arming is the user's consent. One sms.list discloses the whole message history, so
         # these reads must refuse on an unarmed phone even though they mutate nothing.
-        for action in ("device.sms.list", "device.calls.log", "device.contacts.search"):
+        # clipboard.get likewise: clipboards routinely hold just-copied passwords and OTPs.
+        for action in ("device.sms.list", "device.calls.log", "device.contacts.search", "device.clipboard.get"):
             self.assertNotIn(action, L0_PASSIVE, action)
             with self.assertRaises(BrokerError) as ctx:
                 Broker(device=MockDevice(armed=False)).dispatch(action)

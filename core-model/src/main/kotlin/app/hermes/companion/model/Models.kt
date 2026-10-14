@@ -1,7 +1,10 @@
 package app.hermes.companion.model
 
+
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+
+enum class SpeechBackend { HOST, SYSTEM }
 
 @Serializable
 data class GatewayRef(
@@ -55,9 +58,15 @@ data class SessionRef(
     val source: String = "",
     /** Host `archived` flag. Hidden from the rail unless the operator turns ARCHIVED on. */
     val archived: Boolean = false,
+    val pinned: Boolean = false,
 )
 
 enum class MessageRole { USER, ASSISTANT, TOOL }
+
+/** Local delivery state. SENT means the host acknowledged the input, not that its turn finished. */
+enum class MessageDelivery { NONE, QUEUED, SENDING, SENT, FAILED, UNCERTAIN }
+
+data class SessionRuntimeSnapshot(val running: Boolean = false, val assistant: String = "", val approval: ApprovalPrompt? = null)
 
 @Serializable
 enum class ChatBlockKind { TEXT, IMAGE, VIDEO, FILE }
@@ -102,6 +111,8 @@ data class ChatMessage(
     val passed: Boolean = false,
     /** Room summary turn (pinned at the top of the room). */
     val summary: Boolean = false,
+    val delivery: MessageDelivery = MessageDelivery.NONE,
+    val reasoning: Boolean = false,
 )
 
 /** One profile taking part in a room. */
@@ -172,6 +183,8 @@ data class OutboxItem(
     val attempts: Int = 0,
     val lastError: String = "",
     val attachmentsJson: String = "",
+    /** Null before submission; captured durable user ids let lost acknowledgments reconcile safely. */
+    val baselineUserIds: List<String>? = null,
 )
 
 @Serializable
@@ -183,6 +196,14 @@ data class CompanionHealth(
     val profilesDir: String = "",
     val drift: String = "",
 )
+
+/** Optional host integration, discovered independently of native operator authentication. */
+enum class CompanionAvailability { UNKNOWN, AVAILABLE, UNAVAILABLE }
+
+data class NativeVoiceStatus(val mode: String = "", val available: Boolean? = null,
+    val reason: String = "", val model: String = "", val voice: String = "")
+data class SynthesizedSpeech(val bytes: ByteArray, val mime: String, val provider: String)
+data class SpeechTranscript(val text: String, val provider: String)
 
 @Serializable
 data class HistoryPage(
@@ -205,9 +226,19 @@ data class ApprovalPrompt(
 data class SessionChange(
     val op: String,
     val session: SessionRef,
+    val fields: Set<String>? = null,
 )
 
 sealed class ChatEvent {
+    data class Accepted(val status: String = "streaming", val userRowId: Long? = null) : ChatEvent()
+    data class Final(
+        val text: String = "",
+        val status: String = "complete",
+        val error: String = "",
+        val reused: Boolean = false,
+    ) : ChatEvent()
+    data class ReasoningDelta(val text: String) : ChatEvent()
+    data class Interim(val text: String) : ChatEvent()
     /** [speaker] is set only for room turns (the profile talking). */
     data class AssistantDelta(val text: String, val speaker: String? = null) : ChatEvent()
     data class ToolStarted(val name: String, val detail: String, val speaker: String? = null) : ChatEvent()

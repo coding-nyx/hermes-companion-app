@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Intent
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import app.hermes.companion.device.CompanionAccessibilityService
 import app.hermes.companion.device.StopStreamReceiver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -73,6 +74,7 @@ class StayConnectedService : Service() {
                     ?: app.sticky.lastGoodOrigin
                     ?: app.sticky.origin
                 if (!origin.isNullOrBlank()) runCatching { app.clients.forOrigin(origin).ping() }
+                if (app.sticky.keepA11yOn) CompanionAccessibilityService.ensureEnabled(applicationContext)
                 // Refresh subtitle (stream on/off · profile) periodically.
                 startForeground(ID, notice())
             }

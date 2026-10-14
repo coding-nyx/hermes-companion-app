@@ -2,6 +2,7 @@ package app.hermes.companion.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,8 +18,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
@@ -89,33 +96,97 @@ fun MarkdownBlocks(
                     onFetch = onFetchMedia,
                 )
                 is MdBlock.Table -> TableBlock(block)
-                is MdBlock.Fence -> Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .background(CompanionColor.SignalDim)
-                        .border(CompanionSpace.Hairline, CompanionColor.Line)
-                        .horizontalScroll(rememberScrollState())
-                        .padding(CompanionSpace.Sm)
-                        .testTag("chat.code"),
-                ) {
-                    Column {
-                        if (block.lang.isNotBlank()) {
-                            Text(
-                                text = block.lang,
-                                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                            )
-                        }
-                        Text(
-                            text = block.text,
-                            style = CompanionType.Mono.copy(
-                                color = CompanionColor.Text,
-                                fontFamily = FontFamily.Monospace,
-                            ),
-                            softWrap = false,
-                        )
-                    }
+                is MdBlock.Fence -> CodeBlockView(block)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CodeBlockView(block: MdBlock.Fence) {
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    var copied by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val lineCount = remember(block.text) { block.text.lines().size }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(CompanionSpace.Hairline, CompanionColor.LineStrong)
+            .background(CompanionColor.VoidElevated)
+            .testTag("chat.code"),
+    ) {
+        // Code Block Header Bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(CompanionColor.Line)
+                .padding(horizontal = CompanionSpace.Sm, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
+            ) {
+                Text(
+                    text = block.lang.ifBlank { "code" }.uppercase(),
+                    style = CompanionType.MonoSmall.copy(
+                        color = CompanionColor.Signal,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                )
+                if (lineCount > 1) {
+                    Text(
+                        text = "$lineCount lines",
+                        style = CompanionType.MonoSmall.copy(
+                            color = CompanionColor.TextMute,
+                            fontSize = 10.sp,
+                        ),
+                    )
                 }
             }
+
+            // 1-Tap Copy Action
+            Row(
+                modifier = Modifier
+                    .clickable {
+                        clipboardManager.setText(AnnotatedString(block.text))
+                        copied = true
+                        scope.launch {
+                            kotlinx.coroutines.delay(1800)
+                            copied = false
+                        }
+                    }
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = if (copied) "COPIED ✓" else "COPY",
+                    style = CompanionType.MonoSmall.copy(
+                        color = if (copied) CompanionColor.Signal else CompanionColor.TextDim,
+                        fontSize = 11.sp,
+                    ),
+                )
+            }
+        }
+
+        // Code Content
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(CompanionSpace.Sm),
+        ) {
+            Text(
+                text = block.text,
+                style = CompanionType.Mono.copy(
+                    color = CompanionColor.Text,
+                    fontFamily = FontFamily.Monospace,
+                ),
+                softWrap = false,
+            )
         }
     }
 }

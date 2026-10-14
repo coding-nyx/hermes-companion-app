@@ -102,7 +102,8 @@ class DeviceLanePolicyTest {
     fun privateHistoryReadsRequireArming() {
         // sms/call-log/contacts are reads, but arming is the user's consent and one sms.list
         // discloses the whole message history — so they must not be passive.
-        for (action in listOf("device.sms.list", "device.calls.log", "device.contacts.search")) {
+        // clipboard.get likewise: clipboards routinely hold just-copied passwords and OTPs.
+        for (action in listOf("device.sms.list", "device.calls.log", "device.contacts.search", "device.clipboard.get")) {
             assertFalse("$action must not be passive", action in DeviceLanePolicy.L0_PASSIVE)
             assertEquals(
                 "$action must require arming",

@@ -139,7 +139,6 @@ object DeviceLanePolicy {
         "device.audio.volume.get",
         "device.media.sessions",
         "device.media.now_playing",
-        "device.clipboard.get",
         "device.device.info",
         "device.notifications.nls",
         "device.notifications.nls.enable",
@@ -159,6 +158,8 @@ object DeviceLanePolicy {
         // NOTE: sms.list, calls.log and contacts.search are reads but are deliberately NOT
         // passive. Arming is the user's consent, and one sms.list hands an agent the whole
         // message history — a disclosure that should not happen on an unarmed phone.
+        // NOTE: clipboard.get is not passive either: clipboards routinely hold passwords and
+        // one-time codes the user just copied.
     )
 
     /**

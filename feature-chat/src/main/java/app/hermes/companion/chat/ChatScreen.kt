@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -34,15 +35,21 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import kotlinx.coroutines.delay
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -69,6 +76,7 @@ import app.hermes.companion.design.HairlineField
 import androidx.compose.ui.text.input.KeyboardType
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.MessageRole
+import app.hermes.companion.model.MessageDelivery
 import app.hermes.companion.model.ProfileRef
 import app.hermes.companion.model.RoomParticipant
 import app.hermes.companion.domain.DraftThread
@@ -77,6 +85,12 @@ import app.hermes.companion.model.ModelCatalog
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+
+internal data class SlashCmd(
+    val command: String,
+    val description: String,
+    val onTrigger: () -> Unit,
+)
 
 @Composable
 fun ChatScreen(
@@ -89,6 +103,11 @@ fun ChatScreen(
     onSend: () -> Unit,
     onInterrupt: () -> Unit,
     onApproval: (String) -> Unit,
+    submitting: Boolean = false,
+    creatingThread: Boolean = false,
+    onRetryMessage: (String) -> Unit = {},
+    onReadAloud: (ChatMessage) -> Unit = {},
+    readAloudMessageId: String? = null,
     hasMoreOlder: Boolean = false,
     loadingOlder: Boolean = false,
     onLoadOlder: () -> Unit = {},
@@ -130,7 +149,11 @@ fun ChatScreen(
     onRoomAddParticipant: (String) -> Unit = {},
     onRoomRemoveParticipant: (String) -> Unit = {},
     onRoomRename: (String) -> Unit = {},
+    onArm: () -> Unit = {},
+    onDisarm: () -> Unit = {},
     modifier: Modifier = Modifier,
+    nativeCommands: List<app.hermes.companion.model.NativeCommand> = emptyList(),
+    approvalBusy: Boolean = false,
 ) {
     val roomMode = participants.isNotEmpty()
     val listState = remember(threadId) { LazyListState() }
@@ -268,11 +291,11 @@ fun ChatScreen(
             // Duplicate keys crash LazyColumn outright; a reducer race must never take the app down.
             items(messages.distinctBy { it.id }, key = { it.id }) { message ->
                 when (message.role) {
-                    MessageRole.USER -> UserRow(message, if (roomMode) ({}) else onRewind, onFetchMedia, onOpenMedia)
+                    MessageRole.USER -> UserRow(message, if (roomMode) ({}) else onRewind, onFetchMedia, onOpenMedia, onRetryMessage)
                     MessageRole.TOOL -> Box(Modifier.padding(start = AgentRailInset)) {
                         ToolRow(message, onFetchMedia, onOpenMedia)
                     }
-                    MessageRole.ASSISTANT -> AssistantRow(message, onFetchMedia, onOpenMedia, participants, profiles)
+                    MessageRole.ASSISTANT -> if (message.reasoning) ReasoningRow(message) else AssistantRow(message, onFetchMedia, onOpenMedia, participants, profiles, onReadAloud, readAloudMessageId)
                 }
             }
             val last = messages.lastOrNull()
@@ -338,7 +361,7 @@ fun ChatScreen(
             )
         }
         if (approval != null) {
-            ApprovalStrip(approval, onApproval)
+            ApprovalStrip(approval, onApproval, approvalBusy)
         }
         if (roomMode && room != null && !streaming) {
             RoomFloorStrip(room, onRoomContinue)
@@ -347,6 +370,7 @@ fun ChatScreen(
             RewindStrip(onCancelRewind)
         }
         Hairline()
+        var slashOpen by rememberSaveable(threadId) { mutableStateOf(false) }
         if (pendingAttachments.isNotEmpty()) {
             Row(
                 modifier = Modifier
@@ -356,13 +380,16 @@ fun ChatScreen(
                 horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
             ) {
                 pendingAttachments.forEach { item ->
+                    val attachShape = RoundedCornerShape(8.dp)
                     Text(
                         text = "${item.kind.name} · ${item.name}  ×",
                         style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
                         modifier = Modifier
-                            .border(CompanionSpace.Hairline, CompanionColor.Signal)
+                            .clip(attachShape)
+                            .border(CompanionSpace.Hairline, CompanionColor.Signal, attachShape)
+                            .background(CompanionColor.VoidElevated)
                             .clickable { onRemoveAttachment(item.id) }
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
                     )
                 }
             }
@@ -372,6 +399,7 @@ fun ChatScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
+                    .horizontalScroll(rememberScrollState())
                     .testTag("chat.attach.menu"),
                 horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
             ) {
@@ -381,14 +409,17 @@ fun ChatScreen(
                     "VIDEO" to onPickVideo,
                     "FILE" to onPickFile,
                 ).forEach { (label, action) ->
+                    val menuShape = RoundedCornerShape(8.dp)
                     Text(
                         text = label,
                         style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
                         modifier = Modifier
                             .testTag("chat.attach.${label.lowercase()}")
-                            .border(CompanionSpace.Hairline, CompanionColor.Signal)
+                            .clip(menuShape)
+                            .border(CompanionSpace.Hairline, CompanionColor.Signal, menuShape)
+                            .background(CompanionColor.VoidElevated)
                             .clickable(onClick = action)
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                            .padding(horizontal = 12.dp, vertical = 7.dp),
                     )
                 }
             }
@@ -404,12 +435,15 @@ fun ChatScreen(
             ) {
                 Text(text = "TO", style = CompanionType.MonoSmall)
                 participants.forEach { p ->
+                    val mentionShape = RoundedCornerShape(6.dp)
                     Text(
                         text = "@${p.glyph}",
                         style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
                         modifier = Modifier
                             .testTag("chat.mention.${p.glyph}")
-                            .border(CompanionSpace.Hairline, CompanionColor.LineStrong)
+                            .clip(mentionShape)
+                            .border(CompanionSpace.Hairline, CompanionColor.LineStrong, mentionShape)
+                            .background(CompanionColor.VoidElevated)
                             .clickable { onMention(p.glyph) }
                             .padding(horizontal = 8.dp, vertical = 4.dp),
                     )
@@ -425,13 +459,15 @@ fun ChatScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
+                val modelShape = RoundedCornerShape(8.dp)
                 Row(
                     modifier = Modifier
                         .testTag("chat.model")
-                        .border(CompanionSpace.Hairline, CompanionColor.LineStrong)
+                        .clip(modelShape)
+                        .border(CompanionSpace.Hairline, CompanionColor.LineStrong, modelShape)
                         .background(CompanionColor.VoidElevated)
                         .clickable { onOpenModelPicker() }
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
@@ -459,11 +495,14 @@ fun ChatScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         for (opt in quickOptions) {
+                            val optShape = RoundedCornerShape(6.dp)
                             Box(
                                 modifier = Modifier
-                                    .border(CompanionSpace.Hairline, CompanionColor.Line)
+                                    .clip(optShape)
+                                    .border(CompanionSpace.Hairline, CompanionColor.Line, optShape)
+                                    .background(CompanionColor.VoidElevated)
                                     .clickable { onSwitchModel(opt.id, opt.provider) }
-                                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
                                     .testTag("chat.model.quick.${opt.id}"),
                             ) {
                                 Text(
@@ -477,68 +516,195 @@ fun ChatScreen(
                 }
             }
         }
+
+        val slashCommands = remember(onArm, onDisarm, onOpenModelPicker, onVoiceClick, onDraftChange, onSend, nativeCommands) {
+            listOf(
+                SlashCmd("/arm", "arm hands") { onArm(); onDraftChange("") },
+                SlashCmd("/disarm", "disarm hands") { onDisarm(); onDraftChange("") },
+                SlashCmd("/model", "pick model") { onOpenModelPicker(); onDraftChange("") },
+                SlashCmd("/voice", "toggle voice") { onVoiceClick(); onDraftChange("") },
+                SlashCmd("/clear", "clear draft") { onDraftChange("") },
+
+            ) + nativeCommands.filter { it.name !in setOf("arm", "disarm", "model", "voice", "clear") }.map { command ->
+                SlashCmd("/${command.name}", command.description) { onDraftChange("/${command.name} ") }
+            }
+        }
+        val filteredSlash = if (draft.startsWith("/")) {
+            slashCommands.filter { it.command.startsWith(draft.trim(), ignoreCase = true) }
+        } else if (slashOpen) {
+            slashCommands
+        } else {
+            emptyList()
+        }
+
+        if (filteredSlash.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
+                    .testTag("chat.slash.bar"),
+                horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(text = "CMD", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
+                filteredSlash.forEach { cmd ->
+                    val cmdShape = RoundedCornerShape(8.dp)
+                    Row(
+                        modifier = Modifier
+                            .clip(cmdShape)
+                            .border(CompanionSpace.Hairline, CompanionColor.LineStrong, cmdShape)
+                            .background(CompanionColor.VoidElevated)
+                            .clickable {
+                                slashOpen = false
+                                cmd.onTrigger()
+                            }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = cmd.command,
+                            style = CompanionType.MonoSmall.copy(
+                                color = CompanionColor.Signal,
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                        )
+                        Text(
+                            text = cmd.description,
+                            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim, fontSize = 10.sp),
+                        )
+                    }
+                }
+            }
+        }
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md),
             verticalAlignment = Alignment.Bottom,
         ) {
+            val pillShape = RoundedCornerShape(20.dp)
             if (!roomMode) {
-                Text(
-                    text = "+",
-                    style = CompanionType.Mono.copy(color = CompanionColor.Signal),
+                Box(
                     modifier = Modifier
-                        .testTag("chat.attach")
-                        .border(CompanionSpace.Hairline, CompanionColor.Signal)
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(CompanionColor.VoidElevated)
+                        .border(CompanionSpace.Hairline, CompanionColor.LineStrong, CircleShape)
                         .clickable(onClick = onToggleAttach)
-                        .padding(horizontal = 10.dp, vertical = 10.dp),
-                )
-                Spacer(Modifier.width(CompanionSpace.Sm))
+                        .testTag("chat.attach"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "+",
+                        style = CompanionType.Mono.copy(
+                            color = CompanionColor.Signal,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (slashOpen || draft.startsWith("/")) CompanionColor.Warn.copy(alpha = 0.2f)
+                            else CompanionColor.VoidElevated,
+                        )
+                        .border(
+                            CompanionSpace.Hairline,
+                            if (slashOpen || draft.startsWith("/")) CompanionColor.Warn else CompanionColor.LineStrong,
+                            CircleShape,
+                        )
+                        .clickable { slashOpen = !slashOpen }
+                        .testTag("chat.slash"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = "/",
+                        style = CompanionType.Mono.copy(
+                            color = if (slashOpen || draft.startsWith("/")) CompanionColor.Warn else CompanionColor.Signal,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                        ),
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
             }
             MarkdownComposer(
                 value = draft,
                 onValueChange = onDraftChange,
-                onSend = { if (!streaming || roomMode) onSend() },
+                onSend = { if (!submitting && !creatingThread) onSend() },
                 modifier = Modifier.weight(1f),
             )
             if (!roomMode) {
-            Spacer(Modifier.width(CompanionSpace.Sm))
-            Text(
-                text = if (isListeningVoice) "..." else "MIC",
-                style = CompanionType.MonoSmall.copy(
-                    color = if (isListeningVoice) CompanionColor.Warn else CompanionColor.Signal,
-                ),
-                maxLines = 1,
-                softWrap = false,
-                modifier = Modifier
-                    .testTag("chat.voice")
-                    .border(
-                        CompanionSpace.Hairline,
-                        if (isListeningVoice) CompanionColor.Warn else CompanionColor.LineStrong,
+                Spacer(Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier
+                        .height(40.dp)
+                        .clip(pillShape)
+                        .background(
+                            if (isListeningVoice) CompanionColor.Warn.copy(alpha = 0.2f)
+                            else CompanionColor.VoidElevated,
+                        )
+                        .border(
+                            CompanionSpace.Hairline,
+                            if (isListeningVoice) CompanionColor.Warn else CompanionColor.LineStrong,
+                            pillShape,
+                        )
+                        .clickable(onClick = onVoiceClick)
+                        .padding(horizontal = 10.dp)
+                        .testTag("chat.voice"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = if (isListeningVoice) "..." else "MIC",
+                        style = CompanionType.MonoSmall.copy(
+                            color = if (isListeningVoice) CompanionColor.Warn else CompanionColor.Signal,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                        maxLines = 1,
+                        softWrap = false,
                     )
-                    .clickable(onClick = onVoiceClick)
-                    .padding(horizontal = 10.dp, vertical = 10.dp),
-            )
+                }
             }
-            Spacer(Modifier.width(CompanionSpace.Sm))
-            val interrupting = streaming && !roomMode
-            val action = if (interrupting) "INTERRUPT" to onInterrupt else "SEND" to onSend
-            Text(
-                text = action.first,
-                style = CompanionType.MonoSmall.copy(
-                    color = if (interrupting) CompanionColor.Warn else CompanionColor.Signal,
-                ),
-                maxLines = 1,
-                softWrap = false,
+            Spacer(Modifier.width(6.dp))
+            val interrupting = streaming && !roomMode && draft.isBlank()
+            val action = when {
+                creatingThread -> "CREATING" to ({})
+                submitting -> "SENDING" to ({})
+                interrupting -> "INTERRUPT" to onInterrupt
+                streaming && !roomMode -> "STEER" to onSend
+                else -> "SEND" to onSend
+            }
+            val sendBg = if (interrupting) CompanionColor.Warn.copy(alpha = 0.2f) else CompanionColor.SignalDim
+            val sendBorder = if (interrupting) CompanionColor.Warn else CompanionColor.Signal
+            val sendFg = if (interrupting) CompanionColor.Warn else CompanionColor.Signal
+            Box(
                 modifier = Modifier
-                    .testTag("chat.send")
-                    .border(
-                        CompanionSpace.Hairline,
-                        if (interrupting) CompanionColor.Warn else CompanionColor.Signal,
-                    )
-                    .clickable(onClick = action.second)
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-            )
+                    .height(40.dp)
+                    .clip(pillShape)
+                    .background(sendBg)
+                    .border(CompanionSpace.Hairline, sendBorder, pillShape)
+                    .clickable(enabled = !submitting && !creatingThread, onClick = action.second)
+                    .padding(horizontal = 14.dp)
+                    .testTag("chat.send"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = action.first,
+                    style = CompanionType.MonoSmall.copy(
+                        color = sendFg,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
         }
     }
 }
@@ -553,13 +719,15 @@ private fun UserRow(
     onRewind: (ChatMessage) -> Unit,
     onFetchMedia: suspend (String) -> ByteArray?,
     onOpenMedia: (ChatBlock) -> Unit,
+    onRetryMessage: (String) -> Unit,
 ) {
+    val bubbleShape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 4.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("chat.user"),
     ) {
-        Spacer(Modifier.width(CompanionSpace.Xxl))
+        Spacer(Modifier.width(CompanionSpace.Xl))
         Column(
             modifier = Modifier.weight(1f),
             horizontalAlignment = Alignment.End,
@@ -567,33 +735,70 @@ private fun UserRow(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.padding(end = 2.dp, bottom = 3.dp),
+                modifier = Modifier.padding(end = 4.dp, bottom = 4.dp),
             ) {
-                if (message.queued) {
+                val delivery = when {
+                    message.delivery != MessageDelivery.NONE -> message.delivery
+                    message.queued -> MessageDelivery.QUEUED
+                    else -> MessageDelivery.SENT
+                }
+                val retryable = delivery == MessageDelivery.FAILED || delivery == MessageDelivery.UNCERTAIN
+                if (delivery != MessageDelivery.NONE) {
                     Text(
-                        text = "queued",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
-                        modifier = Modifier.testTag("chat.queued"),
+                        text = when (delivery) {
+                            MessageDelivery.UNCERTAIN -> "checking delivery"
+                            else -> delivery.name.lowercase()
+                        },
+                        style = CompanionType.MonoSmall.copy(color = if (delivery == MessageDelivery.SENT) CompanionColor.TextMute else CompanionColor.Warn),
+                        modifier = Modifier.testTag(if (message.queued) "chat.queued" else "chat.delivery.${delivery.name.lowercase()}"),
                     )
                 }
-                Text(
-                    text = "YOU",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                )
+                if (retryable) {
+                    Text(if (delivery == MessageDelivery.UNCERTAIN) "CHECK" else "RETRY", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                        modifier = Modifier.testTag("chat.retry.${message.id}").clickable { onRetryMessage(message.id) }.padding(4.dp))
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(CompanionColor.VoidElevated)
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        text = "YOU",
+                        style = CompanionType.MonoSmall.copy(
+                            color = CompanionColor.TextMute,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 10.sp,
+                        ),
+                    )
+                }
             }
             Column(
                 modifier = Modifier
-                    .clickable { onRewind(message) }
-                    .background(CompanionColor.VoidElevated)
+                    .clip(bubbleShape)
+                    .background(CompanionColor.BubbleUser)
                     .border(
                         CompanionSpace.Hairline,
-                        if (message.queued) CompanionColor.Warn else CompanionColor.LineStrong,
+                        if (message.queued) CompanionColor.Warn else CompanionColor.CardBorder,
+                        bubbleShape,
                     )
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .clickable { onRewind(message) }
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
             ) {
                 MessageBlocks(message, onFetchMedia, onOpenMedia)
             }
         }
+    }
+}
+
+@Composable
+private fun ReasoningRow(message: ChatMessage) {
+    var expanded by remember(message.id) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp).testTag("chat.reasoning")) {
+        Text(if (expanded) "▾ REASONING" else "▸ REASONING",
+            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+            modifier = Modifier.clickable { expanded = !expanded }.padding(vertical = 6.dp))
+        if (expanded) Text(message.text, style = CompanionType.Body.copy(color = CompanionColor.TextDim))
     }
 }
 
@@ -637,10 +842,13 @@ private fun AssistantRow(
     onOpenMedia: (ChatBlock) -> Unit,
     participants: List<RoomParticipant> = emptyList(),
     profiles: List<ProfileRef> = emptyList(),
+    onReadAloud: (ChatMessage) -> Unit,
+    readAloudMessageId: String?,
 ) {
     val label = Rooms.speakerLabel(message.speaker, participants, profiles)
     val railIndex = Rooms.speakerIndex(message.speaker, participants)
     val error = message.toolDetail.orEmpty().takeIf { message.speaker != null && message.text.isBlank() && !message.passed }.orEmpty()
+    val bubbleShape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -653,12 +861,50 @@ private fun AssistantRow(
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.padding(bottom = 3.dp),
+                modifier = Modifier.padding(bottom = 4.dp),
             ) {
+                if (message.speaker != null) {
+                    val glyph = Rooms.glyph(message.speaker)
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .border(CompanionSpace.Hairline, CompanionColor.SignalDim, RoundedCornerShape(4.dp))
+                            .background(CompanionColor.VoidElevated)
+                            .padding(horizontal = 5.dp, vertical = 2.dp),
+                    ) {
+                        Text(
+                            text = glyph,
+                            style = CompanionType.MonoSmall.copy(
+                                color = CompanionColor.Signal,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp,
+                            ),
+                        )
+                    }
+                }
                 Text(
                     text = label,
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                    style = CompanionType.MonoSmall.copy(
+                        color = CompanionColor.Signal,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
                 )
+                if (message.speaker != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(CompanionColor.VoidElevated)
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                    ) {
+                        Text(
+                            text = "AGENT",
+                            style = CompanionType.MonoSmall.copy(
+                                color = CompanionColor.TextDim,
+                                fontSize = 9.sp,
+                            ),
+                        )
+                    }
+                }
                 if (message.passed) {
                     Text(text = "passed", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute))
                 }
@@ -666,7 +912,15 @@ private fun AssistantRow(
                     Text(text = "summary", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal), modifier = Modifier.testTag("chat.summary"))
                 }
                 if (message.speaker != null && Rooms.mentionsOperator(message.text)) {
-                    Text(text = "@YOU", style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn), modifier = Modifier.testTag("chat.mention.you"))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(CompanionColor.Warn.copy(alpha = 0.2f))
+                            .border(CompanionSpace.Hairline, CompanionColor.Warn, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 5.dp, vertical = 2.dp),
+                    ) {
+                        Text(text = "@YOU", style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn, fontWeight = FontWeight.Bold), modifier = Modifier.testTag("chat.mention.you"))
+                    }
                 }
                 if (error.isNotBlank()) {
                     Text(
@@ -674,6 +928,12 @@ private fun AssistantRow(
                         style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
                         modifier = Modifier.testTag("chat.turn.error"),
                     )
+                }
+                if (!message.streaming && message.text.isNotBlank() && !message.passed) {
+                    Text(if (readAloudMessageId == message.id) "STOP AUDIO" else "READ ALOUD",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                        modifier = Modifier.testTag("chat.read.${message.id}")
+                            .clickable { onReadAloud(message) }.padding(6.dp))
                 }
                 if (message.streaming) {
                     LiveDot()
@@ -684,20 +944,29 @@ private fun AssistantRow(
                     )
                 }
             }
-            Row(verticalAlignment = Alignment.Bottom) {
-                MessageBlocks(
-                    message = message,
-                    onFetchMedia = onFetchMedia,
-                    onOpenMedia = onOpenMedia,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                if (message.streaming) {
-                    Spacer(Modifier.width(4.dp))
-                    SignalCursor(
-                        modifier = Modifier
-                            .padding(bottom = 3.dp)
-                            .testTag("chat.cursor"),
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(bubbleShape)
+                    .background(CompanionColor.BubbleAssistant)
+                    .border(CompanionSpace.Hairline, CompanionColor.CardBorder, bubbleShape)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+            ) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    MessageBlocks(
+                        message = message,
+                        onFetchMedia = onFetchMedia,
+                        onOpenMedia = onOpenMedia,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
+                    if (message.streaming) {
+                        Spacer(Modifier.width(4.dp))
+                        SignalCursor(
+                            modifier = Modifier
+                                .padding(bottom = 3.dp)
+                                .testTag("chat.cursor"),
+                        )
+                    }
                 }
             }
         }
@@ -720,6 +989,7 @@ private fun PendingRow(
         roomMode -> "ROOM"
         else -> "HERMES"
     }
+    val pillShape = RoundedCornerShape(12.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -730,11 +1000,16 @@ private fun PendingRow(
         Spacer(Modifier.width(AgentRailInset - 2.dp))
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .clip(pillShape)
+                .background(CompanionColor.VoidElevated)
+                .border(CompanionSpace.Hairline, CompanionColor.LineStrong, pillShape)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             Text(
                 text = speakerText,
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontWeight = FontWeight.Bold),
             )
             LiveDot()
             Text(
@@ -748,9 +1023,14 @@ private fun PendingRow(
 
 @Composable
 private fun RewindStrip(onCancel: () -> Unit) {
+    val stripShape = RoundedCornerShape(12.dp)
+    val btnShape = RoundedCornerShape(8.dp)
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
+            .clip(stripShape)
+            .border(CompanionSpace.Hairline, CompanionColor.Warn.copy(alpha = 0.4f), stripShape)
             .background(CompanionColor.VoidElevated)
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
             .testTag("chat.rewind"),
@@ -764,22 +1044,28 @@ private fun RewindStrip(onCancel: () -> Unit) {
         )
         Text(
             text = "CANCEL",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger),
+            style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger, fontWeight = FontWeight.Bold),
             modifier = Modifier
                 .testTag("chat.rewind.cancel")
-                .border(CompanionSpace.Hairline, CompanionColor.Danger)
+                .clip(btnShape)
+                .border(CompanionSpace.Hairline, CompanionColor.Danger, btnShape)
                 .clickable(onClick = onCancel)
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .padding(horizontal = 12.dp, vertical = 6.dp),
         )
     }
 }
 
 @Composable
-private fun ApprovalStrip(prompt: ApprovalPrompt, onApproval: (String) -> Unit) {
+private fun ApprovalStrip(prompt: ApprovalPrompt, onApproval: (String) -> Unit, busy: Boolean) {
     val kind = prompt.kind.uppercase()
+    val stripShape = RoundedCornerShape(12.dp)
+    val btnShape = RoundedCornerShape(8.dp)
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
+            .clip(stripShape)
+            .border(CompanionSpace.Hairline, CompanionColor.Warn.copy(alpha = 0.5f), stripShape)
             .background(CompanionColor.VoidElevated)
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
             .testTag("chat.approval"),
@@ -807,17 +1093,22 @@ private fun ApprovalStrip(prompt: ApprovalPrompt, onApproval: (String) -> Unit) 
                 }
                 val tag = if (deny) "chat.approval.deny" else "chat.approval.${choice.lowercase()}"
                 val color = if (deny) CompanionColor.Danger else CompanionColor.Signal
+                val bg = if (deny) CompanionColor.Danger.copy(alpha = 0.15f) else CompanionColor.SignalDim
                 Text(
                     text = label,
-                    style = CompanionType.MonoSmall.copy(color = color),
+                    style = CompanionType.MonoSmall.copy(color = color, fontWeight = FontWeight.Bold),
                     modifier = Modifier
                         .testTag(if (deny) "chat.approval.deny" else if (label == "ALLOW") "chat.approval.allow" else tag)
-                        .border(CompanionSpace.Hairline, color)
-                        .clickable { onApproval(choice) }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                        .clip(btnShape)
+                        .border(CompanionSpace.Hairline, color, btnShape)
+                        .background(bg)
+                        .clickable(enabled = !busy) { onApproval(choice) }
+                        .padding(horizontal = 14.dp, vertical = 7.dp),
                 )
             }
         }
+        if (busy) Text("Submitting response…", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+            modifier = Modifier.padding(top = CompanionSpace.Sm).testTag("chat.approval.submitting"))
     }
 }
 
@@ -836,17 +1127,25 @@ private fun ToolRow(
         if (body.isNotBlank() && body != name) body.take(80).replace('\n', ' ') else "completed"
     }
     val running = message.toolRunning
+    val clipboardManager = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    var inputCopied by remember { mutableStateOf(false) }
+    var outputCopied by remember { mutableStateOf(false) }
+    val cardShape = RoundedCornerShape(10.dp)
+    val codeShape = RoundedCornerShape(6.dp)
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(cardShape)
             .border(
                 CompanionSpace.Hairline,
-                if (expanded || running) CompanionColor.Signal else CompanionColor.Line,
+                if (running) CompanionColor.Warn else if (expanded) CompanionColor.Signal else CompanionColor.CardBorder,
+                cardShape,
             )
             .background(CompanionColor.VoidElevated)
             .clickable { expanded = !expanded }
-            .padding(horizontal = 10.dp, vertical = 8.dp)
+            .padding(horizontal = 12.dp, vertical = 10.dp)
             .testTag(if (running) "chat.tool.running" else "chat.tool"),
     ) {
         Row(
@@ -857,9 +1156,19 @@ private fun ToolRow(
             Row(
                 modifier = Modifier.weight(1f, fill = false),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                if (running) LiveDot()
+                if (running) {
+                    LiveDot()
+                } else {
+                    Text(
+                        text = "✓",
+                        style = CompanionType.MonoSmall.copy(
+                            color = CompanionColor.Signal,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                    )
+                }
                 Text(
                     text = name,
                     style = CompanionType.MonoSmall.copy(
@@ -890,17 +1199,41 @@ private fun ToolRow(
         if (expanded) {
             if (detail.isNotBlank()) {
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "INPUT / ARGS",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontSize = 9.sp),
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "INPUT / ARGS",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontSize = 9.sp),
+                    )
+                    Text(
+                        text = if (inputCopied) "COPIED ✓" else "COPY",
+                        style = CompanionType.MonoSmall.copy(
+                            color = if (inputCopied) CompanionColor.Signal else CompanionColor.TextDim,
+                            fontSize = 9.sp,
+                        ),
+                        modifier = Modifier
+                            .clickable {
+                                clipboardManager.setText(AnnotatedString(detail))
+                                inputCopied = true
+                                scope.launch {
+                                    delay(1800)
+                                    inputCopied = false
+                                }
+                            }
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                    )
+                }
                 Spacer(Modifier.height(2.dp))
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(CompanionSpace.Hairline, CompanionColor.Line)
+                        .clip(codeShape)
+                        .border(CompanionSpace.Hairline, CompanionColor.Line, codeShape)
                         .background(CompanionColor.Void)
-                        .padding(8.dp),
+                        .padding(10.dp),
                 ) {
                     Text(
                         text = detail,
@@ -911,17 +1244,41 @@ private fun ToolRow(
 
             if (body.isNotBlank() && body != detail) {
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "OUTPUT",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontSize = 9.sp),
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "OUTPUT",
+                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontSize = 9.sp),
+                    )
+                    Text(
+                        text = if (outputCopied) "COPIED ✓" else "COPY",
+                        style = CompanionType.MonoSmall.copy(
+                            color = if (outputCopied) CompanionColor.Signal else CompanionColor.TextDim,
+                            fontSize = 9.sp,
+                        ),
+                        modifier = Modifier
+                            .clickable {
+                                clipboardManager.setText(AnnotatedString(body))
+                                outputCopied = true
+                                scope.launch {
+                                    delay(1800)
+                                    outputCopied = false
+                                }
+                            }
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                    )
+                }
                 Spacer(Modifier.height(2.dp))
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(CompanionSpace.Hairline, CompanionColor.Line)
+                        .clip(codeShape)
+                        .border(CompanionSpace.Hairline, CompanionColor.Line, codeShape)
                         .background(CompanionColor.Void)
-                        .padding(8.dp),
+                        .padding(10.dp),
                 ) {
                     Text(
                         text = body,

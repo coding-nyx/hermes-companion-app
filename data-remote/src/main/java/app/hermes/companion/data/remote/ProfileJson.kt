@@ -161,6 +161,7 @@ internal fun parseSessions(body: String): List<SessionRef> {
                 messageCount = obj.int("message_count").takeIf { it > 0 } ?: obj.int("messages"),
                 source = obj.str("source").ifBlank { obj.str("platform") },
                 archived = obj.archivedFlag(),
+                pinned = obj.bool("pinned"),
             )
         }
     }
@@ -242,6 +243,7 @@ internal fun parseMessages(body: String): List<ChatMessage> {
     }
     return arr.mapIndexedNotNull { index, el ->
         val obj = el as? JsonObject ?: return@mapIndexedNotNull null
+        if (obj.str("display_kind") == "hidden" || obj.str("role").lowercase() in setOf("system", "developer")) return@mapIndexedNotNull null
         val role = when (obj.str("role").lowercase()) {
             "user" -> MessageRole.USER
             "tool" -> MessageRole.TOOL
@@ -347,6 +349,7 @@ internal fun parseSessionChange(payload: JsonObject, fallbackProfile: String): S
     val updated = payload.updatedEpochMs().takeIf { it > 0L } ?: created
     val op = payload.str("op").ifBlank { payload.str("action") }.ifBlank { "upsert" }
     return SessionChange(
+        fields = payload.keys,
         op = op,
         session = SessionRef(
             id = id,
@@ -379,12 +382,13 @@ internal fun parseRpcSession(result: JsonObject, fallbackProfile: String): Sessi
     val info = result["info"] as? JsonObject
     val profile = result.str("profile").ifBlank { result.str("profile_id") }
         .ifBlank { info.str("profile_name") }.ifBlank { fallbackProfile }
+    val createdAt = result.createdEpochMs().takeIf { it > 0 } ?: System.currentTimeMillis()
     return SessionRef(
         id = stored,
         profileId = profile,
         title = result.str("title").ifBlank { "new thread" },
-        updatedAtEpochMs = result.updatedEpochMs().takeIf { it > 0L } ?: result.createdEpochMs(),
-        createdAtEpochMs = result.createdEpochMs(),
+        updatedAtEpochMs = result.updatedEpochMs().takeIf { it > 0L } ?: createdAt,
+        createdAtEpochMs = createdAt,
         unread = false,
         source = result.str("source"),
     )

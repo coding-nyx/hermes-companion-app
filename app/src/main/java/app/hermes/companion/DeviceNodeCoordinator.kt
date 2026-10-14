@@ -29,6 +29,8 @@ import app.hermes.companion.domain.DeviceAuditRow
 import app.hermes.companion.domain.DeviceGestures
 import app.hermes.companion.domain.JsonText
 import app.hermes.companion.domain.DeviceLanePolicy
+import app.hermes.companion.domain.JsonArgs
+import app.hermes.companion.domain.OriginPolicy
 import app.hermes.companion.domain.PairingPolicy
 import app.hermes.companion.domain.SwipeSpec
 import app.hermes.companion.model.DeviceArm
@@ -221,6 +223,9 @@ class DeviceNodeCoordinator(
     }
 
     fun setA11yBound(bound: Boolean) {
+        if (!bound && !CompanionAccessibilityService.bound && sticky.keepA11yOn) {
+            CompanionAccessibilityService.ensureEnabled(app)
+        }
         val on = bound || CompanionAccessibilityService.bound
         // Losing accessibility downgrades the session to the L0 lane; it does not end it.
         // Disarming here would take the direct-API tools down with the a11y tree, which is
@@ -495,6 +500,82 @@ class DeviceNodeCoordinator(
                 throw e
             } catch (e: Exception) {
                 _state.update { it.copy(pairingPhase = PairingPhase.IDLE, pairingCode = "") }
+                _errors.tryEmit(e.message ?: "pair failed")
+            }
+        }
+    }
+
+    fun pairWithCode(targetOrigin: String, targetCode: String, profile: String = "default") {
+        val cleanOrigin = targetOrigin.trim().trimEnd('/')
+        val cleanCode = targetCode.trim().uppercase()
+        if (cleanOrigin.isBlank() || cleanCode.isBlank()) return
+        if (!OriginPolicy.cleartextAllowed(cleanOrigin)) {
+            _errors.tryEmit(OriginPolicy.CLEARTEXT_DENIED)
+            return
+        }
+        // A failed link pair must not leave the node pointed at a host it never paired with.
+        val previousOrigin = this.origin
+        this.origin = cleanOrigin
+        pairJob?.cancel()
+        pairJob = scope.launch {
+            val started = System.currentTimeMillis()
+            _state.update {
+                it.copy(
+                    pairingPhase = PairingPhase.WAITING,
+                    pairingCode = cleanCode,
+                    deviceProfileId = profile,
+                )
+            }
+            try {
+                // `hermes companion qr` issues the code on the host (pending, or approved without
+                // --no-approve). Offer only a code the host doesn't know: re-offering a pending one
+                // is code_in_use.
+                var status = runCatching { client(cleanOrigin).pollPair(cleanOrigin, cleanCode) }.getOrNull()
+                if (status == null) {
+                    status = client(cleanOrigin).offerPair(cleanOrigin, cleanCode, profile)
+                }
+                if (!status.approved) {
+                    val auto = runCatching { client(cleanOrigin).approvePair(cleanOrigin, cleanCode) }.getOrNull()
+                    if (auto != null && auto.approved) {
+                        status = auto
+                    }
+                }
+                while (isActive) {
+                    if (status != null && status.approved) {
+                        deviceCreds.save(
+                            DeviceCred(
+                                deviceId = status.deviceId,
+                                profileId = status.profileId.ifBlank { profile },
+                                credential = status.credential,
+                                origin = cleanOrigin,
+                            ),
+                        )
+                        _state.update {
+                            it.copy(
+                                pairingPhase = PairingPhase.PAIRED,
+                                pairingCode = "",
+                                deviceId = status.deviceId,
+                                deviceProfileId = status.profileId.ifBlank { profile },
+                                pairedHosts = deviceCreds.loadAll().map { c -> c.origin },
+                            )
+                        }
+                        startLane(cleanOrigin)
+                        return@launch
+                    }
+                    if (PairingPolicy.expired(started)) {
+                        _state.update { it.copy(pairingPhase = PairingPhase.IDLE, pairingCode = "") }
+                        if (this@DeviceNodeCoordinator.origin == cleanOrigin) this@DeviceNodeCoordinator.origin = previousOrigin
+                        _errors.tryEmit("code expired")
+                        return@launch
+                    }
+                    delay(PairingPolicy.POLL_MS)
+                    status = runCatching { client(cleanOrigin).pollPair(cleanOrigin, cleanCode) }.getOrNull() ?: status
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(pairingPhase = PairingPhase.IDLE, pairingCode = "") }
+                if (this@DeviceNodeCoordinator.origin == cleanOrigin) this@DeviceNodeCoordinator.origin = previousOrigin
                 _errors.tryEmit(e.message ?: "pair failed")
             }
         }
@@ -865,7 +946,7 @@ class DeviceNodeCoordinator(
                 DeviceLanePolicy.ok(command.commandId, """{"apps":[$rows]}""")
             }
             "device.wait" -> {
-                val ms = DeviceGestures.waitMs(jsonNumber(args, "ms")?.toLong() ?: 0L)
+                val ms = DeviceGestures.waitMs(jsonLong(args, "ms") ?: 0L)
                 delay(ms)
                 DeviceLanePolicy.ok(command.commandId, """{"ms":$ms}""")
             }
@@ -890,7 +971,7 @@ class DeviceNodeCoordinator(
                 DeviceLanePolicy.ok(command.commandId, """{"armed":false}""")
             }
             "device.screenshot" -> {
-                val maxEdge = (jsonNumber(args, "max_edge")?.toInt() ?: DeviceGestures.SCREENSHOT_MAX_PX)
+                val maxEdge = (jsonLong(args, "max_edge")?.toInt() ?: DeviceGestures.SCREENSHOT_MAX_PX)
                     .coerceIn(64, DeviceGestures.SCREENSHOT_MAX_PX)
                 val shot = service?.screenshotPng(maxEdge)
                     ?: return DeviceLanePolicy.fail(command.commandId, "timeout", "screenshot failed")
@@ -917,8 +998,8 @@ class DeviceNodeCoordinator(
             }
             "device.audio.volume.set" -> {
                 val stream = jsonField(args, "stream").orEmpty()
-                val level = jsonNumber(args, "level")?.toInt()
-                val step = jsonNumber(args, "step")?.toInt()
+                val level = jsonLong(args, "level")?.toInt()
+                val step = jsonLong(args, "step")?.toInt()
                 if (stream.isBlank()) {
                     return DeviceLanePolicy.fail(command.commandId, "missing_stream", "stream required")
                 }
@@ -999,7 +1080,7 @@ class DeviceNodeCoordinator(
                         "session_id and action required",
                     )
                 }
-                val pos = jsonNumber(args, "position_ms")?.toLong()
+                val pos = jsonLong(args, "position_ms")
                 val out = DirectToolbox.mediaControl(app, handle, action, pos)
                 val ok = (out["ok"] as? Boolean) ?: false
                 if (!ok) {
@@ -1087,7 +1168,7 @@ class DeviceNodeCoordinator(
                 // One shape for the three provider reads: run off the main thread, render rows,
                 // and turn a missing grant into a named permission_denied rather than an empty
                 // list an agent would read as "you have no messages".
-                val limit = jsonNumber(args, "limit")?.toInt() ?: 20
+                val limit = jsonLong(args, "limit")?.toInt() ?: 20
                 runCatching {
                     when (command.action) {
                         "device.sms.list" -> "messages" to TelephonyToolbox.smsList(
@@ -1095,14 +1176,14 @@ class DeviceNodeCoordinator(
                             limit = limit,
                             address = jsonField(args, "address"),
                             query = jsonField(args, "query"),
-                            sinceMs = jsonNumber(args, "since_ms")?.toLong(),
+                            sinceMs = jsonLong(args, "since_ms"),
                             box = jsonField(args, "box"),
                         )
                         "device.calls.log" -> "calls" to TelephonyToolbox.callLog(
                             app,
                             limit = limit,
                             type = jsonField(args, "type"),
-                            sinceMs = jsonNumber(args, "since_ms")?.toLong(),
+                            sinceMs = jsonLong(args, "since_ms"),
                         )
                         else -> "contacts" to TelephonyToolbox.contactsSearch(
                             app,
@@ -1130,9 +1211,7 @@ class DeviceNodeCoordinator(
             "device.alarm.set", "device.timer.set", "device.media.play_search",
             "device.calendar.add", "device.share", "device.settings.open",
             "device.apps.uninstall" -> {
-                val typed = IntentToolbox.Args { key -> jsonField(args, key) ?: jsonNumber(args, key)?.let { n ->
-                    if (n == n.toLong().toFloat()) n.toLong().toString() else n.toString()
-                } }
+                val typed = IntentToolbox.Args { key -> jsonField(args, key) ?: JsonArgs.numberArg(args, key) }
                 runCatching { IntentToolbox.launchTask(app, command.action, typed) }.fold(
                     onSuccess = { info -> DeviceLanePolicy.ok(command.commandId, jsonObject(info)) },
                     onFailure = { t ->
@@ -1152,14 +1231,14 @@ class DeviceNodeCoordinator(
                     when (command.action) {
                         "device.calendar.list" -> "events" to SystemToolbox.calendarList(
                             app,
-                            fromMs = jsonNumber(args, "from_ms")?.toLong(),
-                            toMs = jsonNumber(args, "to_ms")?.toLong(),
-                            limit = jsonNumber(args, "limit")?.toInt() ?: 20,
+                            fromMs = jsonLong(args, "from_ms"),
+                            toMs = jsonLong(args, "to_ms"),
+                            limit = jsonLong(args, "limit")?.toInt() ?: 20,
                         )
                         "device.apps.usage" -> "apps" to SystemToolbox.appUsage(
                             app,
-                            sinceMs = jsonNumber(args, "since_ms")?.toLong(),
-                            limit = jsonNumber(args, "limit")?.toInt() ?: 20,
+                            sinceMs = jsonLong(args, "since_ms"),
+                            limit = jsonLong(args, "limit")?.toInt() ?: 20,
                         )
                         "device.location.last" -> null to SystemToolbox.locationLast(app)
                         "device.battery" -> null to SystemToolbox.battery(app)
@@ -1204,7 +1283,7 @@ class DeviceNodeCoordinator(
                         queue = jsonBool(args, "queue") ?: false,
                         rate = jsonNumber(args, "rate"),
                         pitch = jsonNumber(args, "pitch"),
-                        waitMs = jsonNumber(args, "wait_ms")?.toLong() ?: 0L,
+                        waitMs = jsonLong(args, "wait_ms") ?: 0L,
                     )
                 }.fold(
                     onSuccess = { info -> DeviceLanePolicy.ok(command.commandId, jsonObject(info)) },
@@ -1294,7 +1373,7 @@ class DeviceNodeCoordinator(
             }
             "device.notifications.action" -> {
                 val key = jsonField(args, "key").orEmpty()
-                val index = jsonNumber(args, "index")?.toInt()
+                val index = jsonLong(args, "index")?.toInt()
                 if (key.isBlank() || index == null) {
                     return DeviceLanePolicy.fail(
                         command.commandId,
@@ -1363,7 +1442,7 @@ class DeviceNodeCoordinator(
             }
             "device.notifications.snooze" -> {
                 val key = jsonField(args, "key").orEmpty()
-                val ms = jsonNumber(args, "duration_ms")?.toLong()
+                val ms = jsonLong(args, "duration_ms")
                 if (key.isBlank() || ms == null) {
                     return DeviceLanePolicy.fail(
                         command.commandId,
@@ -1399,18 +1478,21 @@ class DeviceNodeCoordinator(
                         "pass enabled=true|false and/or origin=… and/or profile=…",
                     )
                 }
+                // Validate before touching anything: a rejected call must not have moved the target.
+                if (hasEnabled && enabledParsed == null) {
+                    return DeviceLanePolicy.fail(
+                        command.commandId,
+                        "invalid_enabled",
+                        "enabled must be one of true/false",
+                    )
+                }
                 // Setting the target first means setNotifStreamEnabled(…) later sees the
                 // new target when it reconfigures the bus.
                 if (originRaw != null || profileRaw != null) {
                     setNotifStreamTarget(originRaw, profileRaw, deferLaneRefresh = true)
                 }
-                if (hasEnabled) {
-                    val parsed = enabledParsed ?: return DeviceLanePolicy.fail(
-                        command.commandId,
-                        "invalid_enabled",
-                        "enabled must be one of true/false",
-                    )
-                    setNotifStreamEnabled(parsed, deferLaneRefresh = true)
+                if (enabledParsed != null) {
+                    setNotifStreamEnabled(enabledParsed, deferLaneRefresh = true)
                 }
                 val target = sticky.notifStreamTargetOrigin()
                 val profile = target?.let { sticky.notifStreamProfileFor(it) }
@@ -1465,10 +1547,7 @@ class DeviceNodeCoordinator(
         _state.update { it.copy(lastAudit = line, foregroundApp = CompanionAccessibilityService.foregroundApp) }
     }
 
-    private fun jsonField(raw: String, key: String): String? {
-        val match = Regex("\"${Regex.escape(key)}\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"").find(raw)
-        return match?.groupValues?.getOrNull(1)?.replace("\\\"", "\"")?.replace("\\\\", "\\")
-    }
+    private fun jsonField(raw: String, key: String): String? = JsonArgs.string(raw, key)
 
     /**
      * Read a boolean argument.
@@ -1487,10 +1566,10 @@ class DeviceNodeCoordinator(
         }
     }
 
-    private fun jsonNumber(raw: String, key: String): Float? {
-        val match = Regex("\"${Regex.escape(key)}\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)").find(raw)
-        return match?.groupValues?.getOrNull(1)?.toFloatOrNull()
-    }
+    /** Pixel coordinates / TTS rate: Float precision is plenty. Timestamps and counts use [jsonLong]. */
+    private fun jsonNumber(raw: String, key: String): Float? = JsonArgs.double(raw, key)?.toFloat()
+
+    private fun jsonLong(raw: String, key: String): Long? = JsonArgs.long(raw, key)
 
     private fun jsonXy(raw: String): Pair<Float, Float>? {
         val match = Regex("\"xy\"\\s*:\\s*\\[\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)").find(raw)

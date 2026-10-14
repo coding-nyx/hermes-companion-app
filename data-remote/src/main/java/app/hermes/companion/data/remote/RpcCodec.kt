@@ -79,7 +79,10 @@ internal object RpcCodec {
                     payload?.get("duration_ms")?.jsonPrimitive?.longOrNull ?: 0L,
                 )
             type == "message.delta" || type == "assistant.delta" || type == "token" ->
-                if (text.isBlank()) null else ChatEvent.AssistantDelta(text)
+                if (text.isEmpty()) null else ChatEvent.AssistantDelta(text)
+            type == "reasoning.delta" || type == "message.reasoning.delta" || type == "message.reasoning" ->
+                if (text.isEmpty()) null else ChatEvent.ReasoningDelta(text)
+            type == "message.interim" -> if (text.isEmpty()) null else ChatEvent.Interim(text)
             type.endsWith(".expire") || type.endsWith(".expired") -> {
                 val id = payload.str("request_id").ifBlank { payload.str("id") }
                 if (id.isBlank()) null else ChatEvent.PromptExpired(id)
@@ -98,7 +101,15 @@ internal object RpcCodec {
             }
             type == "message.complete" || type == "run.completed" || type == "done" ||
                 type.endsWith(".complete") && type.startsWith("message") ->
-                ChatEvent.Completed
+                if (payload.isNullOrEmpty()) ChatEvent.Completed else ChatEvent.Final(
+                    text = text.ifBlank { payload.str("rendered") },
+                    status = payload.str("status").ifBlank { "complete" },
+                    error = payload.str("error").ifBlank { payload.str("failure_reason") },
+                    reused = payload?.get("response_reused")?.jsonPrimitive?.booleanOrNull == true ||
+                        payload?.get("response_previewed")?.jsonPrimitive?.booleanOrNull == true,
+                )
+            type == "error" -> ChatEvent.Final(status = "error", error = payload.str("message").ifBlank { "Hermes reported an error" })
+            type == "message.interrupted" || type == "session.interrupted" -> ChatEvent.Final(status = "interrupted")
             else -> null
         }
     }
@@ -149,19 +160,7 @@ internal object RpcCodec {
     }
 
     private fun JsonObject?.str(key: String): String =
-        this?.get(key)?.jsonPrimitive?.contentOrNull.orEmpty()
+        (this?.get(key) as? JsonPrimitive)?.contentOrNull.orEmpty()
 
-    private fun String.jsonQuote(): String = buildString {
-        append('"')
-        for (ch in this@jsonQuote) {
-            when (ch) {
-                '\\' -> append("\\\\")
-                '"' -> append("\\\"")
-                '\n' -> append("\\n")
-                '\r' -> append("\\r")
-                else -> append(ch)
-            }
-        }
-        append('"')
-    }
+    private fun String.jsonQuote(): String = JsonPrimitive(this).toString()
 }

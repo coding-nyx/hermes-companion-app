@@ -169,7 +169,7 @@ object ChatContent {
                 '"' -> append("\\\"")
                 '\n' -> append("\\n")
                 '\r' -> append("\\r")
-                else -> append(ch)
+                else -> if (ch.code < 0x20) append("\\u%04x".format(ch.code)) else append(ch)
             }
         }
         append('"')

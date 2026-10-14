@@ -1,6 +1,7 @@
 package app.hermes.companion.domain
 
 import app.hermes.companion.model.SessionRef
+import app.hermes.companion.model.SessionChange
 
 /** Operator-chosen rail order. Persisted per phone; [CREATED] is the default. */
 enum class ThreadSort(val label: String) {
@@ -68,7 +69,7 @@ object SessionLists {
         val newestFirst = compareByDescending<SessionRef> { createdKey(it) }
             .thenByDescending { activeKey(it) }
             .thenByDescending { it.id }
-        return when (sort) {
+        val ordered = when (sort) {
             ThreadSort.CREATED -> newestFirst
             ThreadSort.ACTIVE -> compareByDescending<SessionRef> { activeKey(it) }
                 .thenByDescending { createdKey(it) }
@@ -76,6 +77,7 @@ object SessionLists {
             ThreadSort.TITLE -> compareBy<SessionRef> { it.title.trim().lowercase() }
                 .then(newestFirst)
         }
+        return compareByDescending<SessionRef> { it.pinned }.then(ordered)
     }
 
     /**
@@ -106,10 +108,23 @@ object SessionLists {
             source = patch.source.ifBlank { existing.source },
             // Archive is a host decision; a newer full row may un-archive, a stale one never re-archives.
             archived = if (patch.updatedAtEpochMs > existing.updatedAtEpochMs) patch.archived else existing.archived || patch.archived,
+            pinned = patch.pinned || existing.pinned,
         )
     }
 
     const val SOURCE_TELEGRAM = "telegram"
+
+    /** Missing flags in a sparse event are not false; explicit unpin/unarchive must also work. */
+    fun mergeChange(existing: SessionRef, change: SessionChange): SessionRef {
+        val merged = merge(existing, change.session)
+        val fields = change.fields ?: return merged
+        return merged.copy(
+            pinned = if ("pinned" in fields) change.session.pinned else existing.pinned,
+            archived = if ("archived" in fields || "archived_at" in fields) change.session.archived else existing.archived,
+            unread = if ("unread" in fields || "unread_count" in fields) change.session.unread else existing.unread,
+            ended = if (fields.any { it in setOf("ended", "ended_at", "end_reason", "status", "state") }) change.session.ended else existing.ended,
+        )
+    }
 
     /** Rows whose host `source` equals [source] (case-insensitive). Blank keeps everything. */
     fun bySource(sessions: List<SessionRef>, source: String): List<SessionRef> {
