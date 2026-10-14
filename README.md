@@ -1,120 +1,86 @@
+<p align="center">
+  <img src="docs/assets/readme-overview.svg" alt="Hermes Companion — Your self-hosted agent, on Android." width="100%" />
+</p>
+
 # Hermes Companion
 
-Native Android app for a self-hosted [Hermes Agent](https://hermes-agent.nousresearch.com). Hermes stays on your computer. The phone is a window — and, when you arm it, a pair of hands.
+A native Android companion for a self-hosted [Hermes Agent](https://hermes-agent.nousresearch.com/). Browse threads, chat with profiles, use agent rooms and explicitly arm supported phone-control tools. The agent runs on your host; this app is its mobile interface.
+
+[Setup](#setup) · [Build](#build-from-source) · [Protocol docs](#documentation) · [Related projects](#related-projects)
+
+## What it includes
+
+| Area          | Features                                                   |
+| ------------- | ---------------------------------------------------------- |
+| Conversations | Threads, profiles, streamed chat and coding-agent sessions |
+| Rooms         | Multi-profile conversations, mentions and interruption     |
+| Pairing       | Host approval of a device pairing code                     |
+| Device tools  | Status, snapshots and gestures when armed and permitted    |
+| Notifications | Optional notification stream with configurable routing     |
+
+This repository includes its own `hermes-plugin/` relay. It is distinct from the older archived `hermes-companion` prototype and the separate mailbox-oriented web/plugin projects.
 
 ## Setup
 
-You need: Hermes already running on a Mac/Linux box, an Android 12+ phone, and both on the same Tailscale (or LAN).
+You need Android **12+**, a running Hermes host and a reachable host address over your intended LAN or private network.
 
-### 1. Computer — install the plugin
+1. Inspect and install the bundled relay on the Hermes host:
 
-From this repo:
+   ```sh
+   ./hermes-plugin/install.sh
+   ```
 
-```bash
-./hermes-plugin/install.sh
-# or: hermes plugins install coding-nyx/hermes-companion-app/hermes-plugin
-#     hermes plugins enable hermes-companion
+2. Start a new Hermes session or restart its configured gateway/relay. The companion relay uses port **9120**; use its origin in the app, rather than the dashboard's port. Keep the service behind your intended private network.
+3. Install an APK from [Releases](https://github.com/coding-nyx/hermes-companion-app/releases), when available, or build it below. Enter the relay origin in the app. `127.0.0.1` on a phone means the phone itself.
+4. On the phone, open **Device → Pair**. Approve the displayed device code on the host:
+
+   ```sh
+   hermes companion approve <PAIRING_CODE>
+   ```
+
+5. Chat through Threads/Chat. Device control is optional: grant the required Android accessibility/overlay/notification permissions, then explicitly **Arm** it. Use **Disarm** to stop control. Review Device-tab protection rules; do not assume a built-in protected-app list.
+
+See the [operator protocol](docs/protocol/operator.md) and [mobile-control protocol](docs/protocol/mobile-control.md) for the host/device contract.
+
+## Build from source
+
+Use JDK **17**, an Android SDK with API **35**, and the checked-in Gradle wrapper. Dependencies and versions are pinned in `gradle/libs.versions.toml`.
+
+```sh
+./gradlew :app:assembleDebug
+./gradlew :app:testDebugUnitTest
+./gradlew :app:assembleRelease
 ```
 
-That copies the plugin into `~/.hermes/plugins/hermes-companion` and enables it.
+The release APK is under `app/build/outputs/apk/release/`. Without a configured release keystore, the build falls back to the debug signing key and warns; that is a sideload/testing artifact, not evidence of a production-signed release.
 
-Start a **new** Hermes session (or restart the dashboard). The plugin opens **port 9120** so the phone can reach Hermes.
+Provide signing values through `HERMES_KEYSTORE_PATH`, `HERMES_KEYSTORE_PASSWORD`, `HERMES_KEY_ALIAS` and `HERMES_KEY_PASSWORD`, or an ignored `keystore.properties` file. Never commit a signing key or password.
 
-Find the address the phone should use:
+## Architecture
 
-```bash
-tailscale ip -4        # preferred
-# or: hostname -I      # LAN
+```mermaid
+flowchart LR
+  Phone[Android app] --> Relay[Bundled companion relay]
+  Relay --> Hermes[Hermes profiles and sessions]
+  Relay --> Rooms[Agent rooms]
+  Relay --> Device[Paired and armed device tools]
 ```
 
-### 2. Phone — install the app
+Feature modules cover connect, threads, chat, profiles, gateway and device UI. Shared modules own models, design, domain and local/remote data. See `settings.gradle.kts` for the module list.
 
-- **Release:** sideload `HermesCompanion-*.apk` from [Releases](https://github.com/coding-nyx/hermes-companion-app/releases).
-- **From source:** `./gradlew :app:assembleRelease` → `app/build/outputs/apk/release/app-release.apk` (R8-minified). It is debug-signed unless you provide a key via `HERMES_KEYSTORE_PATH` / `HERMES_KEYSTORE_PASSWORD` / `HERMES_KEY_ALIAS` / `HERMES_KEY_PASSWORD` env vars or a gitignored `keystore.properties` (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`) at the repo root.
+## Documentation
 
-Allow unknown sources, install, open the app.
+- [Plugin implementation and setup](hermes-plugin/README.md)
+- [Product plan](docs/PLAN.md)
+- [Operator protocol](docs/protocol/operator.md)
+- [Mobile control](docs/protocol/mobile-control.md)
+- [Rooms](docs/protocol/rooms.md)
+- [Agent sessions](docs/protocol/agent-sessions.md)
+- [Contributor/agent conventions](AGENTS.md)
 
-Origin (not dashboard `:9119`):
+## Related projects
 
-```
-http://<that-ip>:9120
-```
+- [Archived Android prototype](https://github.com/coding-nyx/hermes-companion) — historical work.
+- [Web companion](https://github.com/coding-nyx/hermes-companion-web) and [platform plugin](https://github.com/coding-nyx/hermes-companion-plugin) — a separate mailbox/node implementation; pairing protocols and ports are not interchangeable.
 
-Tap **CONNECT**. Threads and chat should load.
-
-If the origin is empty or `127.0.0.1`, the app warns you — that address is the phone itself.
-
-### 3. Pair once
-
-1. Phone → **Device** → **PAIR**. A 6-character code appears.
-2. On the computer:
-
-```bash
-hermes companion approve ABC123
-```
-
-Phone shows **PAIRED**. This is stored on the host (`~/.hermes/companion-devices.json`). You do not pair again after a restart.
-
-### 4. Chat
-
-Use Threads / Chat like the desktop. Same profiles, same sessions.
-
-### 5. Hands (optional)
-
-Only if you want Hermes to tap the phone:
-
-1. **Accessibility** → Installed apps → Hermes Companion (Samsung: Installed apps, not the top-level list).
-2. Allow **overlay** and **notifications** when the app asks.
-3. Device tab → **ARM**. Overlay: `HERMES HAS HANDS`.
-
-In a Hermes chat: `mobile_status` → `mobile_arm` → `mobile_snapshot` → tap/type → `mobile_disarm`.
-
-Stop anytime: notification **DISARM**, Device **DISARM**, double volume-down, or `mobile_disarm`.
-
-### 6. Rooms (optional)
-
-A **room** puts two or more profiles in one thread with you. Each agent keeps its own memory, tools and model; the host runs their turns and streams them to the phone.
-
-1. Threads → **NEW ROOM** → pick profiles → **CREATE**. Rooms need a **paired** phone (step 3) and the relay in proxy mode (`HERMES_COMPANION_STANDALONE=0`, the systemd default).
-2. Post like a normal message. Every participant answers once; `@COD` / `@OPS` chips address one agent. Agents can hand off with `@GLYPH` or stay silent with `PASS`; the round cap (1–4) stops the chatter.
-3. **INTERRUPT ALL** stops every in-flight turn.
-
-Same from the host: `hermes companion room create "triage" coder ops` then `hermes companion room post <id> …`. Protocol: [docs/protocol/rooms.md](docs/protocol/rooms.md).
-
-## Everyday commands
-
-```bash
-hermes companion list
-hermes companion approve CODE
-hermes companion revoke DEVICE_ID
-hermes companion lanes
-hermes companion room list|create|post|history|interrupt|delete
-```
-
-In chat: `mobile_status` `mobile_arm` `mobile_disarm` `mobile_snapshot` `mobile_click` `mobile_type` `mobile_swipe` `mobile_scroll` `mobile_press` `mobile_open_app` `mobile_apps` `mobile_wait` `mobile_screenshot`.
-
-## If something fails
-
-| Symptom | Fix |
-|---|---|
-| Connect times out | Origin must be `:9120` on the Hermes host, not `:9119`. Plugin session must be running. |
-| `127.0.0.1` / localhost | That's the phone. Use Tailscale/LAN IP. |
-| PAIR does nothing / WAITING forever | Plugin not loaded. New Hermes session, then `hermes companion approve`. |
-| `hermes companion` unknown | Plugin CLI loads on the next session after `install.sh`. |
-| ARM disabled | Accessibility + notifications must be on. Hermes cannot grant Accessibility. |
-| Gestures say `disarmed` | `mobile_arm` or Device **ARM**. |
-| Gestures say `protected_package` | Banking / authenticator / Settings / System UI are blocked. |
-
-## Docs
-
-| Doc | What |
-|---|---|
-| [hermes-plugin/README.md](hermes-plugin/README.md) | Plugin internals, relay, tests |
-| [docs/PLAN.md](docs/PLAN.md) | Vision and slices |
-| [docs/protocol/operator.md](docs/protocol/operator.md) | Dashboard JSON-RPC |
-| [docs/protocol/mobile-control.md](docs/protocol/mobile-control.md) | Device-node frames |
-| [docs/protocol/rooms.md](docs/protocol/rooms.md) | Agent rooms (group chat) routes, events, turn policy |
-
-minSdk 31. Sideload only (not Play Store). Tag `v*` publishes the APK via GitHub Actions (set repo secrets `HERMES_KEYSTORE_B64`, `HERMES_KEYSTORE_PASSWORD`, `HERMES_KEY_ALIAS`, `HERMES_KEY_PASSWORD` for a release-signed build).
-
-`http://` origins are accepted only for LAN / Tailscale hosts (loopback, RFC 1918, `100.64.0.0/10`, `.local`, `.ts.net`, …). A public host must use `https://`.
+No top-level project license file is present. This README describes source behavior; it does not certify a connected host, current release signing or hardware permissions.
