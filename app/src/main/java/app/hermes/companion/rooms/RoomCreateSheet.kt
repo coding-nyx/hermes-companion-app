@@ -1,5 +1,8 @@
 package app.hermes.companion.rooms
 
+import app.hermes.companion.design.*
+
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -107,21 +110,22 @@ fun RoomCreateSheet(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Lg)
                 .testTag("room.create"),
-            verticalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
+            verticalArrangement = Arrangement.spacedBy(32.dp),
         ) {
-            Text(text = "NEW ROOM", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
+            SheetHeading("New agent room", onDismiss)
             Text(
                 text = "Agents keep their own memory, tools and model; the host runs the floor and streams every turn here. " +
                     "They talk until nobody has anything to add.",
-                style = CompanionType.Mono,
+                style = CompanionType.Caption,
             )
-            Text(text = "TEMPLATE", style = CompanionType.MonoSmall)
+            GroupedSection("Template", padded = true) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm), verticalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
                 RoomTemplates.forEach { t ->
                     Chip(label = t.label, on = template == t.id, tag = "room.create.template.${t.id}") { applyTemplate(t) }
                 }
             }
-            Text(text = "TITLE", style = CompanionType.MonoSmall)
+            }
+            GroupedSection("Room name", padded = true) {
             HairlineField(
                 value = title,
                 onValueChange = { title = it },
@@ -129,9 +133,10 @@ fun RoomCreateSheet(
                 placeholder = "ops + coder triage",
                 modifier = Modifier.testTag("room.create.title"),
             )
-            Text(text = if (hostName.isBlank()) "PARTICIPANTS" else "PARTICIPANTS · ${hostName.uppercase()}", style = CompanionType.MonoSmall)
+            }
+            GroupedSection(if (hostName.isBlank()) "Participants" else "Participants · $hostName") {
             if (profiles.isEmpty()) {
-                Text(text = "no profiles loaded", style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn))
+                Text(text = "no profiles loaded", style = CompanionType.Caption.copy(color = CompanionColor.Warn))
             }
             ParticipantRow(
                 ids = profiles.map { it.id to (it.displayName.ifBlank { it.id }) },
@@ -144,11 +149,11 @@ fun RoomCreateSheet(
             }
             peers.forEach { peer ->
                 val remote = peerProfiles[peer.name].orEmpty()
-                Text(text = "PARTICIPANTS · ${peer.name.uppercase()}", style = CompanionType.MonoSmall)
+                Text(text = "PARTICIPANTS · ${peer.name.uppercase()}", style = CompanionType.Caption)
                 if (remote.isEmpty()) {
                     Text(
                         text = "no profiles readable on ${peer.name} · connect to it once from this phone",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                        style = CompanionType.Caption.copy(color = CompanionColor.TextMute),
                     )
                 } else {
                     ParticipantRow(
@@ -162,11 +167,12 @@ fun RoomCreateSheet(
             if (peers.isEmpty() && !peersLoading) {
                 Text(
                     text = "other hosts: link them on the host tab (LINK HOSTS) to invite their agents",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                    style = CompanionType.Caption.copy(color = CompanionColor.TextMute),
                 )
             }
-            Text(text = "FLOOR", style = CompanionType.MonoSmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
+            }
+            GroupedSection("Conversation rules", padded = true) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Chip("CONVERSE", mode == "converse", "room.create.mode.converse") { mode = "converse" }
                 Chip("MODERATED", mode == "moderated", "room.create.mode.moderated") { mode = "moderated" }
                 Chip("BOUNDED", mode == "bounded", "room.create.mode.bounded") { mode = "bounded" }
@@ -177,34 +183,36 @@ fun RoomCreateSheet(
                     "bounded" -> "v1 relay race: mention-first, then round-robin, hard stop after N rounds"
                     else -> "agents talk until everyone passes; the budget only pauses the room"
                 },
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                style = CompanionType.Caption.copy(color = CompanionColor.TextMute),
             )
             if (mode == "bounded") {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
-                    Text(text = "ROUNDS", style = CompanionType.MonoSmall)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(text = "ROUNDS", style = CompanionType.Caption)
                     (1..4).forEach { n -> Chip("$n", n == rounds, "room.create.rounds.$n") { rounds = n } }
                 }
             } else {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
-                    Text(text = "BUDGET", style = CompanionType.MonoSmall)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(text = "BUDGET", style = CompanionType.Caption)
                     listOf(6, 12, 24, 40).forEach { n -> Chip("$n", n == turns, "room.create.turns.$n") { turns = n } }
-                    Spacer(Modifier.weight(1f))
-                    Text(text = "turns before a pause", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute))
+                    Text(text = "turns before a pause", style = CompanionType.Caption.copy(color = CompanionColor.TextMute))
                 }
             }
             if (mode == "moderated") {
-                Text(text = "MODERATOR", style = CompanionType.MonoSmall)
+                Text(text = "MODERATOR", style = CompanionType.Caption)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm), verticalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
                     picked.forEach { id -> Chip(Rooms.glyph(id), moderator == id, "room.create.moderator.$id") { moderator = id } }
-                    if (picked.isEmpty()) Text(text = "pick participants first", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute))
+                    if (picked.isEmpty()) Text(text = "pick participants first", style = CompanionType.Caption.copy(color = CompanionColor.TextMute))
                 }
             }
-            Text(text = "HANDS · who may drive this phone", style = CompanionType.MonoSmall)
+            }
+            GroupedSection("Legacy room policy", padded = true) {
+            Text("Selecting a participant does not arm Hands or bypass phone protection rules.", style = CompanionType.Caption)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm), verticalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
                 Chip("NOBODY", hands.isBlank(), "room.create.hands.none") { hands = "" }
                 picked.forEach { id -> Chip(Rooms.glyph(id), hands == id, "room.create.hands.$id") { hands = id } }
             }
-            Text(text = "OPENING LINE (optional)", style = CompanionType.MonoSmall)
+            }
+            GroupedSection("Opening message", padded = true) {
             HairlineField(
                 value = opening,
                 onValueChange = { opening = it },
@@ -212,15 +220,16 @@ fun RoomCreateSheet(
                 placeholder = "posted as you when the room opens",
                 modifier = Modifier.testTag("room.create.opening"),
             )
+            }
             if (!error.isNullOrBlank()) {
                 Text(
                     text = error,
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                    style = CompanionType.Caption.copy(color = CompanionColor.Warn),
                     modifier = Modifier.testTag("room.create.error"),
                 )
             }
             Spacer(Modifier.height(CompanionSpace.Xs))
-            Row(horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 val ready = picked.isNotEmpty() && (mode != "moderated" || moderator in picked || picked.size == 1)
                 ActionButton(
                     label = "CREATE",
@@ -258,44 +267,23 @@ private fun ParticipantRow(
     onToggle: (String) -> Unit,
     tagPrefix: String,
 ) {
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm), verticalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
+    Column(Modifier.fillMaxWidth()) {
         ids.forEach { (id, name) ->
-            val on = id in picked
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier
-                    .testTag(tagPrefix + id)
-                    .border(CompanionSpace.Hairline, if (on) CompanionColor.Signal else CompanionColor.LineStrong)
-                    .background(if (on) CompanionColor.SignalDim else CompanionColor.VoidElevated)
-                    .clickable { onToggle(id) }
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-            ) {
-                Text(
-                    text = Rooms.glyph(id),
-                    style = CompanionType.MonoSmall.copy(color = if (on) CompanionColor.Signal else CompanionColor.TextDim),
-                )
-                Text(
-                    text = name,
-                    style = CompanionType.MonoSmall.copy(color = if (on) CompanionColor.Text else CompanionColor.TextMute),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
+            PreferenceToggle(name, id in picked, { onToggle(id) }, summary = id, modifier = Modifier.testTag(tagPrefix + id))
         }
     }
 }
 
 @Composable
 private fun Chip(label: String, on: Boolean, tag: String, onClick: () -> Unit) {
-    Text(
-        text = label,
-        style = CompanionType.MonoSmall.copy(color = if (on) CompanionColor.Signal else CompanionColor.TextMute),
+    ActionText(
+        text = label.lowercase().replaceFirstChar(Char::titlecase),
+        style = CompanionType.Label.copy(color = if (on) CompanionColor.Signal else CompanionColor.TextDim),
         modifier = Modifier
             .testTag(tag)
-            .border(CompanionSpace.Hairline, if (on) CompanionColor.Signal else CompanionColor.Line)
-            .background(if (on) CompanionColor.SignalDim else CompanionColor.VoidElevated)
-            .clickable(onClick = onClick)
+            .background(if (on) CompanionColor.SignalDim else CompanionColor.VoidElevated, androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+            .border(1.dp, if (on) CompanionColor.Signal else CompanionColor.CardBorder, androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+            .heightIn(min = 48.dp).clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 4.dp),
     )
 }

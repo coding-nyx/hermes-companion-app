@@ -1,5 +1,10 @@
 package app.hermes.companion.review
 
+import app.hermes.companion.design.*
+
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
 import app.hermes.companion.design.CompanionColor
 import app.hermes.companion.design.CompanionSpace
 import app.hermes.companion.design.CompanionType
@@ -43,6 +49,7 @@ import app.hermes.companion.design.Hairline
 import app.hermes.companion.model.GitDiffSummary
 import app.hermes.companion.model.GitStatus
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CodeReviewScreen(
     status: GitStatus?,
@@ -64,62 +71,40 @@ fun CodeReviewScreen(
             .background(CompanionColor.Void)
             .testTag("review.screen"),
     ) {
-        // Branch & status header
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "BRANCH // ",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                )
-                Text(
-                    text = status?.branch ?: "main",
-                    style = CompanionType.Mono.copy(color = CompanionColor.Signal),
-                )
+        Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Branch", style = CompanionType.Caption)
+                Text(status?.branch ?: "No repository selected", style = CompanionType.Label, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = if (isLoading) "SYNCING" else "REFRESH",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                    modifier = Modifier
-                        .testTag("review.refresh")
-                        .clickable(enabled = !isLoading, onClick = onRefresh)
-                        .padding(CompanionSpace.Xs),
-                )
-            }
+            app.hermes.companion.design.ActionButton(if (isLoading) "Refreshing…" else "Refresh", onRefresh,
+                enabled = !isLoading, modifier = Modifier.testTag("review.refresh"))
         }
         Hairline()
 
         // Counts summary row
-        Row(
+        FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = "STAGED: ${status?.stagedFiles?.size ?: 0}",
-                style = CompanionType.MonoSmall.copy(
+                text = "Staged · ${status?.stagedFiles?.size ?: 0}",
+                style = CompanionType.Caption.copy(
                     color = if ((status?.stagedFiles?.size ?: 0) > 0) CompanionColor.Signal else CompanionColor.TextDim,
                 ),
             )
             Text(
-                text = "MODIFIED: ${status?.modifiedFiles?.size ?: 0}",
-                style = CompanionType.MonoSmall.copy(
+                text = "Modified · ${status?.modifiedFiles?.size ?: 0}",
+                style = CompanionType.Caption.copy(
                     color = if ((status?.modifiedFiles?.size ?: 0) > 0) CompanionColor.Warn else CompanionColor.TextDim,
                 ),
             )
             Text(
-                text = "UNTRACKED: ${status?.untrackedFiles?.size ?: 0}",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                text = "Untracked · ${status?.untrackedFiles?.size ?: 0}",
+                style = CompanionType.Caption.copy(color = CompanionColor.TextMute),
             )
         }
         Hairline()
@@ -135,7 +120,7 @@ fun CodeReviewScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(CompanionColor.VoidElevated)
+
                         .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
@@ -145,12 +130,12 @@ fun CodeReviewScreen(
                         style = CompanionType.Mono.copy(color = CompanionColor.Text),
                         modifier = Modifier.weight(1f),
                     )
-                    Text(
-                        text = "CLOSE [X]",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                    ActionText(
+                        text = "Close",
+                        style = CompanionType.Caption.copy(color = CompanionColor.Warn),
                         modifier = Modifier
                             .testTag("review.diff.close")
-                            .clickable(onClick = onCloseDiff)
+                            .heightIn(min = 48.dp).clickable(onClick = onCloseDiff)
                             .padding(CompanionSpace.Xs),
                     )
                 }
@@ -160,7 +145,7 @@ fun CodeReviewScreen(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .background(CompanionColor.VoidElevated)
+
                         .padding(CompanionSpace.Md),
                 ) {
                     if (isLoading && diff.rawDiff.isBlank()) {
@@ -188,7 +173,7 @@ fun CodeReviewScreen(
                                 }
                                 Text(
                                     text = line,
-                                    style = CompanionType.MonoSmall.copy(color = color),
+                                    style = CompanionType.Mono.copy(color = color),
                                 )
                             }
                         }
@@ -213,8 +198,8 @@ fun CodeReviewScreen(
             }
             if (treeEmpty && !isLoading) {
                 FetchPane(
-                    label = "WORKING TREE CLEAN",
-                    hint = "// no changes",
+                    label = "Working tree clean",
+                    hint = "There are no changes to review.",
                     modifier = Modifier
                         .weight(1f)
                         .testTag("review.empty"),
@@ -224,15 +209,15 @@ fun CodeReviewScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = CompanionSpace.Lg),
+                    .padding(horizontal = 24.dp),
             ) {
 
                 if (!status?.stagedFiles.isNullOrEmpty()) {
                     item {
                         Spacer(Modifier.height(CompanionSpace.Md))
                         Text(
-                            text = "STAGED FOR COMMIT",
-                            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                            text = "Staged for commit",
+                            style = CompanionType.Title,
                         )
                         Spacer(Modifier.height(CompanionSpace.Xs))
                     }
@@ -251,8 +236,8 @@ fun CodeReviewScreen(
                     item {
                         Spacer(Modifier.height(CompanionSpace.Md))
                         Text(
-                            text = "MODIFIED",
-                            style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                            text = "Modified",
+                            style = CompanionType.Title,
                         )
                         Spacer(Modifier.height(CompanionSpace.Xs))
                     }
@@ -271,8 +256,8 @@ fun CodeReviewScreen(
                     item {
                         Spacer(Modifier.height(CompanionSpace.Md))
                         Text(
-                            text = "UNTRACKED",
-                            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                            text = "Untracked",
+                            style = CompanionType.Title,
                         )
                         Spacer(Modifier.height(CompanionSpace.Xs))
                     }
@@ -291,7 +276,8 @@ fun CodeReviewScreen(
         }
         Hairline()
 
-        // Commit Composer
+        // Keep commit controls with staged work instead of displaying an inert footer on clean trees.
+        if (!status?.stagedFiles.isNullOrEmpty() || commitMessage.isNotBlank()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -301,16 +287,15 @@ fun CodeReviewScreen(
         ) {
             val dismissKeyboard = rememberDismissKeyboard()
             fun commit() {
-                if (commitMessage.isBlank() || isLoading) return
+                if (commitMessage.isBlank() || isLoading || status?.stagedFiles.isNullOrEmpty()) return
                 val msg = commitMessage.trim()
-                commitMessage = ""
                 onCommit(msg)
                 dismissKeyboard()
             }
             BasicTextField(
                 value = commitMessage,
                 onValueChange = { commitMessage = it },
-                textStyle = CompanionType.Mono.copy(color = CompanionColor.Text),
+                textStyle = CompanionType.Body.copy(color = CompanionColor.Text),
                 cursorBrush = SolidColor(CompanionColor.Signal),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
@@ -320,13 +305,16 @@ fun CodeReviewScreen(
                 keyboardActions = KeyboardActions(onDone = { commit() }),
                 modifier = Modifier
                     .weight(1f)
-                    .padding(vertical = CompanionSpace.Sm)
+                    .background(CompanionColor.VoidSurface, androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                    .border(1.dp, CompanionColor.CardBorder, androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                    .padding(12.dp)
                     .testTag("review.commit.input"),
                 decorationBox = { innerTextField ->
                     if (commitMessage.isEmpty()) {
                         Text(
-                            text = "commit message...",
-                            style = CompanionType.Mono.copy(color = CompanionColor.TextMute),
+                            text = "Commit message…",
+                            style = CompanionType.Body.copy(color = CompanionColor.TextMute),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
                     }
                     innerTextField()
@@ -334,20 +322,20 @@ fun CodeReviewScreen(
             )
             Spacer(Modifier.width(CompanionSpace.Sm))
             Box(
+                contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .background(if (commitMessage.isNotBlank()) CompanionColor.SignalDim else CompanionColor.VoidElevated)
-                    .border(1.dp, if (commitMessage.isNotBlank()) CompanionColor.Signal else CompanionColor.Line)
-                    .clickable(enabled = commitMessage.isNotBlank() && !isLoading) { commit() }
+                    .heightIn(min = 48.dp).clickable(enabled = commitMessage.isNotBlank() && !isLoading && !status?.stagedFiles.isNullOrEmpty()) { commit() }
                     .padding(horizontal = CompanionSpace.Md, vertical = CompanionSpace.Sm)
                     .testTag("review.commit.button"),
             ) {
                 Text(
-                    text = "COMMIT",
-                    style = CompanionType.MonoSmall.copy(
+                    text = "Commit",
+                    style = CompanionType.Caption.copy(
                         color = if (commitMessage.isNotBlank()) CompanionColor.Signal else CompanionColor.TextMute,
                     ),
                 )
             }
+        }
         }
     }
 }
@@ -363,33 +351,22 @@ private fun FileRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = CompanionSpace.Sm),
+            .heightIn(min = 72.dp).clickable(onClick = onClick)
+            .padding(vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .width(4.dp)
-                    .height(14.dp)
-                    .background(statusColor),
-            )
-            Spacer(Modifier.width(CompanionSpace.Sm))
-            Text(
-                text = file,
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Text),
-                maxLines = 1,
-            )
+        Column(Modifier.weight(1f).padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(file.substringAfterLast('/'), style = CompanionType.Body, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            file.substringBeforeLast('/', "").takeIf { it.isNotBlank() }?.let {
+                Text(it, style = CompanionType.Caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
-        Text(
-            text = "[$actionLabel]",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+        ActionText(
+            text = actionLabel.lowercase().replaceFirstChar(Char::titlecase),
+            style = CompanionType.Caption.copy(color = CompanionColor.Signal),
             modifier = Modifier
-                .clickable(onClick = onAction)
+                .heightIn(min = 48.dp).clickable(onClick = onAction)
                 .padding(CompanionSpace.Xs),
         )
     }

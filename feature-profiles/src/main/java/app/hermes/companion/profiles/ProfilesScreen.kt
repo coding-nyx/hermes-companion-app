@@ -1,5 +1,6 @@
 package app.hermes.companion.profiles
 
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -54,17 +55,17 @@ fun ProfilesScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md),
+                .padding(horizontal = 24.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = if (hostName.isBlank()) "AGENTS" else "AGENTS ON ${hostName.uppercase()}",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                maxLines = 1,
+                text = if (hostName.isBlank()) "Available profiles" else "Profiles on $hostName",
+                style = CompanionType.Title,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            Text(text = profiles.size.toString(), style = CompanionType.MonoSmall, modifier = Modifier.testTag("profiles.count"))
+            Text(text = profiles.size.toString(), style = CompanionType.Caption, modifier = Modifier.testTag("profiles.count"))
         }
         Hairline()
         if (switching) {
@@ -72,8 +73,8 @@ fun ProfilesScreen(
         }
         if (profiles.isEmpty()) {
             FetchPane(
-                label = "NO PROFILES",
-                hint = "// host reported none",
+                label = "No profiles available",
+                hint = "This host has not reported any profiles.",
                 modifier = Modifier
                     .weight(1f)
                     .testTag("profiles.empty"),
@@ -86,9 +87,9 @@ fun ProfilesScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(if (selected) CompanionColor.VoidElevated else CompanionColor.Void)
-                        .clickable(enabled = !switching) { onSelect(profile.id) }
-                        .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
+
+                        .heightIn(min = 48.dp).clickable(enabled = !switching) { onSelect(profile.id) }
+                        .padding(horizontal = 24.dp, vertical = 16.dp)
                         .testTag("profiles.row.${profile.id}"),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
@@ -102,7 +103,7 @@ fun ProfilesScreen(
                         Text(
                             text = profile.displayName,
                             style = CompanionType.Body.copy(color = if (selected) CompanionColor.Signal else CompanionColor.Text),
-                            maxLines = 1,
+                            maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                         val meta = buildList {
@@ -111,7 +112,7 @@ fun ProfilesScreen(
                             if (profile.sessionCount > 0) add("${profile.sessionCount} threads")
                             if (profile.gateway.isNotBlank()) add("gw ${profile.gateway}")
                         }.joinToString(" · ")
-                        Text(text = meta, style = CompanionType.MonoSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(text = meta, style = CompanionType.Caption, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                     if (selected && switching) {
                         LiveDot()
@@ -119,10 +120,10 @@ fun ProfilesScreen(
                     }
                     if (selected) {
                         Text(
-                            text = "ACTIVE",
-                            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                            text = "✓",
+                            style = CompanionType.Caption.copy(color = CompanionColor.Signal),
                             modifier = Modifier
-                                .border(CompanionSpace.Hairline, CompanionColor.Signal)
+
                                 .padding(horizontal = CompanionSpace.Sm, vertical = 2.dp),
                         )
                     }

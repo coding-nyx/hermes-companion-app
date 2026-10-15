@@ -1,5 +1,8 @@
 package app.hermes.companion
 
+import app.hermes.companion.design.ActionText
+
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,7 +27,7 @@ fun BiometricLockOverlay(onUnlock: () -> Unit) {
         modifier = Modifier
             .fillMaxSize()
             .background(CompanionColor.Void)
-            .clickable(onClick = {})
+            .heightIn(min = 48.dp).clickable(onClick = {})
             .testTag("lock.overlay"),
         contentAlignment = Alignment.Center,
     ) {
@@ -35,15 +38,15 @@ fun BiometricLockOverlay(onUnlock: () -> Unit) {
             Text(text = "LOCKED", style = CompanionType.Display, modifier = Modifier.testTag("lock.status"))
             Text(
                 text = "biometric or device PIN",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                style = CompanionType.Caption.copy(color = CompanionColor.TextMute),
             )
-            Text(
+            ActionText(
                 text = "UNLOCK",
-                style = CompanionType.Mono.copy(color = CompanionColor.Signal),
+                style = CompanionType.Caption.copy(color = CompanionColor.Signal),
                 modifier = Modifier
                     .testTag("lock.unlock")
-                    .border(CompanionSpace.Hairline, CompanionColor.Signal)
-                    .clickable(onClick = onUnlock)
+
+                    .heightIn(min = 48.dp).clickable(onClick = onUnlock)
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             )
         }

@@ -23,6 +23,13 @@ class NativeSessionControlsDeviceTest {
             val session = api.createSession(origin, profile, "Companion native settings S22 fixture", requireRpc = true)
             created = session
             val before = api.sessionSettings(origin, session)
+            // Exercise both sides of the switch without changing profile defaults or submitting work.
+            val off = api.setSessionSetting(origin, session, "reasoning", "none")
+            assertFalse(off.confirmationRequired)
+            assertEquals("none", api.sessionSettings(origin, session).reasoning)
+            val on = api.setSessionSetting(origin, session, "reasoning", "high")
+            assertFalse(on.confirmationRequired)
+            assertEquals("high", api.sessionSettings(origin, session).reasoning)
             val changed = api.setSessionSetting(origin, session, "reasoning", "low")
             assertFalse(changed.confirmationRequired)
             assertEquals("low", api.sessionSettings(origin, session).reasoning)

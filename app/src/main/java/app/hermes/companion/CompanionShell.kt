@@ -1,5 +1,8 @@
 package app.hermes.companion
 
+import app.hermes.companion.design.ActionText
+
+import androidx.compose.foundation.layout.heightIn
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -271,6 +274,7 @@ fun CompanionShell(
         var showModelSheet by rememberSaveable { mutableStateOf(false) }
         var showSettingsSheet by rememberSaveable { mutableStateOf(false) }
         var showComposerModels by remember(state.origin, state.activeProfileId, state.openSessionId) { mutableStateOf(false) }
+        var composerSection by remember { mutableStateOf(app.hermes.companion.settings.ComposerSettingsSection.MODEL) }
         var showSessionSheet by remember(state.openSessionId) { mutableStateOf(false) }
         var showMoreSheet by rememberSaveable { mutableStateOf(false) }
         var showVoiceControls by remember { mutableStateOf(false) }
@@ -317,6 +321,7 @@ fun CompanionShell(
             onProfileTap = { changeConversation { showProfileSheet = true } },
             onOpenSettings = { showSettingsSheet = true },
             onSessionActions = { showSessionSheet = true },
+            onNewRoom = { changeConversation(onNewRoom) }, onRefreshConversations = onRetrySessions,
         )
         Hairline()
         }
@@ -333,7 +338,7 @@ fun CompanionShell(
         state.sessionControls?.let { panel ->
             if (showComposerModels) {
                 app.hermes.companion.settings.ComposerModelBottomSheet(panel, onSetSessionSetting, onSessionControls,
-                    { showComposerModels = false; onDismissSessionControls() })
+                    { showComposerModels = false; onDismissSessionControls() }, initialSection = composerSection)
             } else app.hermes.companion.settings.SessionControlsBottomSheet(panel, onSessionControls, onSetSessionSetting,
                 onRedirectSession, onNativeCommand, onDismissSessionControls)
         }
@@ -470,6 +475,14 @@ fun CompanionShell(
                 onSwitchModel = onSwitchModel,
                 onOpenModelPicker = {
                     if (app.hermes.companion.domain.DraftThread.isPersisted(state.openSessionId)) {
+                        composerSection = app.hermes.companion.settings.ComposerSettingsSection.MODEL
+                        showComposerModels = true
+                        onSessionControls()
+                    }
+                },
+                onOpenReasoningPicker = {
+                    if (app.hermes.companion.domain.DraftThread.isPersisted(state.openSessionId)) {
+                        composerSection = app.hermes.companion.settings.ComposerSettingsSection.REASONING
                         showComposerModels = true
                         onSessionControls()
                     }
@@ -504,6 +517,7 @@ fun CompanionShell(
         } else {
             when (state.tab) {
                 MainTab.THREADS -> ThreadsScreen(
+                    showToolbar = false,
                     sessions = state.visibleSessions,
                     loading = state.sessionsLoading,
                     error = state.error,
@@ -693,7 +707,11 @@ fun CompanionShell(
         if (state.isVoiceStreamActive) VoiceDock(state, openVoice, onToggleVoiceMicrophone, onStopVoiceStream, compact = compactTyping)
         if (!imeVisible) {
             Hairline()
-            AppNavigationBar(state, inChat, onTab, { showMoreSheet = true }, openVoice)
+            AppNavigationBar(state, inChat, onTab, { showMoreSheet = true }, openVoice, onDictate = {
+                if (!state.inRoom && !state.loading && !state.creatingThread && state.openSessionId != null && state.activeProfileId != null) {
+                    onReturnToVoiceConversation(); onVoiceClick()
+                } else showVoiceStart = true
+            })
         }
     }
 }
@@ -704,7 +722,7 @@ private fun ProfilePicker(state: CompanionState, onSelect: (String) -> Unit, onO
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(CompanionColor.VoidElevated)
+
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm)
             .testTag("header.profile.picker"),
@@ -718,13 +736,13 @@ private fun ProfilePicker(state: CompanionState, onSelect: (String) -> Unit, onO
                 horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Xs),
                 modifier = Modifier
                     .testTag("header.profile.${profile.id}")
-                    .clickable { onSelect(profile.id) }
+                    .heightIn(min = 48.dp).clickable { onSelect(profile.id) }
                     .padding(vertical = CompanionSpace.Xs),
             ) {
                 ProfileGlyph(code = profile.glyph, selected = selected)
                 Text(
                     text = profile.displayName,
-                    style = CompanionType.MonoSmall.copy(
+                    style = CompanionType.Caption.copy(
                         color = if (selected) CompanionColor.Signal else CompanionColor.TextDim,
                     ),
                     maxLines = 1,
@@ -733,12 +751,12 @@ private fun ProfilePicker(state: CompanionState, onSelect: (String) -> Unit, onO
             }
         }
         Spacer(Modifier.weight(1f))
-        Text(
+        ActionText(
             text = "ALL ▸",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+            style = CompanionType.Caption.copy(color = CompanionColor.Signal),
             modifier = Modifier
                 .testTag("header.profile.all")
-                .clickable(onClick = onOpenAll)
+                .heightIn(min = 48.dp).clickable(onClick = onOpenAll)
                 .padding(CompanionSpace.Xs),
         )
     }
@@ -754,7 +772,7 @@ private fun DeepLinkStrip(req: DeepLinkRequest, onConfirm: () -> Unit, onDismiss
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
             .clip(stripShape)
             .border(CompanionSpace.Hairline, CompanionColor.Warn.copy(alpha = 0.5f), stripShape)
-            .background(CompanionColor.VoidElevated)
+
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm)
             .testTag("deeplink.strip"),
         verticalAlignment = Alignment.CenterVertically,
@@ -763,20 +781,20 @@ private fun DeepLinkStrip(req: DeepLinkRequest, onConfirm: () -> Unit, onDismiss
         Text(
             text = if (req.origin.isBlank()) "open ${req.sessionId} · ${req.profileId}?"
             else "open ${req.sessionId} · ${req.profileId} @ ${req.origin.substringAfter("://")}?",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+            style = CompanionType.Caption.copy(color = CompanionColor.Warn),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        Text(
+        ActionText(
             text = "OPEN",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontWeight = FontWeight.Bold),
-            modifier = Modifier.testTag("deeplink.open").clickable(onClick = onConfirm).padding(CompanionSpace.Xs),
+            style = CompanionType.Caption.copy(color = CompanionColor.Signal, fontWeight = FontWeight.Bold),
+            modifier = Modifier.testTag("deeplink.open").heightIn(min = 48.dp).clickable(onClick = onConfirm).padding(CompanionSpace.Xs),
         )
-        Text(
+        ActionText(
             text = "DISMISS",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-            modifier = Modifier.testTag("deeplink.dismiss").clickable(onClick = onDismiss).padding(CompanionSpace.Xs),
+            style = CompanionType.Caption.copy(color = CompanionColor.TextMute),
+            modifier = Modifier.testTag("deeplink.dismiss").heightIn(min = 48.dp).clickable(onClick = onDismiss).padding(CompanionSpace.Xs),
         )
     }
 }
@@ -796,7 +814,7 @@ private fun PairLinkStrip(
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
             .clip(stripShape)
             .border(CompanionSpace.Hairline, CompanionColor.Warn.copy(alpha = 0.5f), stripShape)
-            .background(CompanionColor.VoidElevated)
+
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm)
             .testTag("pairlink.strip"),
         verticalAlignment = Alignment.CenterVertically,
@@ -804,20 +822,20 @@ private fun PairLinkStrip(
     ) {
         Text(
             text = "pair this phone with ${req.origin.substringAfter("://")} · ${req.profile}?",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+            style = CompanionType.Caption.copy(color = CompanionColor.Warn),
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        Text(
+        ActionText(
             text = "PAIR",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontWeight = FontWeight.Bold),
-            modifier = Modifier.testTag("pairlink.pair").clickable(onClick = onConfirm).padding(CompanionSpace.Xs),
+            style = CompanionType.Caption.copy(color = CompanionColor.Signal, fontWeight = FontWeight.Bold),
+            modifier = Modifier.testTag("pairlink.pair").heightIn(min = 48.dp).clickable(onClick = onConfirm).padding(CompanionSpace.Xs),
         )
-        Text(
+        ActionText(
             text = "DISMISS",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-            modifier = Modifier.testTag("pairlink.dismiss").clickable(onClick = onDismiss).padding(CompanionSpace.Xs),
+            style = CompanionType.Caption.copy(color = CompanionColor.TextMute),
+            modifier = Modifier.testTag("pairlink.dismiss").heightIn(min = 48.dp).clickable(onClick = onDismiss).padding(CompanionSpace.Xs),
         )
     }
 }
@@ -830,87 +848,98 @@ private fun Header(
     onProfileTap: () -> Unit,
     onOpenSettings: () -> Unit = {},
     onSessionActions: () -> Unit = {},
+    onNewRoom: () -> Unit = {},
+    onRefreshConversations: () -> Unit = {},
 ) {
+    var options by remember { mutableStateOf(false) }
+    LaunchedEffect(inChat, state.tab) { options = false }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md),
+            .padding(horizontal = 24.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
     ) {
         val active = state.activeProfile
-        if (active != null) {
-            ProfileGlyph(
-                code = active.glyph,
-                selected = true,
-                onClick = onProfileTap,
-                modifier = Modifier.testTag("header.profile"),
-            )
-        }
         if (inChat) {
             Box(
                 modifier = Modifier
                     .size(48.dp)
                     .clip(CircleShape)
-                    .background(CompanionColor.VoidElevated)
-                    .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onCloseChat)
+
+                    .heightIn(min = 48.dp).clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onCloseChat)
                     .semantics { contentDescription = "Back to chats" }
                     .testTag("chat.back"),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = "◂",
-                    style = CompanionType.Mono.copy(color = CompanionColor.Signal, fontSize = 16.sp),
-                )
+                app.hermes.companion.design.ControlIcon(app.hermes.companion.design.ControlGlyph.BACK)
             }
         }
         val hostPrefix = if (inChat || state.hostName.isBlank()) "" else "${state.hostName} · "
-        val title = hostPrefix + when {
-            inChat -> state.openRoom?.let { r -> "${r.title} · " + r.participants.joinToString(" ") { it.glyph } }
+        val title = when {
+            inChat -> state.openRoom?.title
                 ?: state.openSession?.title ?: "chat"
-            state.tab == MainTab.THREADS -> "threads"
-            state.tab == MainTab.CONSOLE -> state.openAgent?.let { "agent · ${it.title.ifBlank { it.id }}" } ?: "agent console"
-            state.tab == MainTab.REVIEW -> "code review"
-            state.tab == MainTab.REMINDERS -> "cron & reminders"
-            state.tab == MainTab.PROFILES -> "profiles"
-            state.tab == MainTab.GATEWAY -> "gateway"
-            else -> "device"
+            state.tab == MainTab.THREADS -> "Chats"
+            state.tab == MainTab.CONSOLE -> state.openAgent?.let { it.title.ifBlank { it.id } } ?: "Agents"
+            state.tab == MainTab.REVIEW -> "Code review"
+            state.tab == MainTab.REMINDERS -> "Schedules"
+            state.tab == MainTab.PROFILES -> "Profiles"
+            state.tab == MainTab.GATEWAY -> "Hosts"
+            else -> "Device"
         }
-        val meta = if (inChat && state.openRoom == null) threadMeta(state.openSession) else ""
-        Column(modifier = Modifier.weight(1f)
-            .clickable(enabled = inChat && !state.inRoom && app.hermes.companion.domain.DraftThread.isPersisted(state.openSessionId), onClick = onSessionActions)
-            .testTag("header.session.actions")) {
+        val meta = if (inChat) listOfNotNull(
+            active?.displayName?.takeIf { it.isNotBlank() },
+            state.hostName.takeIf { it.isNotBlank() },
+            "Draft".takeIf { state.openSession?.let(DraftThread::isDraft) == true },
+        ).joinToString(" · ") else listOfNotNull(state.hostName.takeIf { it.isNotBlank() }, active?.displayName?.takeIf { it.isNotBlank() }).joinToString(" · ")
+        Column(verticalArrangement = Arrangement.Center, modifier = Modifier.weight(1f)
+            .heightIn(min = 48.dp).clickable(enabled = !inChat || !state.inRoom && app.hermes.companion.domain.DraftThread.isPersisted(state.openSessionId),
+                onClick = if (inChat) onSessionActions else onProfileTap)
+            .testTag(if (inChat) "header.session.actions" else "header.profile")) {
             Text(
                 text = title + if (inChat && !state.inRoom) " ▾" else "",
-                style = CompanionType.Body.copy(fontWeight = FontWeight.SemiBold),
-                maxLines = 1,
+                style = if (inChat) CompanionType.Title else CompanionType.Display,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             if (meta.isNotBlank()) {
                 Text(
                     text = meta,
-                    style = CompanionType.MonoSmall,
+                    style = CompanionType.Caption,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.testTag("chat.meta"),
                 )
             }
         }
-        if (!inChat && state.tab != MainTab.THREADS) LinkPill(state)
+
+        if (!inChat && state.tab == MainTab.THREADS) {
+            Box {
+                androidx.compose.material3.IconButton(onClick = { options = true }, modifier = Modifier.testTag("threads.options")
+                    .semantics { contentDescription = "Conversation options" }) {
+                    app.hermes.companion.design.ControlIcon(app.hermes.companion.design.ControlGlyph.MORE)
+                }
+                androidx.compose.material3.DropdownMenu(options, { options = false }, containerColor = CompanionColor.VoidElevated) {
+                    if (state.companionAvailability == app.hermes.companion.model.CompanionAvailability.AVAILABLE) {
+                        androidx.compose.material3.DropdownMenuItem(text = { Text("New agent room") }, onClick = { options = false; onNewRoom() }, modifier = Modifier.testTag("threads.newroom"))
+                    }
+                    androidx.compose.material3.DropdownMenuItem(text = { Text("Refresh conversations") }, onClick = { options = false; onRefreshConversations() }, modifier = Modifier.testTag("threads.refresh"))
+                    androidx.compose.material3.DropdownMenuItem(text = { Text("Settings") }, onClick = { options = false; onOpenSettings() }, modifier = Modifier.testTag("header.settings"))
+                }
+            }
+        } else {
         Box(
             modifier = Modifier
                 .size(48.dp)
                 .clip(CircleShape)
-                .background(CompanionColor.VoidElevated)
-                .clickable(onClick = onOpenSettings)
+
+                .heightIn(min = 48.dp).clickable(onClick = onOpenSettings)
                 .semantics { contentDescription = "Settings" }
                 .testTag("header.settings"),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = "⚙",
-                style = CompanionType.Mono.copy(color = CompanionColor.Signal, fontSize = 16.sp),
-            )
+            app.hermes.companion.design.ControlIcon(app.hermes.companion.design.ControlGlyph.SETTINGS)
+        }
         }
     }
 }
@@ -955,7 +984,7 @@ private fun LinkPill(state: CompanionState) {
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         modifier = Modifier
             .clip(pillShape)
-            .background(CompanionColor.VoidElevated)
+
             .border(CompanionSpace.Hairline, if (syncing) CompanionColor.Signal else CompanionColor.Warn, pillShape)
             .padding(horizontal = 8.dp, vertical = 3.dp)
             .testTag(if (syncing) "header.sync" else "header.linkdown"),
@@ -963,7 +992,7 @@ private fun LinkPill(state: CompanionState) {
         if (syncing) LiveDot(size = 5.dp) else LiveDot(size = 5.dp, color = CompanionColor.Warn)
         Text(
             text = if (syncing) "SYNC" else "LINK",
-            style = CompanionType.MonoSmall.copy(color = if (syncing) CompanionColor.Signal else CompanionColor.Warn),
+            style = CompanionType.Caption.copy(color = if (syncing) CompanionColor.Signal else CompanionColor.Warn),
         )
     }
 }

@@ -5,39 +5,21 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-/**
- * Target faces are IBM Plex Sans / Mono. Bundled fonts land in a later slice;
- * system sans/mono keep the metric intent until then.
- */
+/** One sans family for the interface; monospace is reserved for code and exact machine values. */
 object CompanionType {
-    val Display = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Normal,
-        fontSize = 22.sp,
-        lineHeight = 28.sp,
-        letterSpacing = 0.5.sp,
-        color = CompanionColor.Text,
-    )
-    val Body = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Normal,
-        fontSize = 15.sp,
-        lineHeight = 22.sp,
-        color = CompanionColor.Text,
-    )
-    val Mono = TextStyle(
-        fontFamily = FontFamily.Monospace,
-        fontWeight = FontWeight.Normal,
-        fontSize = 12.sp,
-        lineHeight = 18.sp,
-        color = CompanionColor.TextDim,
-    )
-    val MonoSmall = TextStyle(
-        fontFamily = FontFamily.Monospace,
-        fontWeight = FontWeight.Normal,
-        fontSize = 11.sp,
-        lineHeight = 16.sp,
-        letterSpacing = 0.8.sp,
-        color = CompanionColor.TextMute,
-    )
+    val Display get() = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium,
+        fontSize = 24.sp, lineHeight = 30.sp, letterSpacing = (-0.5).sp, color = CompanionColor.Text)
+    val Title get() = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium,
+        fontSize = 18.sp, lineHeight = 24.sp, color = CompanionColor.Text)
+    val Body get() = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Normal,
+        fontSize = 16.sp, lineHeight = 24.sp, color = CompanionColor.Text)
+    val RowTitle get() = Body.copy(fontWeight = FontWeight.Medium)
+    val Label get() = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium,
+        fontSize = 14.sp, lineHeight = 20.sp, color = CompanionColor.Text)
+    val Caption get() = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Normal,
+        fontSize = 12.sp, lineHeight = 18.sp, color = CompanionColor.TextDim)
+    val Mono get() = TextStyle(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Normal,
+        fontSize = 13.sp, lineHeight = 20.sp, color = CompanionColor.Text)
+    /** Source compatibility for diagnostic tools; UI labels use Caption. */
+    val MonoSmall get() = Mono.copy(color = CompanionColor.TextDim)
 }

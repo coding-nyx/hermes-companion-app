@@ -1,5 +1,8 @@
 package app.hermes.companion.profiles
 
+import app.hermes.companion.design.ActionText
+
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -46,7 +49,7 @@ fun ProfileBottomSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        shape = RectangleShape,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
         containerColor = CompanionColor.VoidElevated,
         contentColor = CompanionColor.Text,
         dragHandle = {
@@ -80,15 +83,15 @@ fun ProfileBottomSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    text = "SELECT PROFILE",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                    text = "Profiles",
+                    style = CompanionType.Display,
                 )
-                Text(
-                    text = "ALL ▸",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                ActionText(
+                    text = "All profiles",
+                    style = CompanionType.Caption.copy(color = CompanionColor.Signal),
                     modifier = Modifier
                         .testTag("nav.profile.sheet.all")
-                        .clickable {
+                        .heightIn(min = 48.dp).clickable {
                             onDismiss()
                             onOpenAll()
                         }
@@ -107,7 +110,7 @@ fun ProfileBottomSheet(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("nav.profile.sheet.${profile.id}")
-                            .clickable {
+                            .heightIn(min = 48.dp).clickable {
                                 onSelect(profile.id)
                                 onDismiss()
                             }
@@ -128,42 +131,16 @@ fun ProfileBottomSheet(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Xs),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = profile.id,
-                                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
-                                )
-                                if (profile.model.isNotBlank()) {
-                                    Text(
-                                        text = "·",
-                                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                                    )
-                                    Text(
-                                        text = profile.model.substringAfterLast("/"),
-                                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                                Text(
-                                    text = "·",
-                                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                                )
-                                Text(
-                                    text = "${profile.sessionCount} sessions",
-                                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                                )
-                            }
+                            Text(listOfNotNull(profile.model.substringAfterLast("/").takeIf { it.isNotBlank() },
+                                "${profile.sessionCount} conversations").joinToString(" · "), style = CompanionType.Caption)
+
                         }
                         if (isSelected) {
                             Text(
-                                text = "ACTIVE",
-                                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                                text = "✓",
+                                style = CompanionType.Caption.copy(color = CompanionColor.Signal),
                                 modifier = Modifier
-                                    .border(CompanionSpace.Hairline, CompanionColor.Signal)
+
                                     .padding(horizontal = CompanionSpace.Sm, vertical = 2.dp),
                             )
                         }

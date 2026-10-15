@@ -46,7 +46,13 @@ For **Hands, notification streaming, custom rooms and the agent console**, use t
 
 **New** reserves a host session; Hermes persists its conversation when the first message arrives. Tap the chat title for rename, pin, archive and branch. A running turn offers **Steer** with text or **Interrupt** with an empty draft. Delivery labels distinguish queued, sending, sent, failed and uncertain input: **Sent** means acknowledged by Hermes, **Retry** follows an explicit rejection, and **Check** reads history without automatically resubmitting an uncertain send.
 
-The restored composer keeps formatting visible. System speech remains available; native Host speech/streaming and realtime rollout remain disabled pending their acceptance gates. See the [latest verified checkpoint and deferred work](docs/reviews/2026-10-15-closeout.md).
+The rich-text composer keeps formatting visible and supports expanded draft editing. Tap the center **Voice** dock to open voice controls; long-press it to dictate into the selected conversation. Model and reasoning controls apply to that conversation and show host-confirmed settings. System speech remains available; native Host speech/streaming and realtime rollout remain disabled pending their acceptance gates. See the [prior reliability checkpoint and deferred work](docs/reviews/2026-10-15-closeout.md).
+
+### Grouped interface checkpoint
+
+The current interface uses consistent typography and spacing, grouped settings, focused detail sheets and system light/dark appearance across the existing app. Chat transcripts stay open, with vertical composer actions and the center Voice dock available through navigation.
+
+The Grouped APK is installed on the S22 and its checksum is verified. The clean Companion publication snapshot passes **594 automated tests**, debug and minified release builds, and release lint with no errors (52 warnings). **S22 interaction checks, manual accessibility review and spoken recognition/conversation tests remain deferred.** This update does not enable incoming calls or retire remaining plugin services. Exact scope, validation results, APK hashes and local rollback details are recorded in the [Grouped implementation checkpoint](docs/reviews/fixtures/2026-10-15-grouped-implementation.json).
 
 See the [operator protocol](docs/protocol/operator.md) and [mobile-control protocol](docs/protocol/mobile-control.md) for the host/device contract.
 
@@ -87,7 +93,8 @@ Feature modules cover connect, threads, chat, profiles, gateway and device UI. S
 - [Agent sessions](docs/protocol/agent-sessions.md)
 - [Contributor/agent conventions](AGENTS.md)
 - [Current Conduit parity backlog](docs/reviews/2026-10-13-current-conduit-parity-backlog.md)
-- [Latest validation and rollback](docs/reviews/2026-10-15-closeout.md)
+- [Grouped interface validation and rollback](docs/reviews/fixtures/2026-10-15-grouped-implementation.json)
+- [Prior reliability validation and rollback](docs/reviews/2026-10-15-closeout.md)
 
 ## Related projects
 

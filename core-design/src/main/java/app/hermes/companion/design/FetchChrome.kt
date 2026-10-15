@@ -1,5 +1,7 @@
 package app.hermes.companion.design
 
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -89,7 +91,7 @@ fun WalkingEllipsis(color: Color = CompanionColor.Signal, modifier: Modifier = M
     val n = (step.toInt() % 3) + 1
     Text(
         text = "···".take(n).padEnd(3, ' '),
-        style = CompanionType.MonoSmall.copy(color = color),
+        style = CompanionType.Caption.copy(color = color),
         modifier = modifier,
     )
 }
@@ -155,7 +157,7 @@ fun FetchRow(
             Spacer(Modifier.width(CompanionSpace.Sm))
             Text(
                 text = label,
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+                style = CompanionType.Caption.copy(color = CompanionColor.TextDim),
             )
         }
         Scanline(active = scanning)
@@ -180,16 +182,19 @@ fun FetchPane(
         modifier = Modifier
             .fillMaxWidth()
             .then(modifier)
+            .verticalScroll(rememberScrollState())
             .padding(CompanionSpace.Xl)
             .testTag("fetch.pane"),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        SignalCursor(active = scanning)
-        Spacer(Modifier.height(CompanionSpace.Md))
+        if (scanning) {
+            SignalCursor()
+            Spacer(Modifier.height(16.dp))
+        }
         Text(
             text = label,
-            style = CompanionType.Mono.copy(
+            style = CompanionType.Body.copy(
                 color = when {
                     scanning -> CompanionColor.Signal
                     onRetry != null -> CompanionColor.Warn
@@ -197,22 +202,19 @@ fun FetchPane(
                 },
             ),
         )
-        Spacer(Modifier.height(CompanionSpace.Md))
-        Scanline(Modifier.width(96.dp), active = scanning)
+        if (scanning) {
+            Spacer(Modifier.height(16.dp))
+            Scanline(Modifier.width(96.dp))
+        }
         if (!hint.isNullOrBlank()) {
             Spacer(Modifier.height(CompanionSpace.Md))
-            Text(text = hint, style = CompanionType.MonoSmall)
+            Text(text = hint.removePrefix("//").trim(), style = CompanionType.Caption,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         }
         if (onRetry != null && !retryLabel.isNullOrBlank()) {
             Spacer(Modifier.height(CompanionSpace.Lg))
-            Text(
-                text = retryLabel,
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                modifier = Modifier
-                    .testTag("fetch.retry")
-                    .clickable(onClick = onRetry)
-                    .padding(horizontal = CompanionSpace.Md, vertical = CompanionSpace.Sm),
-            )
+            ActionButton(retryLabel.lowercase().replaceFirstChar(Char::titlecase), onRetry,
+                modifier = Modifier.testTag("fetch.retry"))
         }
     }
 }

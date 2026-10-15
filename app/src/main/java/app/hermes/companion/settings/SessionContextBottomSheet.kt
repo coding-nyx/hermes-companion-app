@@ -9,17 +9,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import app.hermes.companion.SessionContextPanel
-import app.hermes.companion.design.CompanionColor
+import app.hermes.companion.design.*
 import java.text.NumberFormat
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionContextBottomSheet(panel: SessionContextPanel, onRefresh: () -> Unit, onDismiss: () -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = CompanionColor.VoidElevated) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = CompanionColor.VoidElevated) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp)
             .testTag("session.context"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Context usage", style = MaterialTheme.typography.titleLarge)
+            SheetHeading("Context usage", onDismiss)
             Text(panel.session.title, style = MaterialTheme.typography.bodyMedium)
             if (panel.refreshing) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (panel.error != null) Text(panel.error, color = MaterialTheme.colorScheme.error)
@@ -43,13 +43,14 @@ fun SessionContextBottomSheet(panel: SessionContextPanel, onRefresh: () -> Unit,
                         null -> "Measurement source not reported"
                     })
                     if (context.model.isNotBlank()) Text("Model: ${context.model}")
-                    Text("Estimated breakdown", style = MaterialTheme.typography.titleMedium)
+                    GroupedSection("Breakdown", padded = true) {
                     if (context.categories.isEmpty()) Text("Category breakdown is not available yet.")
                     context.categories.forEach { category ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Text(category.label, Modifier.weight(1f))
                             Text("${tokens(category.tokens)} tokens")
                         }
+                    }
                     }
                     context.estimatedTotal?.let { Text("Estimated total: ${tokens(it)} tokens") }
                     Text("Category estimates can differ from provider usage.", style = MaterialTheme.typography.bodySmall)

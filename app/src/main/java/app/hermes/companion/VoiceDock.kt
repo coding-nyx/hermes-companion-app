@@ -26,13 +26,13 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import app.hermes.companion.design.CompanionColor
+import app.hermes.companion.design.*
 
 internal enum class VoiceControlGlyph { WAVE, MIC, MUTED, END, SPEAKER, AUTO }
 
 @Composable
-internal fun VoiceControlIcon(glyph: VoiceControlGlyph, color: Color) {
-    Canvas(Modifier.size(24.dp)) {
+internal fun VoiceControlIcon(glyph: VoiceControlGlyph, color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(24.dp)) {
         val u = size.minDimension / 24f
         fun line(x: Float, y: Float, x2: Float, y2: Float) = drawLine(color, Offset(x*u,y*u), Offset(x2*u,y2*u), 1.8f*u, StrokeCap.Round)
         val stroke = Stroke(1.8f*u, cap = StrokeCap.Round)
@@ -66,8 +66,9 @@ internal fun voiceStageLabel(state: CompanionState): String = if (state.approval
 @Composable
 internal fun VoiceDock(state: CompanionState, onOpen: () -> Unit, onMute: () -> Unit, onStop: () -> Unit, compact: Boolean = false) {
     Row(Modifier.fillMaxWidth().padding(horizontal=12.dp,vertical=if(compact)0.dp else 6.dp)
-        .clip(RoundedCornerShape(18.dp)).background(CompanionColor.VoidElevated)
-        .border(1.dp, CompanionColor.Line, RoundedCornerShape(18.dp)).padding(start=10.dp,end=4.dp)
+        .clip(RoundedCornerShape(16.dp))
+        .background(CompanionColor.SignalDim)
+        .padding(start=12.dp,end=4.dp)
         .testTag("voice.stage"), verticalAlignment=Alignment.CenterVertically) {
         Row(Modifier.weight(1f).heightIn(min=if(compact)48.dp else 56.dp).clickable(role=Role.Button,onClick=onOpen)
             .testTag("voice.stage.open").semantics { contentDescription="Open voice controls for ${state.voiceSessionTitle.ifBlank { state.openSession?.title ?: "this conversation" }}, ${voiceStageLabel(state)}" },
@@ -95,16 +96,21 @@ private fun VoiceDockButton(label:String,tag:String,glyph:VoiceControlGlyph,onCl
 @Composable
 internal fun VoiceControlsSheet(state:CompanionState,onDismiss:()->Unit,onMute:()->Unit,onSpeaker:()->Unit,
     onStop:()->Unit,onConversation:()->Unit) {
-    ModalBottomSheet(onDismissRequest=onDismiss,containerColor=CompanionColor.VoidElevated,contentColor=CompanionColor.Text) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal=20.dp).padding(bottom=24.dp)
+    ModalBottomSheet(onDismissRequest=onDismiss,sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true),containerColor=CompanionColor.VoidElevated,contentColor=CompanionColor.Text) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal=24.dp).padding(bottom=24.dp)
             .testTag("voice.controls"),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-            Text("Voice conversation",style=MaterialTheme.typography.titleLarge)
+            SheetHeading("Voice conversation", onDismiss)
             Text("${state.hostName.ifBlank { state.origin.orEmpty() }} / ${state.activeProfile?.displayName ?: state.activeProfileId.orEmpty()}",
                 color=CompanionColor.TextDim,style=MaterialTheme.typography.bodySmall)
             Text(state.voiceSessionTitle.ifBlank { state.openSession?.title ?: "Voice conversation" },style=MaterialTheme.typography.titleMedium)
-            Box(Modifier.fillMaxWidth().padding(vertical=12.dp),contentAlignment=Alignment.Center) { VoiceControlIcon(VoiceControlGlyph.WAVE,CompanionColor.Signal) }
-            Text(voiceStageLabel(state),style=MaterialTheme.typography.titleMedium,color=CompanionColor.Signal,
-                modifier=Modifier.semantics { liveRegion=LiveRegionMode.Polite })
+            Column(Modifier.fillMaxWidth().padding(vertical=24.dp),horizontalAlignment=Alignment.CenterHorizontally,
+                verticalArrangement=Arrangement.spacedBy(24.dp)) {
+                Box(Modifier.size(112.dp).background(CompanionColor.SignalDim, androidx.compose.foundation.shape.CircleShape),contentAlignment=Alignment.Center) {
+                    VoiceControlIcon(if(state.voiceMicrophoneMuted)VoiceControlGlyph.MUTED else VoiceControlGlyph.WAVE,CompanionColor.Signal,Modifier.size(44.dp))
+                }
+                Text(voiceStageLabel(state),style=CompanionType.Display,
+                    modifier=Modifier.semantics { liveRegion=LiveRegionMode.Polite })
+            }
             Text(when {
                 state.voicePauseReason.isNotBlank() -> state.voicePauseReason
                 state.voiceStreamState==VoiceStreamState.LISTENING && !state.voiceMicrophoneReady -> "Wait until Listening appears before speaking."
@@ -126,6 +132,9 @@ internal fun VoiceControlsSheet(state:CompanionState,onDismiss:()->Unit,onMute:(
                 }
                 OutlinedButton(onClick=onStop,modifier=Modifier.testTag("voice.controls.stop")) { Text("End voice",color=CompanionColor.Danger) }
             }
+            GroupedSection("Audio output") {
+                PreferenceRow(if(state.voiceSpeaker)"Speaker" else "Auto route", "Tap to change the Android audio route", onClick=onSpeaker)
+            }
             Text("Spoken replies are brief. Read the full answer in chat, or use Read aloud.",style=MaterialTheme.typography.bodySmall,color=CompanionColor.TextDim)
             OutlinedButton(onClick=onConversation,modifier=Modifier.fillMaxWidth().testTag("voice.controls.conversation")) { Text(if (state.approval != null) "Review pending approval" else "Open this conversation") }
         }
@@ -142,10 +151,10 @@ internal fun VoiceStartSheet(state:CompanionState,onDismiss:()->Unit,onStart:()-
         state.streaming || state.submitting || state.creatingThread -> "Wait for the current reply before starting voice."
         else -> null
     }
-    ModalBottomSheet(onDismissRequest=onDismiss,containerColor=CompanionColor.VoidElevated,contentColor=CompanionColor.Text) {
+    ModalBottomSheet(onDismissRequest=onDismiss,sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true),containerColor=CompanionColor.VoidElevated,contentColor=CompanionColor.Text) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp).testTag("voice.start"),
             verticalArrangement=Arrangement.spacedBy(12.dp)) {
-            Text("Talk to Hermes",style=MaterialTheme.typography.titleLarge)
+            SheetHeading("Talk to Hermes", onDismiss)
             Text("${state.hostName.ifBlank { state.origin.orEmpty() }} / ${state.activeProfile?.displayName ?: state.activeProfileId.orEmpty()}",color=CompanionColor.TextDim)
             Text(unavailable ?: "Choose the conversation before listening starts.")
             Button(onClick=onStart,enabled=unavailable==null,modifier=Modifier.fillMaxWidth().testTag("voice.start.confirm")) {

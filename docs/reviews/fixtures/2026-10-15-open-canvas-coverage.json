@@ -1,0 +1,272 @@
+{
+  "direction": "Open canvas",
+  "scope": "Existing Companion app only; separate Desk work is preserved",
+  "surfaces": [
+    {
+      "file": "feature-connect/src/main/java/app/hermes/companion/connect/ConnectScreen.kt",
+      "unframed_fills": 0,
+      "unframed_borders": 1
+    },
+    {
+      "file": "feature-profiles/src/main/java/app/hermes/companion/profiles/ProfilesScreen.kt",
+      "unframed_fills": 1,
+      "unframed_borders": 1
+    },
+    {
+      "file": "feature-profiles/src/main/java/app/hermes/companion/profiles/ProfileBottomSheet.kt",
+      "unframed_fills": 0,
+      "unframed_borders": 1
+    },
+    {
+      "file": "feature-gateway/src/main/java/app/hermes/companion/gateway/GatewayScreen.kt",
+      "unframed_fills": 3,
+      "unframed_borders": 5
+    },
+    {
+      "file": "feature-device/src/main/java/app/hermes/companion/device/DeviceScreen.kt",
+      "unframed_fills": 6,
+      "unframed_borders": 7
+    },
+    {
+      "file": "feature-threads/src/main/java/app/hermes/companion/threads/ThreadsScreen.kt",
+      "unframed_fills": 5,
+      "unframed_borders": 4
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/settings/SessionBottomSheet.kt",
+      "unframed_fills": 0,
+      "unframed_borders": 0
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/settings/SessionContextBottomSheet.kt",
+      "unframed_fills": 0,
+      "unframed_borders": 0
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/settings/SettingsBottomSheet.kt",
+      "unframed_fills": 0,
+      "unframed_borders": 10
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/settings/ReasoningControls.kt",
+      "unframed_fills": 0,
+      "unframed_borders": 0
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/settings/ModelBottomSheet.kt",
+      "unframed_fills": 1,
+      "unframed_borders": 4
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/settings/SessionControlsBottomSheet.kt",
+      "unframed_fills": 0,
+      "unframed_borders": 0
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/settings/ComposerModelBottomSheet.kt",
+      "unframed_fills": 0,
+      "unframed_borders": 0
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/CompanionShell.kt",
+      "unframed_fills": 6,
+      "unframed_borders": 0
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/AppNavigation.kt",
+      "unframed_fills": 4,
+      "unframed_borders": 0
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/VoiceDock.kt",
+      "unframed_fills": 1,
+      "unframed_borders": 1
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/BiometricLockOverlay.kt",
+      "unframed_fills": 0,
+      "unframed_borders": 1
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/rooms/RoomCreateSheet.kt",
+      "unframed_fills": 2,
+      "unframed_borders": 2
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/reminders/RemindersScreen.kt",
+      "unframed_fills": 1,
+      "unframed_borders": 1
+    },
+    {
+      "file": "feature-chat/src/main/java/app/hermes/companion/chat/ChatScreen.kt",
+      "unframed_fills": 16,
+      "unframed_borders": 18
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/console/ConsoleScreen.kt",
+      "unframed_fills": 3,
+      "unframed_borders": 2
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/console/AgentConsoleScreen.kt",
+      "unframed_fills": 5,
+      "unframed_borders": 11
+    },
+    {
+      "file": "app/src/main/java/app/hermes/companion/review/CodeReviewScreen.kt",
+      "unframed_fills": 3,
+      "unframed_borders": 1
+    }
+  ],
+  "semantic_surfaces_retained": [
+    "Opaque menus and modal sheets",
+    "Code, diffs and media content",
+    "Armed Hands warning and explicit confirmation flows",
+    "Primary send and voice actions",
+    "Existing system-wide Hands LIVE safety overlay retains its distinct warning appearance"
+  ],
+  "typography": {
+    "body": 16,
+    "label": 14,
+    "caption": 13,
+    "title": 20,
+    "display": 26
+  },
+  "spacing": [
+    4,
+    8,
+    12,
+    16,
+    24,
+    32
+  ],
+  "device_validation": "Passed on final installed APK: complete navigation/keyboard/provider-filter/reasoning/long-press/voice-controls UI test (15.782s), plus three native settings/scripted voice tests (7.087s). The prior missing-root transition did not recur. No microphone hardware was used.",
+  "speech_hardware": "Still deferred at operator request",
+  "native_realtime_and_incoming_calls": "Remain gated; no new call backend is implied by this redesign",
+  "module_screens": [
+    "Conversations and rooms",
+    "Agents, terminal and structured chat",
+    "Git review and file browsing",
+    "Schedules",
+    "Profiles",
+    "Hosts, fleet and telemetry",
+    "Device pairing, Hands, permissions, notifications and protected apps"
+  ],
+  "sheets_and_overlays": [
+    "Model and reasoning",
+    "Session settings and commands",
+    "Session context",
+    "Rename/pin/archive/branch",
+    "Profile selection",
+    "New agent room",
+    "App settings",
+    "More navigation",
+    "Voice start, mute/end and routing",
+    "Biometric lock",
+    "Pair/deep-link confirmation",
+    "Delete, rewind, approval and retry surfaces"
+  ],
+  "shared_styles": [
+    "One dark canvas, muted green accent and shared Material typography",
+    "16sp body, 14sp labels, 13sp metadata; code remains monospace",
+    "48dp action targets; no forced fixed heights for text actions",
+    "Unfilled list rows and underline inputs",
+    "Opaque rounded menus and expandable scrollable sheets",
+    "Unframed chat turns, copy/read-aloud icons and original Markdown editing semantics"
+  ],
+  "automated_render_checks": [
+    "All seven main modules at normal and doubled text",
+    "Authentication fields and host-switch loading at double text",
+    "Settings, model picker, profiles, room creation, session actions, context, native controls, voice and lock at double text",
+    "Existing portrait/keyboard/landscape and large-text navigation checks",
+    "Existing room, tool, approval, delivery and composer formatting tests",
+    "Pairing digits, Copy, permission denial, Arm and Disarm remain reachable at double text; digit checks allow only subpixel rounding"
+  ],
+  "automated_unique_tests": 636,
+  "automated_failures": 0,
+  "companion_tests": 585,
+  "release_lint": {
+    "Error": 0,
+    "Warning": 60,
+    "Information": 2
+  },
+  "minified_release_build": "passed",
+  "apk_sha256": "8629c795fb462fa06545ed793daecd6986cf9181121c99881642184c4408af83",
+  "rollback_apk": "/private/tmp/companion-open-canvas-20261015/rollback.apk",
+  "rollback_sha256": "ddb331f864a665cf95745dd71f543910c0b764b117f206a9e24d2bc2fb5c40bf",
+  "reasoning_contract": "Session config.set accepts none and canonical effort levels without optional capability metadata. Omitted reasoning support is unknown; explicit false disables controls. Known mandatory models block Off while allowing effort changes. Hermes readback remains authoritative; provider wire mapping stays on the host.",
+  "native_host_validation": {
+    "result": "passed",
+    "device": "S22",
+    "host": "lab private loopback dashboard over SSH and ADB reverse",
+    "profile": "coder",
+    "tests": 1,
+    "seconds": 7.087,
+    "reasoning_sequence": [
+      "none",
+      "high",
+      "low"
+    ],
+    "global_config_mutations": 0,
+    "user_prompts": 0,
+    "temporary_session_deleted": true,
+    "installed_apk_sha256": "8629c795fb462fa06545ed793daecd6986cf9181121c99881642184c4408af83"
+  },
+  "plugin_protocol": "No mobile tool, skill, broker guard, notification policy or plugin behavior changed.",
+  "unrelated_work": "Existing Desk modules, bridge, toolchain edits and ongoing shared voice changes preserved.",
+  "screenshots_reviewed": [
+    "Earlier synthetic S22 empty chat/composer/navigation capture",
+    "Earlier S22 profile list; own Hands heads-up obscures part of the header, so not a clean header readability check",
+    "Robolectric device screen and unframed transcript",
+    "Final S22 model/reasoning sheet, keyboard with minimized voice controls, and Hosts page"
+  ],
+  "installed_hash_matches": true,
+  "operator_connection_unchanged": true,
+  "final_scripted_device_checks": {
+    "tests": 3,
+    "failures": 0,
+    "seconds": 7.087,
+    "classes": [
+      "NativeSessionControlsDeviceTest",
+      "VoiceTurnDeviceTest"
+    ],
+    "microphone_or_speaker_hardware_used": false
+  },
+  "reasoning_metadata_regressions": [
+    "Explicit unsupported disables controls",
+    "Unknown reasoning support permits an explicit session request",
+    "Missing can_disable_reasoning does not block controls",
+    "Known mandatory reasoning disables Off while preserving effort changes",
+    "No optimistic applied value before host acknowledgement"
+  ],
+  "canvas_text_contrast_ratios": {
+    "body": 16.28,
+    "secondary": 8.61,
+    "muted": 7.28,
+    "accent": 12.11,
+    "danger": 10.13
+  },
+  "manual_accessibility_validation": "Automated doubled-text layout and target checks and S22 navigation passed; manual TalkBack walkthrough remains pending.",
+  "render_image_limit": "Activity-decor screenshots do not reliably capture modal windows in Robolectric; sheet coverage comes from semantics/layout assertions and the final S22 model/reasoning capture. S22 Hands safety heads-up obscures part of the header in several screenshots; those headers are not clean visual evidence.",
+  "rollback_procedure": [
+    "adb -s 100.105.213.54:41303 push -z zstd /private/tmp/companion-open-canvas-20261015/rollback.apk /data/local/tmp/hermes-rollback.apk",
+    "adb -s 100.105.213.54:41303 shell pm install -r /data/local/tmp/hermes-rollback.apk",
+    "Verify installed base.apk hash matches rollback_sha256. Reopen Companion normally; do not clear application data."
+  ],
+  "remaining_gates": [
+    "Manual TalkBack walkthrough",
+    "Spoken recognition and full spoken conversation remain deferred by operator"
+  ],
+  "final_navigation_device_check": {
+    "result": "passed",
+    "tests": 1,
+    "failures": 0,
+    "seconds": 15.782,
+    "apk_sha256": "8629c795fb462fa06545ed793daecd6986cf9181121c99881642184c4408af83",
+    "captures": 12,
+    "synthetic_content": true,
+    "microphone_used": false,
+    "test_package_removed": true
+  },
+  "visual_acceptance": "Rejected by operator for layout, spacing and inconsistent presentation. The passing interaction tests were not sufficient visual acceptance. Superseded by 2026-10-15-layout-repair.json."
+}

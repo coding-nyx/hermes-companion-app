@@ -1,10 +1,14 @@
 package app.hermes.companion.chat
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -23,6 +27,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -91,6 +98,7 @@ internal data class SlashCmd(
     val onTrigger: () -> Unit,
 )
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     messages: List<ChatMessage>,
@@ -155,7 +163,9 @@ fun ChatScreen(
     modifier: Modifier = Modifier,
     nativeCommands: List<app.hermes.companion.model.NativeCommand> = emptyList(),
     approvalBusy: Boolean = false,
+    onOpenReasoningPicker: (() -> Unit)? = null,
 ) {
+    var expandedDraft by rememberSaveable(threadId) { mutableStateOf(false) }
     val roomMode = participants.isNotEmpty()
     val listState = remember(threadId) { LazyListState() }
     val scope = rememberCoroutineScope()
@@ -249,12 +259,12 @@ fun ChatScreen(
         if (!loading && messages.isEmpty()) {
             val draft = DraftThread.isDraft(threadId)
             FetchPane(
-                label = if (!error.isNullOrBlank()) "history failed" else if (draft) "new" else "no messages",
+                label = if (!error.isNullOrBlank()) "Could not load this conversation" else "Start a conversation",
                 hint = when {
                     !error.isNullOrBlank() -> error
-                    draft -> "// host thread is created on first send"
-                    historySource.isNotBlank() -> "// $historySource"
-                    else -> "// idle"
+                    draft -> "Write your first message to create this conversation."
+                    historySource.isNotBlank() -> "Write a message below."
+                    else -> "Write a message below."
                 },
                 scanning = false,
                 retryLabel = if (!error.isNullOrBlank()) "RETRY" else null,
@@ -273,9 +283,9 @@ fun ChatScreen(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
+                .padding(horizontal = CompanionSpace.Page, vertical = CompanionSpace.Lg)
                 .testTag("chat.list"),
-            verticalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
+            verticalArrangement = Arrangement.spacedBy(CompanionSpace.Xxl),
         ) {
             if (loading) {
                 item(key = "history.loading") {
@@ -333,8 +343,7 @@ fun ChatScreen(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = CompanionSpace.Md, bottom = CompanionSpace.Md)
-                    .background(CompanionColor.VoidElevated)
-                    .border(1.dp, CompanionColor.Signal)
+
                     .clickable {
                         followTail = true
                         scope.launch {
@@ -348,7 +357,7 @@ fun ChatScreen(
                 if (streaming) LiveDot()
                 Text(
                     text = if (streaming) "LIVE" else "[END]",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                    style = CompanionType.Caption.copy(color = CompanionColor.Signal),
                 )
             }
         }
@@ -357,7 +366,7 @@ fun ChatScreen(
         if (!error.isNullOrBlank() && (loading || messages.isNotEmpty())) {
             Text(
                 text = error,
-                style = CompanionType.Mono.copy(color = CompanionColor.Danger),
+                style = CompanionType.Caption.copy(color = CompanionColor.Danger),
                 modifier = Modifier.padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
             )
         }
@@ -384,11 +393,10 @@ fun ChatScreen(
                     val attachShape = RoundedCornerShape(8.dp)
                     Text(
                         text = "${item.kind.name} · ${item.name}  ×",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                        style = CompanionType.Caption.copy(color = CompanionColor.Signal),
                         modifier = Modifier
                             .clip(attachShape)
-                            .border(CompanionSpace.Hairline, CompanionColor.Signal, attachShape)
-                            .background(CompanionColor.VoidElevated)
+
                             .clickable { onRemoveAttachment(item.id) }
                             .padding(horizontal = 10.dp, vertical = 5.dp),
                     )
@@ -413,12 +421,11 @@ fun ChatScreen(
                     val menuShape = RoundedCornerShape(8.dp)
                     Text(
                         text = label,
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                        style = CompanionType.Caption.copy(color = CompanionColor.Signal),
                         modifier = Modifier
                             .testTag("chat.attach.${label.lowercase()}")
                             .clip(menuShape)
-                            .border(CompanionSpace.Hairline, CompanionColor.Signal, menuShape)
-                            .background(CompanionColor.VoidElevated)
+
                             .clickable(onClick = action)
                             .padding(horizontal = 12.dp, vertical = 7.dp),
                     )
@@ -434,17 +441,16 @@ fun ChatScreen(
                 horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(text = "TO", style = CompanionType.MonoSmall)
+                Text(text = "TO", style = CompanionType.Caption)
                 participants.forEach { p ->
                     val mentionShape = RoundedCornerShape(6.dp)
                     Text(
                         text = "@${p.glyph}",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                        style = CompanionType.Caption.copy(color = CompanionColor.Signal),
                         modifier = Modifier
                             .testTag("chat.mention.${p.glyph}")
                             .clip(mentionShape)
-                            .border(CompanionSpace.Hairline, CompanionColor.LineStrong, mentionShape)
-                            .background(CompanionColor.VoidElevated)
+
                             .clickable { onMention(p.glyph) }
                             .padding(horizontal = 8.dp, vertical = 4.dp),
                     )
@@ -481,14 +487,13 @@ fun ChatScreen(
                 horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(text = "CMD", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
+                Text(text = "CMD", style = CompanionType.Caption.copy(color = CompanionColor.Signal))
                 filteredSlash.forEach { cmd ->
                     val cmdShape = RoundedCornerShape(8.dp)
                     Row(
                         modifier = Modifier
                             .clip(cmdShape)
-                            .border(CompanionSpace.Hairline, CompanionColor.LineStrong, cmdShape)
-                            .background(CompanionColor.VoidElevated)
+
                             .clickable {
                                 slashOpen = false
                                 cmd.onTrigger()
@@ -499,51 +504,48 @@ fun ChatScreen(
                     ) {
                         Text(
                             text = cmd.command,
-                            style = CompanionType.MonoSmall.copy(
+                            style = CompanionType.Caption.copy(
                                 color = CompanionColor.Signal,
                                 fontWeight = FontWeight.SemiBold,
                             ),
                         )
                         Text(
                             text = cmd.description,
-                            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim, fontSize = 10.sp),
+                            style = CompanionType.Caption.copy(color = CompanionColor.TextDim, fontSize = 13.sp),
                         )
                     }
                 }
             }
         }
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = CompanionSpace.Lg, vertical = if (compactComposer) 4.dp else CompanionSpace.Md),
-            verticalAlignment = Alignment.Bottom,
-        ) {
+        MarkdownComposer(
+            value = draft,
+            onValueChange = onDraftChange,
+            onSend = { if (!submitting && !creatingThread) onSend() },
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = if (compactComposer) 4.dp else 8.dp),
+            onOpenModelSettings = if (!roomMode) onOpenModelPicker else null,
+            onOpenReasoningSettings = if (!roomMode) (onOpenReasoningPicker ?: onOpenModelPicker) else null,
+            modelSettingsEnabled = !creatingThread && app.hermes.companion.domain.DraftThread.isPersisted(threadId),
+            compactLayout = compactComposer,
+            onExpand = { expandedDraft = true },
+            leadingControls = {
             if (!roomMode) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     ComposerButton("Add attachment", "chat.attach", onToggleAttach) { tint ->
-                        Text("+", style = CompanionType.Mono.copy(color = tint, fontSize = 22.sp))
+                        ComposerActionIcon(ComposerIcon.ADD, tint)
                     }
                     val commandsActive = slashOpen || draft.startsWith("/")
                     ComposerButton(
                         if (slashOpen) "Hide commands" else "Show commands",
                         "chat.slash", { slashOpen = !slashOpen },
                         foreground = if (commandsActive) CompanionColor.Warn else CompanionColor.Signal,
-                        background = if (commandsActive) CompanionColor.Warn.copy(alpha = 0.2f) else CompanionColor.VoidElevated,
+                        background = if (commandsActive) CompanionColor.Warn.copy(alpha = 0.2f) else Color.Transparent,
                         border = if (commandsActive) CompanionColor.Warn else CompanionColor.LineStrong,
-                    ) { tint -> Text("/", style = CompanionType.Mono.copy(color = tint, fontSize = 20.sp)) }
+                    ) { tint -> ComposerActionIcon(ComposerIcon.COMMANDS, tint) }
                 }
-                Spacer(Modifier.width(8.dp))
             }
-            MarkdownComposer(
-                value = draft,
-                onValueChange = onDraftChange,
-                onSend = { if (!submitting && !creatingThread) onSend() },
-                modifier = Modifier.weight(1f),
-                onOpenModelSettings = if (!roomMode) onOpenModelPicker else null,
-                modelSettingsEnabled = !creatingThread && app.hermes.companion.domain.DraftThread.isPersisted(threadId),
-            )
-            Spacer(Modifier.width(8.dp))
+            },
+            trailingControls = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (!roomMode) {
                     ComposerButton(
@@ -551,7 +553,7 @@ fun ChatScreen(
                         "chat.voice", onVoiceClick,
                         onLongClick = onVoiceLongClick,
                         foreground = if (isListeningVoice) CompanionColor.Warn else CompanionColor.Signal,
-                        background = if (isListeningVoice) CompanionColor.Warn.copy(alpha = 0.2f) else CompanionColor.VoidElevated,
+                        background = if (isListeningVoice) CompanionColor.Warn.copy(alpha = 0.2f) else Color.Transparent,
                         border = if (isListeningVoice) CompanionColor.Warn else CompanionColor.LineStrong,
                     ) { tint -> ComposerActionIcon(if (isListeningVoice) ComposerIcon.STOP else ComposerIcon.MICROPHONE, tint) }
                 }
@@ -572,13 +574,26 @@ fun ChatScreen(
                 ComposerButton(
                     label, "chat.send", if (interrupting) onInterrupt else onSend,
                     enabled = !busy,
-                    foreground = if (interrupting) CompanionColor.Warn else CompanionColor.Signal,
-                    background = if (interrupting) CompanionColor.Warn.copy(alpha = 0.2f) else CompanionColor.SignalDim,
+                    foreground = if (interrupting) CompanionColor.Warn else CompanionColor.Void,
+                    background = if (interrupting) CompanionColor.Warn.copy(alpha = 0.2f) else CompanionColor.Signal,
                     border = if (interrupting) CompanionColor.Warn else CompanionColor.Signal,
                 ) { tint -> ComposerActionIcon(icon, tint, busy) }
-            }
+            }            },
+        )
+    }
+    if (expandedDraft) androidx.compose.material3.ModalBottomSheet(onDismissRequest = { expandedDraft = false },
+        sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = CompanionColor.Void, contentColor = CompanionColor.Text) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp).testTag("chat.expanded"),
+            verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            app.hermes.companion.design.SheetHeading("Edit draft", { expandedDraft = false },
+                closeModifier = Modifier.testTag("chat.expanded.close"))
+            MarkdownComposer(draft, onDraftChange, expanded = true, tagPrefix = "chat.expanded")
+            app.hermes.companion.design.ActionButton("Done editing", { expandedDraft = false },
+                kind = app.hermes.companion.design.ActionKind.PRIMARY, modifier = Modifier.testTag("chat.expanded.done"))
         }
     }
+
 }
 
 /** Tool rows and the agent rail share this inset so a turn reads as one column. */
@@ -621,26 +636,26 @@ private fun UserRow(
                             MessageDelivery.UNCERTAIN -> "checking delivery"
                             else -> delivery.name.lowercase()
                         },
-                        style = CompanionType.MonoSmall.copy(color = if (delivery == MessageDelivery.SENT) CompanionColor.TextMute else CompanionColor.Warn),
+                        style = CompanionType.Caption.copy(color = if (delivery == MessageDelivery.SENT) CompanionColor.TextMute else CompanionColor.Warn),
                         modifier = Modifier.testTag(if (message.queued) "chat.queued" else "chat.delivery.${delivery.name.lowercase()}"),
                     )
                 }
                 if (retryable) {
-                    Text(if (delivery == MessageDelivery.UNCERTAIN) "CHECK" else "RETRY", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                        modifier = Modifier.testTag("chat.retry.${message.id}").clickable { onRetryMessage(message.id) }.padding(4.dp))
+                    Text(if (delivery == MessageDelivery.UNCERTAIN) "CHECK" else "RETRY", style = CompanionType.Caption.copy(color = CompanionColor.Signal),
+                        modifier = Modifier.testTag("chat.retry.${message.id}").heightIn(min = 48.dp).clickable { onRetryMessage(message.id) }.padding(4.dp))
                 }
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
-                        .background(CompanionColor.VoidElevated)
+
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                 ) {
                     Text(
-                        text = "YOU",
-                        style = CompanionType.MonoSmall.copy(
+                        text = "You",
+                        style = CompanionType.Caption.copy(
                             color = CompanionColor.TextMute,
                             fontWeight = FontWeight.SemiBold,
-                            fontSize = 10.sp,
+                            fontSize = 13.sp,
                         ),
                     )
                 }
@@ -649,13 +664,8 @@ private fun UserRow(
                 modifier = Modifier
                     .clip(bubbleShape)
                     .background(CompanionColor.BubbleUser)
-                    .border(
-                        CompanionSpace.Hairline,
-                        if (message.queued) CompanionColor.Warn else CompanionColor.CardBorder,
-                        bubbleShape,
-                    )
                     .clickable { onRewind(message) }
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
             ) {
                 MessageBlocks(message, onFetchMedia, onOpenMedia)
             }
@@ -668,7 +678,7 @@ private fun ReasoningRow(message: ChatMessage) {
     var expanded by remember(message.id) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp).testTag("chat.reasoning")) {
         Text(if (expanded) "▾ REASONING" else "▸ REASONING",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+            style = CompanionType.Caption.copy(color = CompanionColor.TextDim),
             modifier = Modifier.clickable { expanded = !expanded }.padding(vertical = 6.dp))
         if (expanded) Text(message.text, style = CompanionType.Body.copy(color = CompanionColor.TextDim))
     }
@@ -717,7 +727,8 @@ private fun AssistantRow(
     onReadAloud: (ChatMessage) -> Unit,
     readAloudMessageId: String?,
 ) {
-    val label = Rooms.speakerLabel(message.speaker, participants, profiles)
+    val label = Rooms.speakerLabel(message.speaker, participants, profiles).let { if (it == "HERMES") "Hermes" else it }
+    val clipboard = LocalClipboardManager.current
     val railIndex = Rooms.speakerIndex(message.speaker, participants)
     val error = message.toolDetail.orEmpty().takeIf { message.speaker != null && message.text.isBlank() && !message.passed }.orEmpty()
     val bubbleShape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
@@ -727,8 +738,10 @@ private fun AssistantRow(
             .height(IntrinsicSize.Min)
             .testTag(if (message.passed) "chat.passed" else "chat.assistant"),
     ) {
-        AgentRail(live = message.streaming, railIndex = railIndex)
-        Spacer(Modifier.width(AgentRailInset - 2.dp))
+        if (message.speaker != null) {
+            AgentRail(live = message.streaming, railIndex = railIndex)
+            Spacer(Modifier.width(AgentRailInset - 2.dp))
+        }
         Column(Modifier.weight(1f)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -740,23 +753,22 @@ private fun AssistantRow(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
-                            .border(CompanionSpace.Hairline, CompanionColor.SignalDim, RoundedCornerShape(4.dp))
-                            .background(CompanionColor.VoidElevated)
+
                             .padding(horizontal = 5.dp, vertical = 2.dp),
                     ) {
                         Text(
                             text = glyph,
-                            style = CompanionType.MonoSmall.copy(
+                            style = CompanionType.Caption.copy(
                                 color = CompanionColor.Signal,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 10.sp,
+                                fontSize = 13.sp,
                             ),
                         )
                     }
                 }
                 Text(
                     text = label,
-                    style = CompanionType.MonoSmall.copy(
+                    style = CompanionType.Caption.copy(
                         color = CompanionColor.Signal,
                         fontWeight = FontWeight.SemiBold,
                     ),
@@ -765,23 +777,23 @@ private fun AssistantRow(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
-                            .background(CompanionColor.VoidElevated)
+
                             .padding(horizontal = 4.dp, vertical = 1.dp),
                     ) {
                         Text(
                             text = "AGENT",
-                            style = CompanionType.MonoSmall.copy(
+                            style = CompanionType.Caption.copy(
                                 color = CompanionColor.TextDim,
-                                fontSize = 9.sp,
+                                fontSize = 13.sp,
                             ),
                         )
                     }
                 }
                 if (message.passed) {
-                    Text(text = "passed", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute))
+                    Text(text = "passed", style = CompanionType.Caption.copy(color = CompanionColor.TextMute))
                 }
                 if (message.summary) {
-                    Text(text = "summary", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal), modifier = Modifier.testTag("chat.summary"))
+                    Text(text = "summary", style = CompanionType.Caption.copy(color = CompanionColor.Signal), modifier = Modifier.testTag("chat.summary"))
                 }
                 if (message.speaker != null && Rooms.mentionsOperator(message.text)) {
                     Box(
@@ -791,27 +803,21 @@ private fun AssistantRow(
                             .border(CompanionSpace.Hairline, CompanionColor.Warn, RoundedCornerShape(4.dp))
                             .padding(horizontal = 5.dp, vertical = 2.dp),
                     ) {
-                        Text(text = "@YOU", style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn, fontWeight = FontWeight.Bold), modifier = Modifier.testTag("chat.mention.you"))
+                        Text(text = "@YOU", style = CompanionType.Caption.copy(color = CompanionColor.Warn, fontWeight = FontWeight.Bold), modifier = Modifier.testTag("chat.mention.you"))
                     }
                 }
                 if (error.isNotBlank()) {
                     Text(
                         text = Rooms.turnErrorLabel(error),
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                        style = CompanionType.Caption.copy(color = CompanionColor.Warn),
                         modifier = Modifier.testTag("chat.turn.error"),
                     )
-                }
-                if (!message.streaming && message.text.isNotBlank() && !message.passed) {
-                    Text(if (readAloudMessageId == message.id) "STOP AUDIO" else "READ ALOUD",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                        modifier = Modifier.testTag("chat.read.${message.id}")
-                            .clickable { onReadAloud(message) }.padding(6.dp))
                 }
                 if (message.streaming) {
                     LiveDot()
                     Text(
                         text = "streaming",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                        style = CompanionType.Caption.copy(color = CompanionColor.TextMute),
                         modifier = Modifier.testTag("chat.streaming"),
                     )
                 }
@@ -820,9 +826,8 @@ private fun AssistantRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(bubbleShape)
-                    .background(CompanionColor.BubbleAssistant)
-                    .border(CompanionSpace.Hairline, CompanionColor.CardBorder, bubbleShape)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+
+                    .padding(vertical = 4.dp),
             ) {
                 Row(verticalAlignment = Alignment.Bottom) {
                     MessageBlocks(
@@ -838,6 +843,20 @@ private fun AssistantRow(
                                 .padding(bottom = 3.dp)
                                 .testTag("chat.cursor"),
                         )
+                    }
+                }
+            }
+            if (!message.streaming && message.text.isNotBlank() && !message.passed) {
+                Row {
+                    IconButton(onClick = { clipboard.setText(AnnotatedString(message.text)) },
+                        modifier = Modifier.testTag("chat.copy.${message.id}").semantics { contentDescription = "Copy answer" }) {
+                        ComposerActionIcon(ComposerIcon.COPY, CompanionColor.TextDim)
+                    }
+                    IconButton(onClick = { onReadAloud(message) },
+                        modifier = Modifier.testTag("chat.read.${message.id}").semantics {
+                            contentDescription = if (readAloudMessageId == message.id) "Stop reading aloud" else "Read answer aloud"
+                        }) {
+                        ComposerActionIcon(if (readAloudMessageId == message.id) ComposerIcon.STOP else ComposerIcon.SPEAKER, CompanionColor.TextDim)
                     }
                 }
             }
@@ -875,18 +894,17 @@ private fun PendingRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier
                 .clip(pillShape)
-                .background(CompanionColor.VoidElevated)
-                .border(CompanionSpace.Hairline, CompanionColor.LineStrong, pillShape)
+
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             Text(
                 text = speakerText,
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontWeight = FontWeight.Bold),
+                style = CompanionType.Caption.copy(color = CompanionColor.Signal, fontWeight = FontWeight.Bold),
             )
             LiveDot()
             Text(
                 text = label,
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                style = CompanionType.Caption.copy(color = CompanionColor.TextMute),
             )
             WalkingEllipsis()
         }
@@ -903,7 +921,7 @@ private fun RewindStrip(onCancel: () -> Unit) {
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
             .clip(stripShape)
             .border(CompanionSpace.Hairline, CompanionColor.Warn.copy(alpha = 0.4f), stripShape)
-            .background(CompanionColor.VoidElevated)
+
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
             .testTag("chat.rewind"),
         verticalAlignment = Alignment.CenterVertically,
@@ -911,22 +929,23 @@ private fun RewindStrip(onCancel: () -> Unit) {
     ) {
         Text(
             text = "REWIND · this turn and after",
-            style = CompanionType.Mono.copy(color = CompanionColor.Warn),
+            style = CompanionType.Caption.copy(color = CompanionColor.Warn),
             modifier = Modifier.weight(1f),
         )
         Text(
             text = "CANCEL",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger, fontWeight = FontWeight.Bold),
+            style = CompanionType.Caption.copy(color = CompanionColor.Danger, fontWeight = FontWeight.Bold),
             modifier = Modifier
                 .testTag("chat.rewind.cancel")
                 .clip(btnShape)
-                .border(CompanionSpace.Hairline, CompanionColor.Danger, btnShape)
+
                 .clickable(onClick = onCancel)
                 .padding(horizontal = 12.dp, vertical = 6.dp),
         )
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ApprovalStrip(prompt: ApprovalPrompt, onApproval: (String) -> Unit, busy: Boolean) {
     val kind = prompt.kind.uppercase()
@@ -938,18 +957,17 @@ private fun ApprovalStrip(prompt: ApprovalPrompt, onApproval: (String) -> Unit, 
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
             .clip(stripShape)
             .border(CompanionSpace.Hairline, CompanionColor.Warn.copy(alpha = 0.5f), stripShape)
-            .background(CompanionColor.VoidElevated)
+
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
             .testTag("chat.approval"),
     ) {
         val who = prompt.speaker?.let { Rooms.glyph(it) + " wants " } ?: ""
         Text(
             text = "$who$kind · ${prompt.command}",
-            style = CompanionType.Mono.copy(color = CompanionColor.Warn),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
+            style = CompanionType.Caption.copy(color = CompanionColor.Warn),
+
         )
-        Row(
+        FlowRow(
             modifier = Modifier.padding(top = CompanionSpace.Sm),
             horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
         ) {
@@ -968,18 +986,19 @@ private fun ApprovalStrip(prompt: ApprovalPrompt, onApproval: (String) -> Unit, 
                 val bg = if (deny) CompanionColor.Danger.copy(alpha = 0.15f) else CompanionColor.SignalDim
                 Text(
                     text = label,
-                    style = CompanionType.MonoSmall.copy(color = color, fontWeight = FontWeight.Bold),
+                    style = CompanionType.Caption.copy(color = color, fontWeight = FontWeight.Bold),
                     modifier = Modifier
                         .testTag(if (deny) "chat.approval.deny" else if (label == "ALLOW") "chat.approval.allow" else tag)
                         .clip(btnShape)
-                        .border(CompanionSpace.Hairline, color, btnShape)
+
                         .background(bg)
                         .clickable(enabled = !busy) { onApproval(choice) }
-                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                        .heightIn(min = 48.dp)
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
                 )
             }
         }
-        if (busy) Text("Submitting response…", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+        if (busy) Text("Submitting response…", style = CompanionType.Caption.copy(color = CompanionColor.TextDim),
             modifier = Modifier.padding(top = CompanionSpace.Sm).testTag("chat.approval.submitting"))
     }
 }
@@ -1010,12 +1029,7 @@ private fun ToolRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(cardShape)
-            .border(
-                CompanionSpace.Hairline,
-                if (running) CompanionColor.Warn else if (expanded) CompanionColor.Signal else CompanionColor.CardBorder,
-                cardShape,
-            )
-            .background(CompanionColor.VoidElevated)
+
             .clickable { expanded = !expanded }
             .padding(horizontal = 12.dp, vertical = 10.dp)
             .testTag(if (running) "chat.tool.running" else "chat.tool"),
@@ -1035,7 +1049,7 @@ private fun ToolRow(
                 } else {
                     Text(
                         text = "✓",
-                        style = CompanionType.MonoSmall.copy(
+                        style = CompanionType.Caption.copy(
                             color = CompanionColor.Signal,
                             fontWeight = FontWeight.Bold,
                         ),
@@ -1043,18 +1057,18 @@ private fun ToolRow(
                 }
                 Text(
                     text = name,
-                    style = CompanionType.MonoSmall.copy(
+                    style = CompanionType.Caption.copy(
                         color = CompanionColor.Signal,
                         fontWeight = FontWeight.SemiBold,
                     ),
                 )
                 Text(
                     text = "·",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+                    style = CompanionType.Caption.copy(color = CompanionColor.TextDim),
                 )
                 Text(
                     text = if (running) "running · $summary" else summary,
-                    style = CompanionType.MonoSmall.copy(
+                    style = CompanionType.Caption.copy(
                         color = if (running) CompanionColor.TextDim else CompanionColor.TextMute,
                     ),
                     maxLines = 1,
@@ -1064,7 +1078,7 @@ private fun ToolRow(
             Spacer(Modifier.width(8.dp))
             Text(
                 text = if (expanded) "▴" else "▾",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                style = CompanionType.Caption.copy(color = CompanionColor.Signal),
             )
         }
 
@@ -1078,13 +1092,13 @@ private fun ToolRow(
                 ) {
                     Text(
                         text = "INPUT / ARGS",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontSize = 9.sp),
+                        style = CompanionType.Caption.copy(color = CompanionColor.Signal, fontSize = 13.sp),
                     )
                     Text(
                         text = if (inputCopied) "COPIED ✓" else "COPY",
-                        style = CompanionType.MonoSmall.copy(
+                        style = CompanionType.Caption.copy(
                             color = if (inputCopied) CompanionColor.Signal else CompanionColor.TextDim,
-                            fontSize = 9.sp,
+                            fontSize = 13.sp,
                         ),
                         modifier = Modifier
                             .clickable {
@@ -1103,13 +1117,13 @@ private fun ToolRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(codeShape)
-                        .border(CompanionSpace.Hairline, CompanionColor.Line, codeShape)
+
                         .background(CompanionColor.Void)
                         .padding(10.dp),
                 ) {
                     Text(
                         text = detail,
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Text),
+                        style = CompanionType.Caption.copy(color = CompanionColor.Text),
                     )
                 }
             }
@@ -1123,13 +1137,13 @@ private fun ToolRow(
                 ) {
                     Text(
                         text = "OUTPUT",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontSize = 9.sp),
+                        style = CompanionType.Caption.copy(color = CompanionColor.Signal, fontSize = 13.sp),
                     )
                     Text(
                         text = if (outputCopied) "COPIED ✓" else "COPY",
-                        style = CompanionType.MonoSmall.copy(
+                        style = CompanionType.Caption.copy(
                             color = if (outputCopied) CompanionColor.Signal else CompanionColor.TextDim,
-                            fontSize = 9.sp,
+                            fontSize = 13.sp,
                         ),
                         modifier = Modifier
                             .clickable {
@@ -1148,13 +1162,13 @@ private fun ToolRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(codeShape)
-                        .border(CompanionSpace.Hairline, CompanionColor.Line, codeShape)
+
                         .background(CompanionColor.Void)
                         .padding(10.dp),
                 ) {
                     Text(
                         text = body,
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                        style = CompanionType.Caption.copy(color = CompanionColor.TextMute),
                     )
                 }
             }
@@ -1191,7 +1205,7 @@ private fun ChatScrollTrack(listState: LazyListState, modifier: Modifier = Modif
     val info = listState.layoutInfo
     val total = info.totalItemsCount
     val visible = info.visibleItemsInfo
-    if (total <= 1 || visible.isEmpty()) return
+    if (total <= 1 || visible.isEmpty() || (!listState.canScrollForward && !listState.canScrollBackward)) return
     val viewportPx = (info.viewportEndOffset - info.viewportStartOffset).coerceAtLeast(1)
     val shown = visible.size.coerceAtLeast(1)
     val thumbPx = (viewportPx * (shown.toFloat() / total)).toInt().coerceIn(12, viewportPx)
@@ -1208,18 +1222,17 @@ private fun ChatScrollTrack(listState: LazyListState, modifier: Modifier = Modif
             Modifier
                 .fillMaxHeight()
                 .fillMaxWidth()
-                .background(CompanionColor.Line),
+                .background(Color.Transparent),
         )
         Box(
             Modifier
                 .offset { IntOffset(0, y) }
                 .height(with(density) { thumbPx.toDp() })
                 .fillMaxWidth()
-                .background(CompanionColor.Signal),
+                .background(CompanionColor.TextMute.copy(alpha = 0.45f)),
         )
     }
 }
-
 
 /**
  * Room header (A22.10 / A22.3): participant chips (tap = mention, long-press = remove), `+` to add,
@@ -1250,7 +1263,7 @@ private fun RoomBar(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(CompanionColor.VoidElevated)
+
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm)
             .testTag("room.bar"),
         verticalArrangement = Arrangement.spacedBy(CompanionSpace.Xs),
@@ -1270,7 +1283,7 @@ private fun RoomBar(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         modifier = Modifier
                             .testTag("room.participant.${p.id}")
-                            .border(CompanionSpace.Hairline, if (speaking) CompanionColor.Signal else CompanionColor.LineStrong)
+
                             .pointerInput(p.id) {
                                 detectTapGestures(
                                     onTap = { onMention(p.glyph) },
@@ -1282,22 +1295,22 @@ private fun RoomBar(
                         if (speaking) LiveDot(size = 5.dp)
                         Text(
                             text = p.glyph + (if (hands) " ✋" else "") + (if (mod) " ★" else ""),
-                            style = CompanionType.MonoSmall.copy(color = if (speaking) CompanionColor.Signal else CompanionColor.TextDim),
+                            style = CompanionType.Caption.copy(color = if (speaking) CompanionColor.Signal else CompanionColor.TextDim),
                             maxLines = 1,
                             softWrap = false,
                         )
                         if (!p.host.isNullOrBlank()) {
-                            Text(text = p.host!!, style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute, fontSize = 9.sp), maxLines = 1)
+                            Text(text = p.host!!, style = CompanionType.Caption.copy(color = CompanionColor.TextMute, fontSize = 13.sp), maxLines = 1)
                         }
                     }
                 }
                 if (candidates.isNotEmpty()) {
                     Text(
                         text = "+",
-                        style = CompanionType.Mono.copy(color = CompanionColor.Signal),
+                        style = CompanionType.Caption.copy(color = CompanionColor.Signal),
                         modifier = Modifier
                             .testTag("room.add")
-                            .border(CompanionSpace.Hairline, CompanionColor.LineStrong)
+
                             .clickable { adding = !adding }
                             .padding(horizontal = 8.dp, vertical = 2.dp),
                     )
@@ -1310,17 +1323,17 @@ private fun RoomBar(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Md)) {
                 Text(
                     text = "REMOVE ${Rooms.glyph(target)} from the room?",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                    style = CompanionType.Caption.copy(color = CompanionColor.Warn),
                     modifier = Modifier.weight(1f),
                 )
                 Text(
                     text = "REMOVE",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger),
+                    style = CompanionType.Caption.copy(color = CompanionColor.Danger),
                     modifier = Modifier.testTag("room.remove.confirm").clickable { onRemove(target); removeTarget = null }.padding(CompanionSpace.Xs),
                 )
                 Text(
                     text = "CANCEL",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                    style = CompanionType.Caption.copy(color = CompanionColor.TextMute),
                     modifier = Modifier.clickable { removeTarget = null }.padding(CompanionSpace.Xs),
                 )
             }
@@ -1331,14 +1344,14 @@ private fun RoomBar(
                 horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(text = "ADD", style = CompanionType.MonoSmall)
+                Text(text = "ADD", style = CompanionType.Caption)
                 candidates.forEach { (id, label) ->
                     Text(
                         text = "${Rooms.glyph(id)} $label",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+                        style = CompanionType.Caption.copy(color = CompanionColor.Signal),
                         modifier = Modifier
                             .testTag("room.add.$id")
-                            .border(CompanionSpace.Hairline, CompanionColor.LineStrong)
+
                             .clickable { onAdd(id); adding = false }
                             .padding(horizontal = 8.dp, vertical = 4.dp),
                         maxLines = 1,
@@ -1379,10 +1392,10 @@ private fun RoomBar(
         if (showSummary && room.summary.isNotBlank()) {
             Text(
                 text = room.summary,
-                style = CompanionType.Mono.copy(color = CompanionColor.Text),
+                style = CompanionType.Caption.copy(color = CompanionColor.Text),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(CompanionSpace.Hairline, CompanionColor.Line)
+
                     .padding(CompanionSpace.Sm)
                     .testTag("room.summary"),
             )
@@ -1402,12 +1415,12 @@ private fun FloorPill(room: RoomRef, live: Boolean) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         modifier = Modifier
-            .border(CompanionSpace.Hairline, color)
+
             .padding(horizontal = 6.dp, vertical = 2.dp)
             .testTag("room.pill"),
     ) {
         if (live) LiveDot(size = 5.dp)
-        Text(text = text, style = CompanionType.MonoSmall.copy(color = color), maxLines = 1, softWrap = false)
+        Text(text = text, style = CompanionType.Caption.copy(color = color), maxLines = 1, softWrap = false)
     }
 }
 
@@ -1415,7 +1428,7 @@ private fun FloorPill(room: RoomRef, live: Boolean) {
 private fun BarAction(label: String, color: Color, tag: String, onClick: () -> Unit) {
     Text(
         text = label,
-        style = CompanionType.MonoSmall.copy(color = color),
+        style = CompanionType.Caption.copy(color = color),
         maxLines = 1,
         softWrap = false,
         modifier = Modifier
@@ -1433,7 +1446,7 @@ private fun RoomFloorStrip(room: RoomRef, onContinue: (Int) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(CompanionColor.VoidElevated)
+
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm)
             .testTag("room.floor"),
         verticalAlignment = Alignment.CenterVertically,
@@ -1441,17 +1454,17 @@ private fun RoomFloorStrip(room: RoomRef, onContinue: (Int) -> Unit) {
     ) {
         Text(
             text = label,
-            style = CompanionType.MonoSmall.copy(color = if (room.state == "paused") CompanionColor.Warn else CompanionColor.TextMute),
+            style = CompanionType.Caption.copy(color = if (room.state == "paused") CompanionColor.Warn else CompanionColor.TextMute),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         Text(
             text = "CONTINUE +6",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+            style = CompanionType.Caption.copy(color = CompanionColor.Signal),
             modifier = Modifier
                 .testTag("room.floor.continue")
-                .border(CompanionSpace.Hairline, CompanionColor.Signal)
+
                 .clickable { onContinue(6) }
                 .padding(horizontal = 8.dp, vertical = 4.dp),
         )

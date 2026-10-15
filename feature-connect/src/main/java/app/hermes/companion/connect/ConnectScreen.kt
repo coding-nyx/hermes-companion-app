@@ -1,5 +1,7 @@
 package app.hermes.companion.connect
 
+import app.hermes.companion.design.*
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -54,6 +56,7 @@ import app.hermes.companion.domain.OriginPolicy
 import app.hermes.companion.domain.WakePolicy
 import app.hermes.companion.model.GatewayChoice
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ConnectScreen(
     origin: String,
@@ -102,7 +105,7 @@ fun ConnectScreen(
             ) {
                 RobotMark(size = 56.dp, awake = true)
                 Spacer(Modifier.height(CompanionSpace.Md))
-                Text(text = "HERMES", style = CompanionType.Display)
+                Text(text = "Connect to Hermes", style = CompanionType.Display)
                 Spacer(Modifier.height(CompanionSpace.Md))
                 Hairline(Modifier.width(96.dp))
                 FetchPane(
@@ -124,9 +127,9 @@ fun ConnectScreen(
         ) {
         RobotMark(size = 56.dp, awake = false)
         Spacer(Modifier.height(CompanionSpace.Md))
-        Text(text = "HERMES", style = CompanionType.Display)
+        Text(text = "Connect to Hermes", style = CompanionType.Display)
         Spacer(Modifier.height(CompanionSpace.Xs))
-        Text(text = "companion", style = CompanionType.MonoSmall)
+        Text(text = "Hermes Companion", style = CompanionType.Caption)
         Spacer(Modifier.height(CompanionSpace.Md))
         Hairline(Modifier.width(96.dp))
         Spacer(Modifier.height(CompanionSpace.Xl))
@@ -139,21 +142,20 @@ fun ConnectScreen(
             )
             Spacer(Modifier.height(CompanionSpace.Lg))
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+        androidx.compose.foundation.layout.FlowRow(
+            modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = "origin",
-                style = CompanionType.MonoSmall,
+                text = "Dashboard address",
+                style = CompanionType.Caption,
             )
-            Text(
-                text = "PASTE PAIR LINK",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
+            ActionText(
+                text = "Paste pairing link",
+                style = CompanionType.Caption.copy(color = CompanionColor.Signal),
                 modifier = Modifier
                     .testTag("connect.paste_link")
-                    .clickable {
+                    .heightIn(min = 48.dp).clickable {
                         val clip = clipboard.getText()?.text?.trim().orEmpty()
                         val pairLink = WakePolicy.parsePairDeepLink(clip)
                         if (pairLink != null) {
@@ -176,7 +178,7 @@ fun ConnectScreen(
             Spacer(Modifier.height(CompanionSpace.Sm))
             Text(
                 text = hint,
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                style = CompanionType.Caption.copy(color = CompanionColor.Warn),
                 modifier = Modifier
                     .align(Alignment.Start)
                     .testTag("connect.loopback"),
@@ -185,8 +187,8 @@ fun ConnectScreen(
         if (authRequired) {
             Spacer(Modifier.height(CompanionSpace.Lg))
             Text(
-                text = "username",
-                style = CompanionType.MonoSmall,
+                text = "Username",
+                style = CompanionType.Caption,
                 modifier = Modifier.align(Alignment.Start),
             )
             Spacer(Modifier.height(CompanionSpace.Sm))
@@ -199,8 +201,8 @@ fun ConnectScreen(
             )
             Spacer(Modifier.height(CompanionSpace.Lg))
             Text(
-                text = "password",
-                style = CompanionType.MonoSmall,
+                text = "Password",
+                style = CompanionType.Caption,
                 modifier = Modifier.align(Alignment.Start),
             )
             Spacer(Modifier.height(CompanionSpace.Sm))
@@ -215,7 +217,7 @@ fun ConnectScreen(
         }
         Spacer(Modifier.height(CompanionSpace.Lg))
         ActionButton(
-            label = "CONNECT",
+            label = if (authRequired) "Sign in" else "Connect",
             kind = ActionKind.PRIMARY,
             enabled = origin.isNotBlank(),
             onClick = onConnect,
@@ -225,7 +227,7 @@ fun ConnectScreen(
             Spacer(Modifier.height(CompanionSpace.Lg))
             Text(
                 text = error,
-                style = CompanionType.Mono.copy(color = CompanionColor.Danger),
+                style = CompanionType.Caption.copy(color = CompanionColor.Danger),
                 modifier = Modifier.testTag("connect.error"),
             )
         }
@@ -247,9 +249,9 @@ private fun GatewayRail(
             .testTag("connect.gateways"),
     ) {
         Text(
-            text = "gateways",
-            style = CompanionType.MonoSmall,
-            modifier = Modifier.padding(bottom = CompanionSpace.Sm),
+            text = "Saved connections",
+            style = CompanionType.Title,
+            modifier = Modifier.padding(bottom = 12.dp),
         )
         pending?.let { target ->
             Row(
@@ -262,27 +264,27 @@ private fun GatewayRail(
             ) {
                 Text(
                     text = "FORGET  ${target.name}?",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                    style = CompanionType.Caption.copy(color = CompanionColor.Warn),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                Text(
+                ActionText(
                     text = "FORGET",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger),
+                    style = CompanionType.Caption.copy(color = CompanionColor.Danger),
                     modifier = Modifier
                         .testTag("connect.forget.confirm")
-                        .clickable {
+                        .heightIn(min = 48.dp).clickable {
                             onForget(target)
                             pending = null
                         },
                 )
-                Text(
+                ActionText(
                     text = "CANCEL",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                    style = CompanionType.Caption.copy(color = CompanionColor.TextMute),
                     modifier = Modifier
                         .testTag("connect.forget.cancel")
-                        .clickable { pending = null },
+                        .heightIn(min = 48.dp).clickable { pending = null },
                 )
             }
         }
@@ -319,7 +321,7 @@ private fun GatewayChip(
     }
     Column(
         modifier = Modifier
-            .border(CompanionSpace.Hairline, border)
+
             .pointerInput(choice.id) {
                 detectTapGestures(
                     onTap = { onSelect() },
@@ -338,25 +340,25 @@ private fun GatewayChip(
             )
             Text(
                 text = choice.name,
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Text),
+                style = CompanionType.Caption.copy(color = CompanionColor.Text),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false),
             )
             if (choice.forgettable) {
                 Spacer(Modifier.width(CompanionSpace.Sm))
-                Text(
+                ActionText(
                     text = "DEL",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger),
+                    style = CompanionType.Caption.copy(color = CompanionColor.Danger),
                     modifier = Modifier
                         .testTag("connect.gw.${choice.id}.forget")
-                        .clickable(onClick = onForget),
+                        .heightIn(min = 48.dp).clickable(onClick = onForget),
                 )
             }
         }
         Text(
             text = choice.host,
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+            style = CompanionType.Caption.copy(color = CompanionColor.TextMute),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -368,8 +370,8 @@ private fun GatewayChip(
         if (badges.isNotEmpty()) {
             Text(
                 text = badges.joinToString(" · "),
-                style = CompanionType.MonoSmall.copy(
-                    color = if (choice.health == "down") CompanionColor.Warn else CompanionColor.SignalDim,
+                style = CompanionType.Caption.copy(
+                    color = if (choice.health == "down") CompanionColor.Warn else CompanionColor.Signal,
                 ),
                 maxLines = 1,
             )

@@ -31,6 +31,24 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [31], qualifiers = "w360dp-h720dp-xhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ThreadsScreenRenderTest {
+    @Test fun conversationFailureRemainsRecoverableBelowTheRoomList() {
+        var retries = 0
+        val rooms = (1..8).map { app.hermes.companion.model.RoomRef("room-$it", "Planning room $it") }
+        rule.setContent { CompanionTheme { ThreadsScreen(sessions = emptyList(), rooms = rooms,
+            error = "Connection interrupted", onRetry = { retries++ }, nowMs = now) } }
+        rule.onNodeWithTag("threads.rail").performScrollToNode(hasTestTag("threads.failed"))
+        rule.onNodeWithTag("fetch.retry").assertIsDisplayed().performClick()
+        assertEquals(1, retries)
+    }
+
+    @Test fun manyRoomsDoNotPushTheConversationListOutsideItsViewport() {
+        val rooms = (1..8).map { app.hermes.companion.model.RoomRef("room-$it", "Planning room $it") }
+        rule.setContent { CompanionTheme { ThreadsScreen(sessions = rows, rooms = rooms, nowMs = now) } }
+        rule.onNodeWithTag("threads.rail").performScrollToNode(hasTestTag("threads.row.fresh"))
+        rule.onNodeWithTag("threads.row.fresh").assertIsDisplayed()
+        rule.onNodeWithTag("threads.new").assertIsDisplayed()
+    }
+
     @Test
     fun nativeHostKeepsNewThreadWithoutOfferingUnsupportedRoomCreation() {
         rule.setContent {
@@ -134,10 +152,11 @@ class ThreadsScreenRenderTest {
         }
         assertEquals(listOf("fresh", "busy", "old"), tagsWithPrefix("threads.row."))
         assertEquals(listOf("TODAY", "YESTERDAY", "THIS WEEK"), tagsWithPrefix("threads.group."))
-        rule.onNodeWithTag("threads.time.fresh").assertTextEquals("1h")
-        rule.onNodeWithTag("threads.time.busy").assertTextEquals("1d")
-        rule.onNodeWithTag("threads.meta.old").assertTextEquals("3 msgs · telegram")
+        rule.onNodeWithTag("threads.time.fresh", useUnmergedTree = true).assertTextEquals("1h")
+        rule.onNodeWithTag("threads.time.busy", useUnmergedTree = true).assertTextEquals("1d")
+        rule.onNodeWithTag("threads.meta.old", useUnmergedTree = true).assertTextEquals("3 msgs · telegram")
         rule.onNodeWithTag("threads.count").assertTextEquals("3")
+        rule.onNodeWithTag("threads.sort.menu").performClick()
         rule.onNodeWithTag("threads.sort.created").assertIsDisplayed()
     }
 
@@ -148,7 +167,7 @@ class ThreadsScreenRenderTest {
             CompanionTheme { ThreadsScreen(sessions = sorted, sort = ThreadSort.ACTIVE, nowMs = now) }
         }
         assertEquals(listOf("busy", "fresh", "old"), tagsWithPrefix("threads.row."))
-        rule.onNodeWithTag("threads.time.busy").assertTextEquals("1m")
+        rule.onNodeWithTag("threads.time.busy", useUnmergedTree = true).assertTextEquals("1m")
         assertEquals(listOf("TODAY", "THIS WEEK"), tagsWithPrefix("threads.group."))
     }
 
@@ -168,8 +187,10 @@ class ThreadsScreenRenderTest {
         rule.setContent {
             CompanionTheme { ThreadsScreen(sessions = rows, onSort = { picked = it }, nowMs = now) }
         }
+        rule.onNodeWithTag("threads.sort.menu").performClick()
         rule.onNodeWithTag("threads.sort.active").performClick()
         assertEquals(ThreadSort.ACTIVE, picked)
+        rule.onNodeWithTag("threads.sort.menu").performClick()
         rule.onNodeWithTag("threads.sort.title").performClick()
         assertEquals(ThreadSort.TITLE, picked)
     }
@@ -200,12 +221,20 @@ class ThreadsScreenRenderTest {
                 )
             }
         }
-        rule.onNodeWithTag("threads.archived.arch").assertTextEquals(" · ARCHIVED")
+        rule.onNodeWithTag("threads.rail").performScrollToNode(hasTestTag("threads.row.arch"))
+        rule.onNodeWithTag("threads.archived.arch", useUnmergedTree = true).assertTextEquals(" · ARCHIVED")
+        rule.onNodeWithTag("threads.filter.menu").performClick()
         rule.onNodeWithTag("threads.filter.telegram").performClick()
         assertEquals(listOf("old", "arch"), tagsWithPrefix("threads.row."))
         rule.onNodeWithTag("threads.count").assertTextEquals("2/4")
+        rule.onNodeWithTag("threads.filter.menu").performClick()
         rule.onNodeWithTag("threads.filter.telegram").performClick()
-        assertEquals(4, tagsWithPrefix("threads.row.").size)
+        rule.onNodeWithTag("threads.count").assertTextEquals("4")
+        listOf("fresh", "busy", "old", "arch").forEach { id ->
+            rule.onNodeWithTag("threads.rail").performScrollToNode(hasTestTag("threads.row.$id"))
+            rule.onNodeWithTag("threads.row.$id").assertIsDisplayed()
+        }
+        rule.onNodeWithTag("threads.filter.menu").performClick()
         rule.onNodeWithTag("threads.filter.archived").performClick()
         assertEquals(false, archived)
     }

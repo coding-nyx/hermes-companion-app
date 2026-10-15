@@ -49,9 +49,10 @@ class AppNavigationRenderTest {
         capture("navigation-standard")
     }
 
-    @Test fun doubledTextKeepsAllLabelsVisible() {
+    @Test fun doubledTextKeepsSelectedLabelReadableAndEveryDestinationAccessible() {
         bar(MainTab.DEVICE, fontScale = 2f)
-        listOf("Chats", "Agents", "Device", "More").forEach {
+        listOf("Chats", "Agents", "Device", "More").forEach { compose.onNodeWithContentDescription(it).assertIsDisplayed().assertHeightIsAtLeast(48.dp) }
+        listOf("Device").forEach {
             val node = compose.onNodeWithText(it, useUnmergedTree = true).assertIsDisplayed()
             val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
             node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> action(layouts) }
@@ -63,6 +64,17 @@ class AppNavigationRenderTest {
         }
         compose.onNodeWithTag("nav.device").assertIsSelected()
         capture("navigation-large-text")
+    }
+
+    @Test fun centerVoiceTapAndLongPressHaveDistinctActions() {
+        var voice = 0; var dictate = 0
+        compose.setContent { CompanionTheme {
+            AppNavigationBar(CompanionState(), false, {}, {}, onVoice = { voice++ }, onDictate = { dictate++ })
+        } }
+        compose.onNodeWithTag("nav.voice").performTouchInput { longClick() }
+        assertEquals(1, dictate); assertEquals(0, voice)
+        compose.onNodeWithTag("nav.voice").performClick()
+        assertEquals(1, voice); assertEquals(1, dictate)
     }
 
     @Test fun secondaryDestinationsSelectMoreAndOpenConversationSelectsChats() {

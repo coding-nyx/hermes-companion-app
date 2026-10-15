@@ -1,57 +1,25 @@
 package app.hermes.companion.gateway
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import app.hermes.companion.design.ActionButton
-import app.hermes.companion.design.ActionKind
-import app.hermes.companion.design.ToggleRow
-import app.hermes.companion.design.LiveDot
-import app.hermes.companion.design.CompanionColor
-import app.hermes.companion.design.CompanionSpace
-import app.hermes.companion.design.CompanionType
-import app.hermes.companion.design.FetchRow
-import app.hermes.companion.design.Hairline
-import app.hermes.companion.design.HairlineField
-import app.hermes.companion.design.rememberDismissKeyboard
-import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import app.hermes.companion.design.*
 import app.hermes.companion.domain.GatewayBook
 import app.hermes.companion.domain.HostHealth
-import app.hermes.companion.model.DashboardStatus
-import app.hermes.companion.model.GatewayHud
-import app.hermes.companion.model.HermesUpdateStatus
-import app.hermes.companion.model.HostMetrics
-import app.hermes.companion.model.HudState
-import app.hermes.companion.model.ModelCatalog
-import app.hermes.companion.model.PeerLink
-import app.hermes.companion.model.SavedGateway
+import app.hermes.companion.model.*
 
+@OptIn(ExperimentalLayoutApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun GatewayScreen(
     status: DashboardStatus?,
@@ -88,507 +56,169 @@ fun GatewayScreen(
     onUnlinkPeer: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    var newGatewayName by remember { mutableStateOf("") }
-    var newGatewayOrigin by remember { mutableStateOf("") }
-    var showAddGateway by remember { mutableStateOf(false) }
-    val originFocus = remember { FocusRequester() }
+    var detail by rememberSaveable { mutableStateOf<String?>(null) }
+    var name by rememberSaveable { mutableStateOf("") }
+    var origin by rememberSaveable { mutableStateOf("") }
+    var formError by remember { mutableStateOf<String?>(null) }
+    var pendingUnlink by remember { mutableStateOf<String?>(null) }
+    var confirmUpdate by remember { mutableStateOf(false) }
+    val current = savedGateways.firstOrNull { it.isActive }
     val dismissKeyboard = rememberDismissKeyboard()
-    fun saveGateway() {
-        if (newGatewayOrigin.isBlank()) return
-        onAddGateway(newGatewayName.ifBlank { newGatewayOrigin }, newGatewayOrigin)
-        newGatewayName = ""
-        newGatewayOrigin = ""
-        showAddGateway = false
-        dismissKeyboard()
+    fun save() {
+        val address = origin.trim()
+        val uri = runCatching { java.net.URI(address) }.getOrNull()
+        if (uri?.scheme !in listOf("https", "http") || uri?.host.isNullOrBlank()) {
+            formError = "Enter a dashboard address beginning with https:// or http://."
+            return
+        }
+        onAddGateway(name.trim().ifBlank { uri!!.host }, address)
+        name = ""; origin = ""; formError = null; detail = null; dismissKeyboard()
     }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(CompanionColor.Void)
-            .verticalScroll(rememberScrollState())
-            .padding(CompanionSpace.Lg)
-            .testTag("gateway.surface"),
-    ) {
-        Text(text = "gateway & telemetry", style = CompanionType.Body)
-        Spacer(Modifier.height(CompanionSpace.Lg))
-
-        // HUD Dots
-        HudLine("GW", hud.gateway)
-        HudLine("TG", hud.telegram)
-        HudLine("DC", hud.discord)
-        HudLine("API", hud.api)
-
-        nativeVoiceStatus?.let { voice ->
-            Spacer(Modifier.height(CompanionSpace.Lg))
-            Text("Voice & calls", style = CompanionType.Body)
-            Text("Voice chat · On-device audio", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim))
-            Text(when (voice.available) {
-                true -> "Host realtime voice · Ready"
-                false -> "Host realtime voice · Unavailable"
-                null -> "Host realtime voice · Not checked"
-            }, style = CompanionType.MonoSmall.copy(color = CompanionColor.Text))
-            if (voice.reason.isNotBlank()) Text(voice.reason,
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim))
-            Text("Incoming agent calls are not available yet", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim))
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).testTag("gateway.surface"),
+        verticalArrangement = Arrangement.spacedBy(32.dp)) {
+        GroupedSection("Current connection") {
+            PreferenceRow(current?.name ?: "Hermes host", current?.origin ?: "Connected host", value = "Current", selected = true,
+                onClick = { detail = "Connection" }, modifier = Modifier.testTag("gateway.current"))
         }
-
-        Spacer(Modifier.height(CompanionSpace.Lg))
-        Hairline()
-        Spacer(Modifier.height(CompanionSpace.Lg))
-
-        // Host Telemetry HUD
-        Text(text = "host telemetry", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
-        Spacer(Modifier.height(CompanionSpace.Sm))
-        if (hostMetrics != null) {
-            val cpuP = hostMetrics.cpu.percent
-            val memP = hostMetrics.memory.percent
-            val diskP = hostMetrics.disk.percent
-            MonoLine("cpu", "${String.format("%.1f", cpuP)}% (${hostMetrics.cpu.cores} cores)")
-            if (hostMetrics.cpu.loadAvg.isNotEmpty()) {
-                MonoLine("load", hostMetrics.cpu.loadAvg.joinToString(", ") { String.format("%.2f", it) })
+        GroupedSection("Saved hosts", trailing = { ActionButton("Add host", { detail = "Add host" }, modifier = Modifier.testTag("gateway.add")) }) {
+            if (savedGateways.isEmpty()) PreferenceRow("No saved hosts", "Add a host to switch connections here", onClick = { detail = "Add host" }, modifier = Modifier.testTag("gateway.fleet.empty"))
+            savedGateways.forEach { host ->
+                val target = switchingOrigin != null && GatewayBook.key(host.origin) == GatewayBook.key(switchingOrigin)
+                PreferenceRow(host.name, host.origin, value = if (target) "Connecting…" else if (host.isActive) "Current" else "Connect",
+                    selected = host.isActive, enabled = switchingOrigin == null,
+                    onClick = { if (host.isActive) detail = "Connection" else onSelectGateway(host) },
+                    modifier = Modifier.testTag("gateway.fleet.${GatewayBook.chipId(host.origin)}"))
+                if (target) Text("Connecting…", style = CompanionType.Caption, modifier = Modifier.padding(16.dp).testTag("gateway.switching"))
             }
-            val memUsedGb = hostMetrics.memory.usedBytes.toDouble() / (1024 * 1024 * 1024)
-            val memTotalGb = hostMetrics.memory.totalBytes.toDouble() / (1024 * 1024 * 1024)
-            MonoLine("memory", "${String.format("%.1f", memUsedGb)}G / ${String.format("%.1f", memTotalGb)}G · ${String.format("%.1f", memP)}%")
-            val diskUsedGb = hostMetrics.disk.usedBytes.toDouble() / (1024 * 1024 * 1024)
-            val diskTotalGb = hostMetrics.disk.totalBytes.toDouble() / (1024 * 1024 * 1024)
-            MonoLine("disk", "${String.format("%.1f", diskUsedGb)}G / ${String.format("%.1f", diskTotalGb)}G · ${String.format("%.1f", diskP)}%")
-            if (hostMetrics.system.platform.isNotBlank()) {
-                MonoLine("platform", hostMetrics.system.platform)
-            }
-            if (hostMetrics.system.uptimeSeconds > 0) {
-                val hours = hostMetrics.system.uptimeSeconds / 3600
-                val mins = (hostMetrics.system.uptimeSeconds % 3600) / 60
-                MonoLine("uptime", "${hours}h ${mins}m")
-            }
-            if (hostMetrics.hermes.pid > 0) {
-                MonoLine("hermes pid", "${hostMetrics.hermes.pid} (${hostMetrics.hermes.status})")
-            }
-        } else if (status != null) {
-            MonoLine("state", status.gatewayState.ifBlank { if (status.gatewayRunning) "running" else "stopped" })
-            MonoLine("version", status.version.ifBlank { "—" })
-            if (status.exitReason.isNotBlank()) MonoLine("exit", status.exitReason)
-            if (status.memoryPressure.isNotBlank()) MonoLine("memory", status.memoryPressure)
-            if (status.diskPressure.isNotBlank()) MonoLine("disk", status.diskPressure)
-        } else if (hostLoading) {
-            FetchRow(
-                label = "SYNCING TELEMETRY",
-                padded = false,
-                modifier = Modifier.testTag("gateway.telemetry.loading"),
-            )
-        } else {
-            Text(text = "NO TELEMETRY // idle", style = CompanionType.Mono)
         }
-
-        Spacer(Modifier.height(CompanionSpace.Lg))
-        Hairline()
-        Spacer(Modifier.height(CompanionSpace.Lg))
-
-        // Model & Provider Switching
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(text = "model selection", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
-            Text(
-                text = "[BROWSE ALL ▸]",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                modifier = Modifier
-                    .testTag("gateway.model.all")
-                    .clickable { onOpenModelPicker() }
-                    .padding(CompanionSpace.Xs),
-            )
+        GroupedSection("Host tools") {
+            PreferenceRow("Model catalog", modelOverride.ifBlank { modelCatalog?.currentModel.orEmpty() }.ifBlank { "Host default" },
+                onClick = onOpenModelPicker, modifier = Modifier.testTag("gateway.model.all"))
+            PreferenceRow("Health & services", "Resources, connection and uptime", onClick = { detail = "Host health" }, modifier = Modifier.testTag("gateway.health.open"))
+            PreferenceRow("Linked hosts", "${peers.size} linked · Room participants", onClick = { detail = "Linked hosts" }, modifier = Modifier.testTag("gateway.peers.open"))
+            PreferenceRow("Updates", updateStatus?.let { if (it.updateAvailable) "Update available" else "Up to date" } ?: "Not checked yet",
+                onClick = { detail = "Updates" }, modifier = Modifier.testTag("gateway.updates.open"))
+            PreferenceRow("Background connection", if (stayConnected) "Enabled" else "Disabled", onClick = { detail = "Background connection" }, modifier = Modifier.testTag("gateway.background.open"))
         }
-        Spacer(Modifier.height(CompanionSpace.Sm))
-        if (modelCatalog != null && modelCatalog.models.isNotEmpty()) {
-            MonoLine("current model", "${modelCatalog.currentProvider} / ${modelCatalog.currentModel}")
-            if (modelOverride.isNotBlank() && modelOverride != modelCatalog.currentModel) {
-                Spacer(Modifier.height(CompanionSpace.Xs))
-                MonoLine("turn override", modelOverride)
-            }
-            Spacer(Modifier.height(CompanionSpace.Sm))
-            Text(text = "available models (tap to switch):", style = CompanionType.MonoSmall)
-            Spacer(Modifier.height(CompanionSpace.Xs))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
-            ) {
-                for (opt in modelCatalog.models) {
-                    val selectedId = modelOverride.ifBlank { modelCatalog.currentModel }
-                    val isSelected = opt.id == selectedId
-                    Box(
-                        modifier = Modifier
-                            .background(if (isSelected) CompanionColor.SignalDim else CompanionColor.VoidElevated)
-                            .border(1.dp, if (isSelected) CompanionColor.Signal else CompanionColor.Line)
-                            .clickable { onSwitchModel(opt.id, opt.provider) }
-                            .padding(horizontal = CompanionSpace.Sm, vertical = CompanionSpace.Xs)
-                            .testTag("gateway.model.${opt.id}"),
-                    ) {
-                        Text(
-                            text = opt.id,
-                            style = CompanionType.MonoSmall.copy(
-                                color = if (isSelected) CompanionColor.Signal else CompanionColor.Text,
-                            ),
-                        )
+    }
+    if (detail != null) androidx.compose.material3.ModalBottomSheet(onDismissRequest = { detail = null },
+        sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = CompanionColor.Void, contentColor = CompanionColor.Text) {
+        Column(Modifier.fillMaxWidth().verticalScroll(remember(detail) { androidx.compose.foundation.ScrollState(0) })
+            .padding(horizontal = 24.dp).padding(bottom = 24.dp).testTag("gateway.details"), verticalArrangement = Arrangement.spacedBy(32.dp)) {
+            SheetHeading(detail!!, { detail = null })
+            when (detail) {
+                "Add host" -> GroupedSection("Connection", padded = true) {
+                    Text("Host name", style = CompanionType.RowTitle)
+                    HairlineField(name, { name = it }, placeholder = "Work host", keyboardType = KeyboardType.Text, modifier = Modifier.testTag("gateway.add.name"))
+                    Text("Dashboard address", style = CompanionType.RowTitle)
+                    HairlineField(origin, { origin = it; formError = null }, placeholder = "https://your-host/hermes", keyboardType = KeyboardType.Uri,
+                        onDone = { save() }, modifier = Modifier.testTag("gateway.add.origin"))
+                    formError?.let { StatusStrip(it) }
+                    ActionButton("Save and connect", { save() }, kind = ActionKind.PRIMARY, enabled = origin.isNotBlank(), modifier = Modifier.testTag("gateway.add.save"))
+                }
+                "Connection" -> {
+                    GroupedSection("Host") {
+                        PreferenceRow(current?.name ?: "Current host", current?.origin ?: "Connected")
+                        PreferenceRow("Model catalog", modelCatalog?.currentModel ?: "Not loaded", onClick = { detail = null; onOpenModelPicker() })
+                        PreferenceRow("Health & services", "Current connection diagnostics", onClick = { detail = "Host health" })
+                    }
+                    GroupedSection("Voice", padded = true) {
+                        Text(when (nativeVoiceStatus?.available) { true -> "Host voice provider is available. Native calling remains gated."; false -> "Host voice provider is unavailable."; null -> "Host voice availability has not been confirmed." }, style = CompanionType.Body)
+                        nativeVoiceStatus?.reason?.takeIf { it.isNotBlank() }?.let { Text(it, style = CompanionType.Caption) }
+                        Text("Incoming agent calls are not available yet.", style = CompanionType.Caption)
                     }
                 }
-            }
-        } else if (modelLoading) {
-            FetchRow(
-                label = "LOADING MODELS",
-                padded = false,
-                modifier = Modifier.testTag("gateway.model.loading"),
-            )
-        } else {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = if (modelOverride.isNotBlank()) "current: $modelOverride" else "NO MODEL CATALOG // idle",
-                    style = CompanionType.Mono,
-                )
-                Text(
-                    text = "[ENTER CUSTOM MODEL]",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                    modifier = Modifier
-                        .testTag("gateway.model.custom")
-                        .clickable { onOpenModelPicker() }
-                        .padding(CompanionSpace.Xs),
-                )
-            }
-        }
-
-        Spacer(Modifier.height(CompanionSpace.Lg))
-        Hairline()
-        Spacer(Modifier.height(CompanionSpace.Lg))
-
-        // Multi-Gateway / Installation Switcher
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(text = "fleet / installations", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
-            Text(
-                text = if (showAddGateway) "[CANCEL]" else "[+ ADD GATEWAY]",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                modifier = Modifier
-                    .clickable {
-                        showAddGateway = !showAddGateway
-                        if (!showAddGateway) dismissKeyboard()
+                "Host health" -> {
+                    GroupedSection("Services") {
+                        listOf(Triple("Gateway", "gw", hud.gateway), Triple("Telegram", "tg", hud.telegram), Triple("Discord", "dc", hud.discord), Triple("API", "api", hud.api)).forEach { (label, tag, value) ->
+                            PreferenceRow(label, when(value) { HudState.ON -> "Connected"; HudState.OFF -> "Offline"; else -> "Needs attention" }, modifier = Modifier.testTag("gateway.$tag"))
+                        }
                     }
-                    .padding(CompanionSpace.Xs),
-            )
-        }
-        Spacer(Modifier.height(CompanionSpace.Sm))
-
-        if (showAddGateway) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(CompanionColor.VoidElevated)
-                    .border(1.dp, CompanionColor.Line)
-                    .padding(CompanionSpace.Md),
-            ) {
-                Text(text = "NAME / LABEL", style = CompanionType.MonoSmall)
-                Spacer(Modifier.height(CompanionSpace.Xs))
-                HairlineField(
-                    value = newGatewayName,
-                    onValueChange = { newGatewayName = it },
-                    keyboardType = KeyboardType.Text,
-                    imeAction = ImeAction.Next,
-                    placeholder = "hub-11",
-                    onNext = { originFocus.requestFocus() },
-                    modifier = Modifier.testTag("gateway.add.name"),
-                )
-                Spacer(Modifier.height(CompanionSpace.Sm))
-                Text(text = "ORIGIN URL (e.g. http://100.85.151.99:9120)", style = CompanionType.MonoSmall)
-                Spacer(Modifier.height(CompanionSpace.Xs))
-                HairlineField(
-                    value = newGatewayOrigin,
-                    onValueChange = { newGatewayOrigin = it },
-                    keyboardType = KeyboardType.Uri,
-                    imeAction = ImeAction.Done,
-                    placeholder = "http://100.x.y.z:9120",
-                    focusRequester = originFocus,
-                    onDone = { saveGateway() },
-                    modifier = Modifier.testTag("gateway.add.origin"),
-                )
-                Spacer(Modifier.height(CompanionSpace.Sm))
-                ActionButton(
-                    label = "SAVE & SWITCH",
-                    kind = ActionKind.PRIMARY,
-                    enabled = newGatewayOrigin.isNotBlank(),
-                    onClick = { saveGateway() },
-                    modifier = Modifier.testTag("gateway.add.save"),
-                )
-            }
-            Spacer(Modifier.height(CompanionSpace.Sm))
-        }
-
-        if (savedGateways.isEmpty()) {
-            Text(
-                text = "NO SAVED GATEWAYS // add one above",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                modifier = Modifier.testTag("gateway.fleet.empty"),
-            )
-        } else {
-            val switching = switchingOrigin != null
-            for (gw in savedGateways) {
-                val isTarget = switching && GatewayBook.key(gw.origin) == GatewayBook.key(switchingOrigin.orEmpty())
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(if (gw.isActive || isTarget) CompanionColor.VoidElevated else CompanionColor.Void)
-                        .border(1.dp, if (isTarget) CompanionColor.Signal else if (gw.isActive) CompanionColor.SignalDim else CompanionColor.Line)
-                        .clickable(enabled = !switching && !gw.isActive) { onSelectGateway(gw) }
-                        .padding(CompanionSpace.Sm)
-                        .testTag("gateway.fleet.${GatewayBook.chipId(gw.origin)}"),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = gw.name,
-                            style = CompanionType.Mono.copy(
-                                color = if (gw.isActive) CompanionColor.Signal else CompanionColor.Text,
-                            ),
-                        )
-                        Text(
-                            text = gw.origin,
-                            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        HostHealthChip(
-                            origin = gw.origin,
-                            health = hostHealth[GatewayBook.key(gw.origin)] ?: HostHealth.UNKNOWN,
-                        )
+                    GroupedSection("Resources") {
                         when {
-                            isTarget -> {
-                                LiveDot(modifier = Modifier.padding(end = 6.dp))
-                                Text(
-                                    text = "SWITCHING",
-                                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                                    modifier = Modifier.testTag("gateway.switching"),
-                                )
+                            hostMetrics != null -> {
+                                val gib = 1024.0 * 1024 * 1024
+                                PreferenceRow("CPU", "${String.format("%.1f", hostMetrics.cpu.percent)}% · ${hostMetrics.cpu.cores} cores")
+                                PreferenceRow("Memory", "${String.format("%.1f", hostMetrics.memory.usedBytes / gib)} / ${String.format("%.1f", hostMetrics.memory.totalBytes / gib)} GB")
+                                PreferenceRow("Disk", "${String.format("%.1f", hostMetrics.disk.usedBytes / gib)} / ${String.format("%.1f", hostMetrics.disk.totalBytes / gib)} GB")
+                                PreferenceRow("Uptime", "${hostMetrics.system.uptimeSeconds / 3600} hours")
+                                if (hostMetrics.system.platform.isNotBlank()) PreferenceRow("Platform", hostMetrics.system.platform)
                             }
-                            gw.isActive -> Text(
-                                text = "ACTIVE",
-                                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                            )
-                            else -> Text(
-                                text = "[SWITCH]",
-                                style = CompanionType.MonoSmall.copy(color = if (switching) CompanionColor.TextMute else CompanionColor.TextDim),
-                            )
+                            status != null -> {
+                                PreferenceRow("Gateway", status.gatewayState.ifBlank { if (status.gatewayRunning) "Running" else "Stopped" })
+                                PreferenceRow("Version", status.version.ifBlank { "Not reported" })
+                                if (status.exitReason.isNotBlank()) PreferenceRow("Last exit", status.exitReason)
+                            }
+                            hostLoading -> FetchRow("Reading host health…", modifier = Modifier.testTag("gateway.telemetry.loading"))
+                            else -> PreferenceRow("Not reported", "Health will appear when the host connection is ready")
                         }
                     }
                 }
-                Spacer(Modifier.height(CompanionSpace.Xs))
-            }
-        }
-
-        Spacer(Modifier.height(CompanionSpace.Lg))
-        Hairline()
-        Spacer(Modifier.height(CompanionSpace.Lg))
-
-        // Peer links: which other relays may run turns in this host's rooms (A22.11)
-        Text(text = "peer links · cross-host rooms", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
-        Spacer(Modifier.height(CompanionSpace.Sm))
-        if (peersLoading && peers.isEmpty()) {
-            FetchRow(label = "LOADING PEERS", padded = false, modifier = Modifier.testTag("gateway.peers.loading"))
-        }
-        val linkedKeys = peers.map { GatewayBook.key(it.origin) }.toSet()
-        peers.forEach { peer ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, CompanionColor.SignalDim)
-                    .padding(CompanionSpace.Sm)
-                    .testTag("gateway.peer.${peer.name}"),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(text = peer.name, style = CompanionType.Mono.copy(color = CompanionColor.Signal))
-                    Text(text = peer.origin, style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                "Linked hosts" -> {
+                    GroupedSection("Linked") {
+                        if (peersLoading && peers.isEmpty()) FetchRow("Loading linked hosts…", modifier = Modifier.testTag("gateway.peers.loading"))
+                        peers.forEach { peer -> PreferenceRow(peer.name, peer.origin, value = "Unlink", onClick = { pendingUnlink = peer.name }, modifier = Modifier.testTag("gateway.peer.${peer.name}")) }
+                        if (peers.isEmpty() && !peersLoading) PreferenceRow("No linked hosts", "Link another saved host to include its profiles in rooms", modifier = Modifier.testTag("gateway.peers.empty"))
+                    }
+                    val linked = peers.map { GatewayBook.key(it.origin) }.toSet()
+                    val candidates = savedGateways.filter { !it.isActive && GatewayBook.key(it.origin) !in linked }
+                    if (candidates.isNotEmpty()) GroupedSection("Available hosts") {
+                        candidates.forEach { host -> PreferenceRow(host.name, host.origin, value = if (peerLinking == host.origin) "Linking…" else "Link",
+                            enabled = peerLinking == null, onClick = { onLinkHost(host) }, modifier = Modifier.testTag("gateway.peer.link.${GatewayBook.chipId(host.origin)}")) }
+                    }
+                    Text("Linking shares a pairing credential between these hosts.", style = CompanionType.Caption)
                 }
-                Text(
-                    text = "LINKED",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                    modifier = Modifier.padding(end = CompanionSpace.Sm),
-                )
-                Text(
-                    text = "[UNLINK]",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
-                    modifier = Modifier
-                        .testTag("gateway.peer.unlink.${peer.name}")
-                        .clickable { onUnlinkPeer(peer.name) }
-                        .padding(CompanionSpace.Xs),
-                )
-            }
-            Spacer(Modifier.height(CompanionSpace.Xs))
-        }
-        val linkable = savedGateways.filter { !it.isActive && GatewayBook.key(it.origin) !in linkedKeys }
-        if (linkable.isEmpty() && peers.isEmpty()) {
-            Text(
-                text = "save a second gateway above, then LINK it so its agents can join rooms here",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                modifier = Modifier.testTag("gateway.peers.empty"),
-            )
-        }
-        linkable.forEach { gw ->
-            val busy = peerLinking != null && GatewayBook.key(peerLinking) == GatewayBook.key(gw.origin)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, CompanionColor.Line)
-                    .padding(CompanionSpace.Sm)
-                    .testTag("gateway.peer.candidate.${GatewayBook.chipId(gw.origin)}"),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(text = gw.name, style = CompanionType.Mono.copy(color = CompanionColor.Text))
-                    Text(text = gw.origin, style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                "Updates" -> GroupedSection("Hermes host", padded = true) {
+                    when {
+                        updateLoading -> FetchRow("Checking host…", padded = false, modifier = Modifier.testTag("gateway.update.loading"))
+                        updateStatus == null -> Text("Check for an update on this host.", style = CompanionType.Body)
+                        updateStatus.updateAvailable -> {
+                            Text("${updateStatus.currentVersion} · ${updateStatus.behind} commits behind", style = CompanionType.Body)
+                            if (updateStatus.summary.isNotBlank()) Text(updateStatus.summary, style = CompanionType.Caption)
+                            ActionButton("Update Hermes", { confirmUpdate = true }, kind = ActionKind.PRIMARY, modifier = Modifier.testTag("gateway.update.apply"))
+                        }
+                        else -> Text("Hermes is up to date · ${updateStatus.currentVersion}", style = CompanionType.Body)
+                    }
+                    ActionButton("Check for updates", onCheckUpdate, enabled = !updateLoading, modifier = Modifier.testTag("gateway.update.check"))
                 }
-                ActionButton(
-                    label = "LINK HOSTS",
-                    kind = ActionKind.GHOST,
-                    busy = busy,
-                    busyLabel = "LINKING",
-                    enabled = peerLinking == null,
-                    onClick = { onLinkHost(gw) },
-                    modifier = Modifier.testTag("gateway.peer.link.${GatewayBook.chipId(gw.origin)}"),
-                )
-            }
-            Spacer(Modifier.height(CompanionSpace.Xs))
-        }
-        Text(
-            text = "this phone is paired with both hosts, so it hands each relay a credential for the other",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-        )
-
-        Spacer(Modifier.height(CompanionSpace.Lg))
-        Hairline()
-        Spacer(Modifier.height(CompanionSpace.Lg))
-
-        // Hermes Updates
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(text = "updates", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
-            Text(
-                text = if (updateLoading) "SYNCING" else "[CHECK NOW]",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                modifier = Modifier
-                    .clickable(enabled = !updateLoading, onClick = onCheckUpdate)
-                    .padding(CompanionSpace.Xs)
-                    .testTag("gateway.update.check"),
-            )
-        }
-        Spacer(Modifier.height(CompanionSpace.Sm))
-        if (updateStatus != null) {
-            MonoLine("current version", updateStatus.currentVersion)
-            if (updateStatus.updateAvailable) {
-                MonoLine("behind", "${updateStatus.behind} commits")
-                if (updateStatus.summary.isNotBlank()) {
-                    MonoLine("latest commit", updateStatus.summary)
+                "Background connection" -> {
+                    GroupedSection("Connection") { PreferenceToggle("Stay connected", stayConnected, onToggleStay,
+                        summary = "Keep the operator connection active in the background", modifier = Modifier.testTag("gateway.stay")) }
+                    GroupedSection("Notification topic", padded = true) {
+                        HairlineField(ntfyTopic, onNtfyTopicChange, placeholder = "Topic name", onDone = onSaveNtfy, modifier = Modifier.testTag("gateway.ntfy"))
+                        ActionButton("Save topic", onSaveNtfy, modifier = Modifier.testTag("gateway.ntfy.save"))
+                    }
                 }
-                Spacer(Modifier.height(CompanionSpace.Sm))
-                ActionButton(
-                    label = "UPDATE HERMES NOW",
-                    kind = ActionKind.PRIMARY,
-                    busy = updateLoading,
-                    busyLabel = "UPDATING",
-                    onClick = onApplyUpdate,
-                    modifier = Modifier.testTag("gateway.update.apply"),
-                )
-            } else {
-                Text(text = "HERMES IS UP TO DATE", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
             }
-        } else if (updateLoading) {
-            FetchRow(
-                label = "QUERYING HOST",
-                padded = false,
-                modifier = Modifier.testTag("gateway.update.loading"),
-            )
-        } else {
-            Text(text = "TAP CHECK NOW TO QUERY HOST", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute))
         }
+    }
+    if (pendingUnlink != null) androidx.compose.material3.AlertDialog(onDismissRequest = { pendingUnlink = null },
+        title = { Text("Unlink ${pendingUnlink}?") }, text = { Text("Existing room history is kept. New turns from this host will stop.") },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { val peer = pendingUnlink!!; pendingUnlink = null; onUnlinkPeer(peer) }) { Text("Unlink") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = { pendingUnlink = null }) { Text("Cancel") } })
+    if (confirmUpdate) androidx.compose.material3.AlertDialog(onDismissRequest = { confirmUpdate = false },
+        title = { Text("Update this host?") }, text = { Text("The gateway will restart. Check request outcomes after reconnecting before retrying work.") },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { confirmUpdate = false; onApplyUpdate() }) { Text("Update") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmUpdate = false }) { Text("Later") } })
+}
 
-        Spacer(Modifier.height(CompanionSpace.Lg))
-        Hairline()
-        Spacer(Modifier.height(CompanionSpace.Lg))
+@Composable
+private fun HelpText(text: String, modifier: Modifier = Modifier) = Text(text, style = CompanionType.Caption, modifier = modifier)
 
-        // Wake / Ntfy topic
-        Text(text = "wake", style = CompanionType.MonoSmall)
-        Spacer(Modifier.height(CompanionSpace.Sm))
-        HairlineField(
-            value = ntfyTopic,
-            onValueChange = onNtfyTopicChange,
-            modifier = Modifier.testTag("gateway.ntfy"),
-            onDone = onSaveNtfy,
-        )
-        Spacer(Modifier.height(CompanionSpace.Sm))
-        ActionButton(label = "SAVE TOPIC", onClick = onSaveNtfy, modifier = Modifier.testTag("gateway.ntfy.save"))
-        Spacer(Modifier.height(CompanionSpace.Lg))
-        ToggleRow(
-            label = "STAY CONNECTED",
-            hint = "keep the operator socket alive in the background",
-            on = stayConnected,
-            onToggle = onToggleStay,
-            modifier = Modifier.testTag("gateway.stay"),
-        )
+@Composable
+private fun ServiceStatus(name: String, tag: String, state: HudState) {
+    val color = when (state) { HudState.ON -> CompanionColor.Signal; HudState.DEGRADED -> CompanionColor.Warn; HudState.OFF -> CompanionColor.TextMute }
+    Row(Modifier.heightIn(min = 32.dp).testTag("gateway.$tag"), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("•", color = color)
+        Text("$name · ${state.name.lowercase()}", style = CompanionType.Caption, color = color)
     }
 }
 
 @Composable
-private fun HudLine(label: String, state: HudState) {
-    val color = when (state) {
-        HudState.ON -> CompanionColor.Signal
-        HudState.DEGRADED -> CompanionColor.Warn
-        HudState.OFF -> CompanionColor.TextMute
-    }
-    Text(
-        text = "$label  ${state.name.lowercase()}",
-        style = CompanionType.Mono.copy(color = color),
-        modifier = Modifier
-            .padding(vertical = CompanionSpace.Xs)
-            .testTag("gateway.${label.lowercase()}"),
-    )
-}
-
-@Composable
-private fun MonoLine(label: String, value: String) {
-    Text(
-        text = "$label  $value",
-        style = CompanionType.Mono,
-        maxLines = 2,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.padding(vertical = CompanionSpace.Xs),
-    )
-}
-
-@Composable
-private fun HostHealthChip(origin: String, health: HostHealth) {
-    val (label, color) = when (health) {
-        HostHealth.ONLINE -> "ONLINE" to CompanionColor.Signal
-        HostHealth.OFFLINE -> "OFFLINE" to CompanionColor.TextMute
-        HostHealth.GATED -> "GATED" to CompanionColor.Warn
-        HostHealth.UNKNOWN -> return
-    }
-    Text(
-        text = label,
-        style = CompanionType.MonoSmall.copy(color = color),
-        modifier = Modifier
-            .padding(end = CompanionSpace.Sm)
-            .testTag("gateway.health.${GatewayBook.chipId(origin)}"),
-    )
+private fun HostHealthLabel(origin: String, health: HostHealth) {
+    if (health == HostHealth.UNKNOWN) return
+    Text(health.name.lowercase().replaceFirstChar(Char::titlecase), style = CompanionType.Caption,
+        color = if (health == HostHealth.ONLINE) CompanionColor.Signal else CompanionColor.TextDim,
+        modifier = Modifier.testTag("gateway.health.${GatewayBook.chipId(origin)}"))
 }

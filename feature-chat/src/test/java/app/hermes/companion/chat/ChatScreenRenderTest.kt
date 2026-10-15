@@ -6,6 +6,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import android.graphics.Canvas
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.*
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.performClick
@@ -136,7 +139,7 @@ class ChatScreenRenderTest {
     }
     @Test fun playingReadAloudOffersStopWithoutHidingRichTextFormatting() {
         mount(listOf(agentDone), streaming = false, readAloudMessageId = agentDone.id)
-        rule.onNodeWithText("STOP AUDIO").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Stop reading aloud").assertIsDisplayed()
         rule.onNodeWithTag("chat.fmt.bold").assertIsDisplayed()
     }
 
@@ -171,6 +174,19 @@ class ChatScreenRenderTest {
         rule.onNodeWithContentDescription("Dictate message").assertIsDisplayed()
         rule.onNodeWithContentDescription("Send message").assertIsDisplayed()
         snap("13-restored-rich-text-composer")
+    }
+
+    @Test fun expandedEditorPreservesRichTextAndNeverSubmitsTheDraft() {
+        var draft by mutableStateOf("Keep **formatting**")
+        var sends = 0
+        rule.setContent { CompanionTheme { ChatScreen(emptyList(), draft, false, null, null,
+            { draft = it }, { sends++ }, {}, {}, threadId = "expanded-fixture") } }
+        rule.onNodeWithTag("chat.expand").performClick()
+        rule.onNodeWithTag("chat.expanded.draft").performTextInput(" and notes")
+        rule.onNodeWithTag("chat.expanded.done").performScrollTo().performClick()
+        assertTrue(draft.contains("**formatting**") && draft.contains("and notes"))
+        org.junit.Assert.assertEquals(0, sends)
+        rule.onNodeWithTag("chat.draft").assertTextEquals(draft)
     }
 
     @Test fun composerControlsStackBesideAWideDraftAndDispatchTheirOwnActions() {
@@ -307,8 +323,8 @@ class ChatScreenRenderTest {
         rule.onNodeWithTag("chat.user").assertIsDisplayed()
         rule.onNodeWithTag("chat.assistant").assertIsDisplayed()
         rule.onNodeWithTag("chat.tool").assertIsDisplayed()
-        rule.onNodeWithText("YOU").assertIsDisplayed()
-        rule.onNodeWithText("HERMES").assertIsDisplayed()
+        rule.onNodeWithText("You").assertIsDisplayed()
+        rule.onNodeWithText("Hermes").assertIsDisplayed()
         rule.onAllNodesWithTag("chat.cursor").assertCountEquals(0)
         rule.onAllNodesWithTag("chat.pending").assertCountEquals(0)
         rule.onNodeWithContentDescription("Dictate message").assertIsDisplayed()

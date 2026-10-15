@@ -4,25 +4,30 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-/** Void, signal, type. Dark only. One accent. No elevation. */
+/** Grouped: open reading surfaces, bounded settings, and explicit semantic contrast. */
 object CompanionColor {
-    val Void = Color(0xFF07080A)
-    val VoidElevated = Color(0xFF0E1014)
-    val VoidSurface = Color(0xFF141720)
-    val CardBorder = Color(0xFF1E2430)
-    val BubbleUser = Color(0xFF162332)
-    val BubbleAssistant = Color(0xFF10151E)
-    val Line = Color(0xFF1A1E26)
-    val LineStrong = Color(0xFF2A3140)
-    val Text = Color(0xFFE6EDF3)
-    val TextDim = Color(0xFF8B96A8)
-    val TextMute = Color(0xFF5C6570)
-    val Signal = Color(0xFF00E5C3)
-    val SignalDim = Color(0xFF0A3D36)
-    val SignalSubtle = Color(0x1F00E5C3)
-    val SignalGlow = Color(0x3300E5C3)
-    val Warn = Color(0xFFF5A524)
-    val Danger = Color(0xFFFF4D6A)
+    // Read the system palette at use time. Canvas/ANSI helpers also consume these tokens
+    // outside composition; no process-global mutable theme is shared between app windows.
+    internal val dark: Boolean get() = android.content.res.Resources.getSystem().configuration.uiMode and
+        android.content.res.Configuration.UI_MODE_NIGHT_MASK != android.content.res.Configuration.UI_MODE_NIGHT_NO
+    private fun role(light: Long, dark: Long) = Color(if (this.dark) dark else light)
+    val Void get() = role(0xFFF7F8F6, 0xFF101613)
+    val VoidElevated get() = role(0xFFFFFFFF, 0xFF1A231E)
+    val VoidSurface get() = role(0xFFEDF1EC, 0xFF212D25)
+    val CardBorder get() = role(0xFFD9E1D9, 0xFF34463A)
+    val BubbleUser get() = VoidSurface
+    val BubbleAssistant get() = Void
+    val Line get() = CardBorder
+    val LineStrong get() = role(0xFFC5D0C6, 0xFF40564A)
+    val Text get() = role(0xFF19291F, 0xFFEFF4EF)
+    val TextDim get() = role(0xFF5A695F, 0xFFA6B6AC)
+    val TextMute get() = role(0xFF5A695F, 0xFF95A79C)
+    val Signal get() = role(0xFF256C48, 0xFFA3DCB9)
+    val SignalDim get() = role(0xFFE8F0E7, 0xFF243A2B)
+    val SignalSubtle get() = Signal.copy(alpha = .12f)
+    val SignalGlow get() = Signal.copy(alpha = .2f)
+    val Warn get() = role(0xFF775218, 0xFFE2C48B)
+    val Danger get() = role(0xFFAD3839, 0xFFF0AAA5)
 }
 
 object CompanionSpace {
@@ -32,11 +37,13 @@ object CompanionSpace {
     val Md = 12.dp
     val Lg = 16.dp
     val Xl = 24.dp
-    val Xxl = 40.dp
+    val Xxl = 32.dp
+    val Page = 24.dp
+    val Touch = 48.dp
     val RadiusChrome = 8.dp
     val RadiusChip = 6.dp
     val RadiusSmall = 8.dp
-    val RadiusCard = 12.dp
+    val RadiusCard = 16.dp
     val RadiusBubble = 16.dp
     val RadiusPill = 24.dp
 }

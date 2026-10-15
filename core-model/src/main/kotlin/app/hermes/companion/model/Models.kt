@@ -460,6 +460,8 @@ data class ModelOption(
     val reasoning: Boolean = false,
     val fast: Boolean = false,
     val canDisableReasoning: Boolean? = null,
+    /** False when the inventory omitted the reasoning capability, rather than denying it. */
+    val reasoningSupportReported: Boolean = true,
 )
 
 @Serializable

@@ -21,6 +21,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -88,11 +91,12 @@ fun HairlineField(
                 }
             }
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .heightIn(min = 48.dp)
             .clip(shape)
-            .background(CompanionColor.VoidElevated)
-            .border(CompanionSpace.Hairline, if (isFocused) CompanionColor.Signal else CompanionColor.LineStrong, shape)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        textStyle = CompanionType.Mono.copy(color = CompanionColor.Text),
+            .background(CompanionColor.VoidSurface)
+            .border(if (isFocused) 2.dp else 1.dp, if (isFocused) CompanionColor.Signal else CompanionColor.LineStrong, shape)
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        textStyle = CompanionType.Body.copy(color = CompanionColor.Text),
         cursorBrush = SolidColor(CompanionColor.Signal),
         singleLine = true,
         visualTransformation = visualTransformation,
@@ -114,7 +118,7 @@ fun HairlineField(
                 if (value.isEmpty() && !placeholder.isNullOrEmpty()) {
                     Text(
                         text = placeholder,
-                        style = CompanionType.Mono.copy(color = CompanionColor.TextMute),
+                        style = CompanionType.Body.copy(color = CompanionColor.TextMute),
                         maxLines = 1,
                     )
                 }

@@ -22,7 +22,8 @@ internal fun parseModelCatalog(obj: JsonObject): ModelCatalog {
             val reasoning = mCaps?.get("reasoning")?.jsonPrimitive?.booleanOrNull ?: false
             val fast = mCaps?.get("fast")?.jsonPrimitive?.booleanOrNull ?: false
             options.add(ModelOption(id = mName, provider = pSlug, name = "$pName · $mName", reasoning = reasoning, fast = fast,
-                    canDisableReasoning = mCaps?.get("can_disable_reasoning")?.jsonPrimitive?.booleanOrNull))
+                    canDisableReasoning = mCaps?.get("can_disable_reasoning")?.jsonPrimitive?.booleanOrNull,
+                    reasoningSupportReported = mCaps?.get("reasoning")?.jsonPrimitive?.booleanOrNull != null))
         }
     }
     return ModelCatalog(currentModel = currentModel, currentProvider = currentProvider, models = options.distinctBy { it.provider to it.id })

@@ -141,7 +141,7 @@ private fun CodeBlockView(block: MdBlock.Fence) {
                         text = "$lineCount lines",
                         style = CompanionType.MonoSmall.copy(
                             color = CompanionColor.TextMute,
-                            fontSize = 10.sp,
+                            fontSize = 13.sp,
                         ),
                     )
                 }
@@ -166,7 +166,7 @@ private fun CodeBlockView(block: MdBlock.Fence) {
                     text = if (copied) "COPIED ✓" else "COPY",
                     style = CompanionType.MonoSmall.copy(
                         color = if (copied) CompanionColor.Signal else CompanionColor.TextDim,
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                     ),
                 )
             }

@@ -1,5 +1,8 @@
 package app.hermes.companion.console
 
+import app.hermes.companion.design.ActionText
+
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -102,17 +105,17 @@ fun ConsoleScreen(
                 Spacer(Modifier.width(CompanionSpace.Sm))
                 Text(
                     text = if (isExecuting) "HOST EXEC // BUSY" else "HOST TERMINAL // READY",
-                    style = CompanionType.MonoSmall.copy(
+                    style = CompanionType.Caption.copy(
                         color = if (isExecuting) CompanionColor.Warn else CompanionColor.Signal,
                     ),
                 )
             }
-            Text(
+            ActionText(
                 text = "CLEAR",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+                style = CompanionType.Caption.copy(color = CompanionColor.TextDim),
                 modifier = Modifier
                     .testTag("console.clear")
-                    .clickable(onClick = onClear)
+                    .heightIn(min = 48.dp).clickable(onClick = onClear)
                     .padding(CompanionSpace.Xs),
             )
         }
@@ -129,9 +132,8 @@ fun ConsoleScreen(
             for (preset in presets) {
                 Box(
                     modifier = Modifier
-                        .background(CompanionColor.VoidElevated)
-                        .border(1.dp, CompanionColor.Line)
-                        .clickable(enabled = !isExecuting) {
+
+                        .heightIn(min = 48.dp).clickable(enabled = !isExecuting) {
                             input = preset
                             onExecute(preset)
                         }
@@ -139,7 +141,7 @@ fun ConsoleScreen(
                 ) {
                     Text(
                         text = preset,
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Text),
+                        style = CompanionType.Caption.copy(color = CompanionColor.Text),
                     )
                 }
             }
@@ -151,7 +153,7 @@ fun ConsoleScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .background(CompanionColor.VoidElevated)
+
                 .padding(CompanionSpace.Md),
         ) {
             if (logs.isEmpty()) {
@@ -183,7 +185,7 @@ fun ConsoleScreen(
                                 if (entry.timestamp.isNotBlank()) {
                                     Text(
                                         text = entry.timestamp,
-                                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
+                                        style = CompanionType.Caption.copy(color = CompanionColor.TextMute),
                                     )
                                 }
                             }
@@ -194,7 +196,7 @@ fun ConsoleScreen(
                                     Spacer(Modifier.width(CompanionSpace.Sm))
                                     Text(
                                         text = "executing on host",
-                                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn),
+                                        style = CompanionType.Caption.copy(color = CompanionColor.Warn),
                                     )
                                 }
                             } else if (entry.result != null) {
@@ -202,19 +204,19 @@ fun ConsoleScreen(
                                 if (res.stdout.isNotBlank()) {
                                     Text(
                                         text = res.stdout.trimEnd(),
-                                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Text),
+                                        style = CompanionType.Caption.copy(color = CompanionColor.Text),
                                     )
                                 }
                                 if (res.stderr.isNotBlank()) {
                                     Text(
                                         text = res.stderr.trimEnd(),
-                                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger),
+                                        style = CompanionType.Caption.copy(color = CompanionColor.Danger),
                                     )
                                 }
                                 if (res.exitCode != 0) {
                                     Text(
                                         text = "exit code: ${res.exitCode}",
-                                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger),
+                                        style = CompanionType.Caption.copy(color = CompanionColor.Danger),
                                     )
                                 }
                             }
@@ -276,9 +278,8 @@ fun ConsoleScreen(
             Spacer(Modifier.width(CompanionSpace.Sm))
             Box(
                 modifier = Modifier
-                    .background(if (input.isNotBlank() && !isExecuting) CompanionColor.SignalDim else CompanionColor.VoidElevated)
-                    .border(1.dp, if (input.isNotBlank() && !isExecuting) CompanionColor.Signal else CompanionColor.Line)
-                    .clickable(enabled = input.isNotBlank() && !isExecuting) {
+
+                    .heightIn(min = 48.dp).clickable(enabled = input.isNotBlank() && !isExecuting) {
                         val cmd = input.trim()
                         input = ""
                         onExecute(cmd)
@@ -288,7 +289,7 @@ fun ConsoleScreen(
             ) {
                 Text(
                     text = if (isExecuting) "..." else "RUN",
-                    style = CompanionType.MonoSmall.copy(
+                    style = CompanionType.Caption.copy(
                         color = if (input.isNotBlank() && !isExecuting) CompanionColor.Signal else CompanionColor.TextMute,
                     ),
                 )

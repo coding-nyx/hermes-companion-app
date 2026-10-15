@@ -1,0 +1,102 @@
+{
+  "scope": "Implement the selected Grouped design across existing Companion pages and supporting views. Future provider, call and host-administration contracts remain gated.",
+  "prototype": "/Users/nyx/.codex/visualizations/2026/10/13/01a133e0-45cb-7741-80a3-65e809c7f0fa/hermes-grouped-complete.html",
+  "foundations": {
+    "page_gutter_dp": 24,
+    "group_padding_dp": 16,
+    "group_gap_dp": 32,
+    "radius_dp": 16,
+    "touch_target_dp": 48,
+    "type_sp": {
+      "page": 24,
+      "section": 18,
+      "row": 16,
+      "body": 16,
+      "metadata": 12
+    },
+    "appearance": "Device light/dark palette, including Canvas and Markdown helpers"
+  },
+  "implemented": [
+    "Shared GroupedSection, GroupSurface, PreferenceRow, PreferenceToggle and SheetHeading anatomy with readable large-text values and explicit accessible actions.",
+    "One app header, contextual chat options, center Voice dock and persistent active-voice controls; long-press dictation stays attached to the selected chat.",
+    "Open chat and room lists, search before sort/filter controls, accessible conversation open/long-press actions, separated section headings and retained list virtualization.",
+    "Rich-text composer kept with its selection transformations, visible formatting icons, vertical action stacks, draft-safe model/reasoning entry and expanded draft editing without submission.",
+    "Device overview with focused phone identity, Hands, permissions, notification stream/destination, protected rules and audit views; revoke confirmation and unchanged broker/arming policies.",
+    "Settings navigation with separate speech, background connection, readability, current capability and about views; scoped existing callbacks and a disconnect confirmation.",
+    "Hosts overview and focused add-host, connection, health/services, linked hosts, updates and background views; URL validation and confirmations for unlink/update.",
+    "Profiles and pickers with wrapping metadata; grouped session actions, model/reasoning, context and command controls.",
+    "Room creation grouped by templates, participants, rules, legacy policy and opening message while preserving the host contract.",
+    "Agent creation moved into a scrollable focused sheet, accessible session rows, consistent creation controls and retained terminal/structured-session/directory workflows.",
+    "Schedules grouped by active/paused, with real job detail, latest outcome, pause/resume and a single-run confirmation.",
+    "Git review uses distinct change sections, readable filenames/paths and an enclosed commit field. Commit messages survive failed submissions.",
+    "Voice start/controls use shared headings, a clear stage, muted/readiness feedback, grouped routing and existing exact-conversation navigation.",
+    "Connection/authentication retain their actual credential and pairing flows with clearer labels and consistent inputs."
+  ],
+  "unchanged_feature_gates": [
+    "Host speech spoken recognition/conversation validation is deferred; build flag remains false.",
+    "Native realtime and incoming calling remain disabled. No simulated call history, provider result or host-administration success is shipped.",
+    "No mobile tool, notification protocol, canonical skill, prompt, broker guard, plugin deployment or host credential logic changed."
+  ],
+  "preserved_unrelated_work": [
+    "Desk modules and its plans/configuration",
+    "Shared voice engine and port changes from another task",
+    "Existing repository modifications outside the UI scope"
+  ],
+  "validation": {
+    "tests": 646,
+    "companion_tests": 595,
+    "failures": 0,
+    "lint": {
+      "Error": 0,
+      "Fatal": 0,
+      "Warning": 60,
+      "Information": 2
+    },
+    "apks": {
+      "grouped.apk": "fb4d97cc588c7487ebc0221738087f34d18891817a9cbe6599e2593aabbbdfa1",
+      "grouped-release.apk": "50c57a1c85530136223cacff6b455f9d993d604516ff40aa141a5e38931e4a53",
+      "rollback.apk": "76b1c6bc53c0dfb84dff89ce9fb8c523bf23c7984f734dd636caae980e645c90"
+    },
+    "git_diff_check": "passed"
+  },
+  "device": {
+    "serial": "100.105.213.54:41303",
+    "status": "Installed and hash verified. Device UI run deferred: normal keyguard remained locked after five minutes; test runner stopped and removed, normal app relaunched. No device UI pass claimed.",
+    "microphone": "Not used. Spoken hardware checks remain deferred.",
+    "installed": true,
+    "apk_sha256": "fb4d97cc588c7487ebc0221738087f34d18891817a9cbe6599e2593aabbbdfa1",
+    "apk_sha256_verified": true,
+    "preferences_unchanged": true,
+    "test_package_removed": true,
+    "captures": "Native rendered fixtures under app/build/reports/grouped and app/build/reports/open-canvas; no completed new S22 captures.",
+    "operator_instruction": "Keep device checks deferred (explicit operator instruction after installation)."
+  },
+  "checkpoint": "/private/tmp/grouped-implementation-20261015",
+  "rollback": {
+    "apk": "/private/tmp/grouped-implementation-20261015/rollback.apk",
+    "sha256": "76b1c6bc53c0dfb84dff89ce9fb8c523bf23c7984f734dd636caae980e645c90",
+    "procedure": "adb -s 100.105.213.54:41303 install -r /private/tmp/grouped-implementation-20261015/rollback.apk"
+  },
+  "acceptance": "Automated checks are functional evidence. Operator visual acceptance and manual TalkBack remain separate gates.",
+  "publication_validation": {
+    "scope": "Exact staged Companion snapshot, excluding separate Desk modules/toolchain and shared voice-engine edits. The earlier workspace validation and installed APK above include those preserved local changes.",
+    "tests": 594,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "builds": [
+      "debug",
+      "minified release",
+      "debug instrumentation"
+    ],
+    "lint": {
+      "Error": 0,
+      "Fatal": 0,
+      "Warning": 52,
+      "Information": 2
+    },
+    "command": "JAVA_HOME=<JDK17> ANDROID_HOME=<AndroidSDK> ./gradlew testDebugUnitTest :domain:test :core-model:test :app:assembleDebug :app:assembleRelease :app:lintRelease :app:assembleDebugAndroidTest -PhermesDeviceAbi=arm64-v8a",
+    "device_checks": "Deferred by operator; publication build not installed during this check.",
+    "log": "/private/tmp/grouped-publish-validation.log"
+  }
+}

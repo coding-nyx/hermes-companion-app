@@ -32,17 +32,15 @@ fun ProfileGlyph(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
 ) {
-    val border = if (selected) CompanionColor.Signal else CompanionColor.LineStrong
     val fg = if (selected) CompanionColor.Signal else CompanionColor.TextMute
     Box(
         modifier = modifier
-            .size(36.dp)
-            .border(CompanionSpace.Hairline, border)
-            .background(CompanionColor.Void)
+            .size(if (onClick != null) 48.dp else 40.dp)
+            .background(if (selected) CompanionColor.SignalDim else CompanionColor.VoidSurface, androidx.compose.foundation.shape.CircleShape)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text = code, style = CompanionType.Mono.copy(color = fg))
+        Text(text = code, style = CompanionType.Caption.copy(color = fg))
     }
 }
 
@@ -53,25 +51,24 @@ fun HudDot(label: String, on: Boolean, degraded: Boolean = false, modifier: Modi
         on -> CompanionColor.Signal
         else -> CompanionColor.TextMute
     }
-    Text(text = label, style = CompanionType.MonoSmall.copy(color = color), modifier = modifier)
+    Text(text = label, style = CompanionType.Caption.copy(color = color), modifier = modifier)
 }
 
 @Composable
 fun MachineChip(label: String, modifier: Modifier = Modifier) {
     Text(
         text = label,
-        style = CompanionType.MonoSmall.copy(color = CompanionColor.Void),
+        style = CompanionType.Caption.copy(color = CompanionColor.Signal),
         modifier = modifier
-            .background(CompanionColor.Signal)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .padding(horizontal = 4.dp, vertical = 2.dp),
     )
 }
 
 @Composable
 fun SignalRow(label: String, value: String, modifier: Modifier = Modifier) {
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
-        Text(text = label, style = CompanionType.Mono)
+        Text(text = label, style = CompanionType.Caption)
         Spacer(Modifier.width(CompanionSpace.Sm))
-        Text(text = value, style = CompanionType.Mono.copy(color = CompanionColor.Text))
+        Text(text = value, style = CompanionType.Caption.copy(color = CompanionColor.Text))
     }
 }

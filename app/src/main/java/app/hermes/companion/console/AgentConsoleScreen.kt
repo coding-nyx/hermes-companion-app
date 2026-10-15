@@ -1,5 +1,9 @@
 package app.hermes.companion.console
 
+import app.hermes.companion.design.*
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.combinedClickable
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -85,6 +89,7 @@ private val KeyRow = listOf(
  * Agent console (P23 / A23.2): the `term` tab. `SESSIONS` lists tmux-backed coding-agent sessions on
  * the host and opens one as a live pane snapshot with a key row; `SHELL` keeps the quick exec console.
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun AgentConsoleScreen(
     sessions: List<AgentSession>,
@@ -142,22 +147,22 @@ fun AgentConsoleScreen(
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Segment("SESSIONS", segment == "sessions", "agents.segment.sessions") { segment = "sessions" }
-            Segment("SHELL", segment == "shell", "agents.segment.shell") { segment = "shell" }
+            Segment("Sessions", segment == "sessions", "agents.segment.sessions") { segment = "sessions" }
+            Segment("Shell", segment == "shell", "agents.segment.shell") { segment = "shell" }
             Spacer(Modifier.weight(1f))
             if (segment == "sessions") {
-                Text(text = sessions.count { it.status != "exited" }.toString(), style = CompanionType.MonoSmall, modifier = Modifier.testTag("agents.count"))
-                Text(
+                Text(text = sessions.count { it.status != "exited" }.toString(), style = CompanionType.Caption, modifier = Modifier.testTag("agents.count"))
+                ActionText(
                     text = "↻",
                     style = CompanionType.Mono.copy(color = if (sessionsLoading) CompanionColor.TextMute else CompanionColor.Signal),
-                    modifier = Modifier.testTag("agents.refresh").clickable(enabled = !sessionsLoading, onClick = onRefresh).padding(horizontal = CompanionSpace.Sm),
+                    modifier = Modifier.testTag("agents.refresh").heightIn(min = 48.dp).clickable(enabled = !sessionsLoading, onClick = onRefresh).padding(horizontal = CompanionSpace.Sm),
                 )
-                Text(
-                    text = if (newOpen) "CANCEL" else "NEW",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                    modifier = Modifier.testTag("agents.new").clickable { onToggleNew(!newOpen) }.padding(horizontal = CompanionSpace.Sm),
+                ActionText(
+                    text = if (newOpen) "Cancel" else "New",
+                    style = CompanionType.Caption.copy(color = CompanionColor.Signal),
+                    modifier = Modifier.testTag("agents.new").heightIn(min = 48.dp).clickable { onToggleNew(!newOpen) }.padding(horizontal = CompanionSpace.Sm),
                 )
             }
         }
@@ -171,8 +176,15 @@ fun AgentConsoleScreen(
             Hairline()
         }
         if (newOpen) {
-            NewSessionPanel(tools, tmux, defaultCwd, toolsLoading, starting, onStart, dirs, dirsLoading, dirsError, onBrowse)
-            Hairline()
+            androidx.compose.material3.ModalBottomSheet(onDismissRequest = { onToggleNew(false) },
+                sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                containerColor = CompanionColor.Void, contentColor = CompanionColor.Text) {
+                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                    SheetHeading("New agent session", { onToggleNew(false) })
+                    NewSessionPanel(tools, tmux, defaultCwd, toolsLoading, starting, onStart, dirs, dirsLoading, dirsError, onBrowse)
+                }
+            }
         }
         if (sessionsLoading && sessions.isEmpty()) {
             FetchRow(label = "LOADING SESSIONS", modifier = Modifier.testTag("agents.loading"))
@@ -181,8 +193,8 @@ fun AgentConsoleScreen(
         }
         if (sessions.isEmpty()) {
             FetchPane(
-                label = if (tmux) "NO SESSIONS" else "NO TMUX ON HOST",
-                hint = if (tmux) "// NEW starts Claude Code, Codex or a shell on the host" else "// chat sessions work without tmux · terminals need apt install tmux",
+                label = if (tmux) "No agent sessions yet" else "Terminal support is unavailable",
+                hint = if (tmux) "Start a coding agent or shell with New." else "Chat sessions work without tmux. Install tmux on the host for terminals.",
                 modifier = Modifier.weight(1f).testTag("agents.empty"),
             )
             return
@@ -196,16 +208,17 @@ fun AgentConsoleScreen(
 
 @Composable
 private fun Segment(label: String, on: Boolean, tag: String, onClick: () -> Unit) {
-    Text(
+    ActionText(
         text = label,
-        style = CompanionType.MonoSmall.copy(color = if (on) CompanionColor.Signal else CompanionColor.TextDim),
+        style = CompanionType.Caption.copy(color = if (on) CompanionColor.Signal else CompanionColor.TextDim),
         modifier = Modifier
             .testTag(tag)
-            .clickable(onClick = onClick)
-            .padding(vertical = CompanionSpace.Xs),
+            .heightIn(min = 48.dp).clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = CompanionSpace.Xs),
     )
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun NewSessionPanel(
     tools: List<AgentTool>,
@@ -233,12 +246,12 @@ private fun NewSessionPanel(
     val chatAvailable = selected?.modes?.contains("structured") == true
     val mode = if (chatAvailable && wantChat) "structured" else "pty"
     Column(
-        modifier = Modifier.fillMaxWidth().background(CompanionColor.VoidElevated).padding(CompanionSpace.Lg).testTag("agents.new.panel"),
-        verticalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
+        modifier = Modifier.fillMaxWidth().testTag("agents.new.panel"),
+        verticalArrangement = Arrangement.spacedBy(32.dp),
     ) {
-        Text(text = "TOOL · installed on this host", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
+        GroupedSection("Agent tool", padded = true) {
         if (loading && tools.isEmpty()) FetchRow(label = "PROBING HOST", padded = false, modifier = Modifier.testTag("agents.tools.loading"))
-        if (!tmux) Text(text = "tmux missing on host · terminal sessions need apt install tmux / brew install tmux", style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn), modifier = Modifier.testTag("agents.notmux"))
+        if (!tmux) Text(text = "tmux missing on host · terminal sessions need apt install tmux / brew install tmux", style = CompanionType.Caption.copy(color = CompanionColor.Warn), modifier = Modifier.testTag("agents.notmux"))
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
             tools.forEach { t ->
                 val on = t.id == tool
@@ -246,36 +259,39 @@ private fun NewSessionPanel(
                 Column(
                     modifier = Modifier
                         .testTag("agents.tool.${t.id}")
-                        .border(CompanionSpace.Hairline, if (on) CompanionColor.Signal else CompanionColor.Line)
+
                         .background(if (on) CompanionColor.SignalDim else CompanionColor.Void)
-                        .clickable(enabled = t.installed) { tool = t.id }
+                        .heightIn(min = 48.dp).clickable(enabled = t.installed) { tool = t.id }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                 ) {
-                    Text(text = "${t.glyph} ${t.label}", style = CompanionType.MonoSmall.copy(color = color), maxLines = 1)
+                    Text(text = "${t.glyph} ${t.label}", style = CompanionType.Mono.copy(color = color), maxLines = 1)
                     Text(
                         text = if (t.installed) t.version.ifBlank { "installed" } else t.installHint.ifBlank { "not installed" },
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute, fontSize = 9.sp),
+                        style = CompanionType.Caption.copy(color = CompanionColor.TextMute, fontSize = 13.sp),
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
         }
         selected?.loginHint?.takeIf { it.isNotBlank() }?.let {
-            Text(text = "first run: $it", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute))
+            Text(text = "first run: $it", style = CompanionType.Caption.copy(color = CompanionColor.TextMute))
+        }
         }
         if (chatAvailable) {
-            Text(text = "MODE", style = CompanionType.MonoSmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
+            GroupedSection("Session mode", padded = true) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ModeChip("CHAT", "prompts · approvals on the phone", mode == "structured", "agents.mode.structured") { wantChat = true }
                 ModeChip("TERMINAL", if (tmux) "full TUI in tmux" else "needs tmux on host", mode == "pty", "agents.mode.pty", enabled = tmux) { wantChat = false }
             }
         }
+        }
+        GroupedSection("Working folder", padded = true) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(text = "DIRECTORY", style = CompanionType.MonoSmall, modifier = Modifier.weight(1f))
-            Text(
+            Text(text = "Folder", style = CompanionType.Caption, modifier = Modifier.weight(1f))
+            ActionText(
                 text = if (picking) "DONE" else "BROWSE",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                modifier = Modifier.testTag("agents.new.browse").clickable {
+                style = CompanionType.Caption.copy(color = CompanionColor.Signal),
+                modifier = Modifier.testTag("agents.new.browse").heightIn(min = 48.dp).clickable {
                     picking = !picking
                     if (picking) onBrowse(cwd.trim(), showHidden)
                 }.padding(horizontal = CompanionSpace.Sm, vertical = CompanionSpace.Xs),
@@ -290,10 +306,12 @@ private fun NewSessionPanel(
                 onPick = { cwd = it; picking = false },
             )
         }
-        Text(text = "PROMPT (optional)", style = CompanionType.MonoSmall)
+        }
+        GroupedSection("Initial instruction", padded = true) {
         HairlineField(value = prompt, onValueChange = { prompt = it }, keyboardType = KeyboardType.Text, placeholder = "what should it start on?", modifier = Modifier.testTag("agents.new.prompt"))
+        }
         ActionButton(
-            label = "START",
+            label = "Start session",
             kind = ActionKind.PRIMARY,
             enabled = tool.isNotBlank() && (tmux || mode == "structured") && !starting,
             busy = starting,
@@ -304,6 +322,7 @@ private fun NewSessionPanel(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun SessionRow(
     s: AgentSession,
@@ -320,41 +339,41 @@ private fun SessionRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .pointerInput(s.id) { detectTapGestures(onTap = { onOpen(s) }, onLongPress = { menu = !menu }) }
-                .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
+                .combinedClickable(role = androidx.compose.ui.semantics.Role.Button, onClick = { onOpen(s) }, onLongClick = { menu = !menu })
+                .padding(horizontal = 24.dp, vertical = 16.dp)
                 .testTag("agents.row.${s.id}"),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
         ) {
             Box(
-                modifier = Modifier.size(36.dp).border(CompanionSpace.Hairline, if (live) CompanionColor.Signal else CompanionColor.LineStrong),
+                modifier = Modifier.size(36.dp),
                 contentAlignment = Alignment.Center,
             ) { Text(text = glyph, style = CompanionType.Mono.copy(color = if (live) CompanionColor.Signal else CompanionColor.TextMute)) }
             Column(Modifier.weight(1f)) {
                 Text(text = s.title.ifBlank { s.id }, style = CompanionType.Body.copy(color = if (live) CompanionColor.Text else CompanionColor.TextDim), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(text = (if (s.mode == "structured") "chat · " else "") + s.cwd, style = CompanionType.MonoSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (s.lastLine.isNotBlank()) Text(text = s.lastLine, style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(text = (if (s.mode == "structured") "chat · " else "") + s.cwd, style = CompanionType.Caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (s.lastLine.isNotBlank()) Text(text = s.lastLine, style = CompanionType.Caption.copy(color = CompanionColor.TextMute), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Column(horizontalAlignment = Alignment.End) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (live) LiveDot(size = 5.dp)
                     Text(
                         text = if (live) statusLabel(s.status) else "exited" + (s.exitCode?.let { " $it" } ?: ""),
-                        style = CompanionType.MonoSmall.copy(color = if (live) statusColor(s.status) else CompanionColor.TextMute),
+                        style = CompanionType.Caption.copy(color = if (live) statusColor(s.status) else CompanionColor.TextMute),
                     )
                 }
-                Text(text = ThreadTime.relative(s.updatedAtEpochMs, nowMs), style = CompanionType.MonoSmall)
+                Text(text = ThreadTime.relative(s.updatedAtEpochMs, nowMs), style = CompanionType.Caption)
             }
         }
         if (menu) {
             Row(
-                modifier = Modifier.fillMaxWidth().background(CompanionColor.VoidElevated).padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
                 horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(text = s.attach, style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                if (live) Text(text = "KILL", style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger), modifier = Modifier.testTag("agents.kill.${s.id}").clickable { onKill(s); menu = false }.padding(CompanionSpace.Xs))
-                Text(text = "FORGET", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim), modifier = Modifier.testTag("agents.forget.${s.id}").clickable { onForget(s); menu = false }.padding(CompanionSpace.Xs))
+                Text(text = s.attach, style = CompanionType.Caption.copy(color = CompanionColor.TextMute), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (live) ActionText(text = "KILL", style = CompanionType.Caption.copy(color = CompanionColor.Danger), modifier = Modifier.testTag("agents.kill.${s.id}").heightIn(min = 48.dp).clickable { onKill(s); menu = false }.padding(CompanionSpace.Xs))
+                ActionText(text = "FORGET", style = CompanionType.Caption.copy(color = CompanionColor.TextDim), modifier = Modifier.testTag("agents.forget.${s.id}").heightIn(min = 48.dp).clickable { onForget(s); menu = false }.padding(CompanionSpace.Xs))
             }
         }
         Hairline()
@@ -382,16 +401,16 @@ private fun ColumnScope.PaneView(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
     ) {
-        Text(text = "◂", style = CompanionType.Mono.copy(color = CompanionColor.Signal), modifier = Modifier.testTag("agents.back").clickable(onClick = onClose).padding(end = CompanionSpace.Xs))
+        ActionText(text = "◂", style = CompanionType.Mono.copy(color = CompanionColor.Signal), modifier = Modifier.testTag("agents.back").heightIn(min = 48.dp).clickable(onClick = onClose).padding(end = CompanionSpace.Xs))
         Column(Modifier.weight(1f)) {
             Text(text = session.title.ifBlank { session.id }, style = CompanionType.Body, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(text = "${session.cwd} · ${session.attach}", style = CompanionType.MonoSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(text = "${session.cwd} · ${session.attach}", style = CompanionType.Caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             if (live) LiveDot(size = 5.dp)
             Text(
                 text = if (live) session.status.uppercase() else "EXITED" + (session.exitCode?.let { " $it" } ?: ""),
-                style = CompanionType.MonoSmall.copy(color = if (live) CompanionColor.Signal else CompanionColor.TextMute),
+                style = CompanionType.Caption.copy(color = if (live) CompanionColor.Signal else CompanionColor.TextMute),
                 modifier = Modifier.testTag("agents.pane.status"),
             )
         }
@@ -401,23 +420,23 @@ private fun ColumnScope.PaneView(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
     ) {
-        Text(text = "COLS", style = CompanionType.MonoSmall)
+        Text(text = "COLS", style = CompanionType.Caption)
         AgentPaneWidths.forEach { w ->
-            Text(
+            ActionText(
                 text = "$w",
-                style = CompanionType.MonoSmall.copy(color = if (w == cols) CompanionColor.Signal else CompanionColor.TextDim),
-                modifier = Modifier.testTag("agents.cols.$w").clickable { onCols(w) }.padding(horizontal = CompanionSpace.Xs),
+                style = CompanionType.Caption.copy(color = if (w == cols) CompanionColor.Signal else CompanionColor.TextDim),
+                modifier = Modifier.testTag("agents.cols.$w").heightIn(min = 48.dp).clickable { onCols(w) }.padding(horizontal = CompanionSpace.Xs),
             )
         }
         Spacer(Modifier.weight(1f))
-        if (live) Text(text = "KILL", style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger), modifier = Modifier.testTag("agents.pane.kill").clickable(onClick = onKill).padding(CompanionSpace.Xs))
+        if (live) ActionText(text = "KILL", style = CompanionType.Caption.copy(color = CompanionColor.Danger), modifier = Modifier.testTag("agents.pane.kill").heightIn(min = 48.dp).clickable(onClick = onKill).padding(CompanionSpace.Xs))
     }
     Hairline()
     if (!error.isNullOrBlank()) {
         StatusStrip(text = error, modifier = Modifier.testTag("agents.pane.error"))
         Hairline()
     }
-    Box(Modifier.weight(1f).fillMaxWidth().background(CompanionColor.VoidElevated)) {
+    Box(Modifier.weight(1f).fillMaxWidth()) {
         if (loading && pane.ansi.isEmpty()) {
             FetchRow(label = "ATTACHING", modifier = Modifier.testTag("agents.pane.loading"))
         } else {
@@ -430,21 +449,21 @@ private fun ColumnScope.PaneView(
         horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
     ) {
         KeyRow.forEach { (label, key) ->
-            Text(
+            ActionText(
                 text = label,
-                style = CompanionType.MonoSmall.copy(color = if (key == "c-c") CompanionColor.Warn else CompanionColor.Signal),
+                style = CompanionType.Caption.copy(color = if (key == "c-c") CompanionColor.Warn else CompanionColor.Signal),
                 modifier = Modifier
                     .testTag("agents.key.$key")
-                    .border(CompanionSpace.Hairline, CompanionColor.LineStrong)
-                    .clickable(enabled = live) { onKey(key) }
+
+                    .heightIn(min = 48.dp).clickable(enabled = live) { onKey(key) }
                     .padding(horizontal = 10.dp, vertical = 6.dp),
             )
         }
         listOf("y", "n").forEach { ch ->
-            Text(
+            ActionText(
                 text = ch,
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
-                modifier = Modifier.testTag("agents.key.$ch").border(CompanionSpace.Hairline, CompanionColor.Line).clickable(enabled = live) { onSendText(ch, false) }.padding(horizontal = 10.dp, vertical = 6.dp),
+                style = CompanionType.Caption.copy(color = CompanionColor.TextDim),
+                modifier = Modifier.testTag("agents.key.$ch").heightIn(min = 48.dp).clickable(enabled = live) { onSendText(ch, false) }.padding(horizontal = 10.dp, vertical = 6.dp),
             )
         }
     }
@@ -484,7 +503,7 @@ private fun PaneText(pane: AgentPane, live: Boolean) {
         lines.forEachIndexed { row, spans ->
             Text(
                 text = annotate(spans, cursorAt = if (live && row == pane.cursorY) pane.cursorX else -1),
-                style = CompanionType.Mono.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 15.sp, color = CompanionColor.Text),
+                style = CompanionType.Mono.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 15.sp, color = CompanionColor.Text),
                 softWrap = false,
                 maxLines = 1,
             )
@@ -522,7 +541,6 @@ private fun annotate(spans: List<AnsiText.Span>, cursorAt: Int): AnnotatedString
     }
 }
 
-
 private fun statusLabel(status: String): String = when (status) {
     "waiting_approval" -> "needs you"
     "waiting_input" -> "idle"
@@ -541,13 +559,13 @@ private fun ModeChip(label: String, hint: String, on: Boolean, tag: String, enab
     Column(
         modifier = Modifier
             .testTag(tag)
-            .border(CompanionSpace.Hairline, if (on) CompanionColor.Signal else CompanionColor.Line)
+
             .background(if (on) CompanionColor.SignalDim else CompanionColor.Void)
-            .clickable(enabled = enabled, onClick = onClick)
+            .heightIn(min = 48.dp).clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
-        Text(text = label, style = CompanionType.MonoSmall.copy(color = color), maxLines = 1)
-        Text(text = hint, style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute, fontSize = 9.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = label, style = CompanionType.Mono.copy(color = color), maxLines = 1)
+        Text(text = hint, style = CompanionType.Caption.copy(color = CompanionColor.TextMute, fontSize = 13.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -576,12 +594,12 @@ private fun ColumnScope.StructuredView(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
     ) {
-        Text(text = "◂", style = CompanionType.Mono.copy(color = CompanionColor.Signal), modifier = Modifier.testTag("agents.back").clickable(onClick = onClose).padding(end = CompanionSpace.Xs))
+        ActionText(text = "◂", style = CompanionType.Mono.copy(color = CompanionColor.Signal), modifier = Modifier.testTag("agents.back").heightIn(min = 48.dp).clickable(onClick = onClose).padding(end = CompanionSpace.Xs))
         Column(Modifier.weight(1f)) {
             Text(text = session.title.ifBlank { session.id }, style = CompanionType.Body, maxLines = 1, overflow = TextOverflow.Ellipsis)
             val cost = if (transcript.costUsd > 0) " · $" + String.format(java.util.Locale.US, "%.2f", transcript.costUsd) else ""
             val model = transcript.model.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""
-            Text(text = "${session.tool}$model · ${session.cwd}$cost", style = CompanionType.MonoSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(text = "${session.tool}$model · ${session.cwd}$cost", style = CompanionType.Caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             if (busy) LiveDot(size = 5.dp)
@@ -592,7 +610,7 @@ private fun ColumnScope.StructuredView(
                     busy -> "WORKING"
                     else -> "IDLE"
                 },
-                style = CompanionType.MonoSmall.copy(
+                style = CompanionType.Caption.copy(
                     color = when {
                         !live -> CompanionColor.TextMute
                         transcript.approval != null -> CompanionColor.Warn
@@ -603,7 +621,7 @@ private fun ColumnScope.StructuredView(
                 modifier = Modifier.testTag("agents.chat.status"),
             )
         }
-        if (live) Text(text = "KILL", style = CompanionType.MonoSmall.copy(color = CompanionColor.Danger), modifier = Modifier.testTag("agents.pane.kill").clickable(onClick = onKill).padding(CompanionSpace.Xs))
+        if (live) ActionText(text = "KILL", style = CompanionType.Caption.copy(color = CompanionColor.Danger), modifier = Modifier.testTag("agents.pane.kill").heightIn(min = 48.dp).clickable(onClick = onKill).padding(CompanionSpace.Xs))
     }
     Hairline()
     val shownError = error?.takeIf { it.isNotBlank() } ?: transcript.lastError.takeIf { it.isNotBlank() }
@@ -674,12 +692,12 @@ private fun TranscriptUserRow(m: ChatMessage) {
     Row(Modifier.fillMaxWidth().testTag("agents.chat.user")) {
         Spacer(Modifier.width(CompanionSpace.Xxl))
         Column(Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-            Text(text = "YOU", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim), modifier = Modifier.padding(end = 2.dp, bottom = 3.dp))
+            Text(text = "YOU", style = CompanionType.Caption.copy(color = CompanionColor.TextDim), modifier = Modifier.padding(end = 2.dp, bottom = 3.dp))
             SelectionContainer {
                 Text(
                     text = m.text,
                     style = CompanionType.Body,
-                    modifier = Modifier.border(CompanionSpace.Hairline, CompanionColor.LineStrong).padding(horizontal = 10.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                 )
             }
         }
@@ -690,7 +708,7 @@ private fun TranscriptUserRow(m: ChatMessage) {
 private fun TranscriptAssistantRow(m: ChatMessage, tool: String) {
     Column(Modifier.fillMaxWidth().testTag("agents.chat.assistant")) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(bottom = 3.dp)) {
-            Text(text = tool.uppercase(), style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
+            Text(text = tool.uppercase(), style = CompanionType.Caption.copy(color = CompanionColor.Signal))
             if (m.streaming) LiveDot(size = 5.dp)
         }
         SelectionContainer { MarkdownBlocks(text = m.text) }
@@ -707,19 +725,18 @@ private fun TranscriptToolRow(m: ChatMessage) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .border(CompanionSpace.Hairline, when { failed -> CompanionColor.Danger; expanded || running -> CompanionColor.Signal; else -> CompanionColor.Line })
-            .background(CompanionColor.VoidElevated)
-            .clickable { expanded = !expanded }
+
+            .heightIn(min = 48.dp).clickable { expanded = !expanded }
             .padding(horizontal = 10.dp, vertical = 8.dp)
             .testTag(if (running) "agents.chat.tool.running" else "agents.chat.tool"),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             if (running) LiveDot()
-            Text(text = name, style = CompanionType.MonoSmall.copy(color = if (failed) CompanionColor.Danger else CompanionColor.Signal, fontWeight = FontWeight.SemiBold))
-            Text(text = "·", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim))
+            Text(text = name, style = CompanionType.Caption.copy(color = if (failed) CompanionColor.Danger else CompanionColor.Signal, fontWeight = FontWeight.SemiBold))
+            Text(text = "·", style = CompanionType.Caption.copy(color = CompanionColor.TextDim))
             Text(
                 text = if (running) "running · $summary" else summary,
-                style = CompanionType.MonoSmall.copy(color = if (running) CompanionColor.TextDim else CompanionColor.TextMute),
+                style = CompanionType.Caption.copy(color = if (running) CompanionColor.TextDim else CompanionColor.TextMute),
                 maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
             )
         }
@@ -727,7 +744,7 @@ private fun TranscriptToolRow(m: ChatMessage) {
             SelectionContainer {
                 Text(
                     text = m.text.trimEnd(),
-                    style = CompanionType.Mono.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 15.sp, color = CompanionColor.Text),
+                    style = CompanionType.Mono.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 15.sp, color = CompanionColor.Text),
                     modifier = Modifier.padding(top = CompanionSpace.Sm).horizontalScroll(rememberScrollState()),
                     softWrap = false,
                 )
@@ -739,7 +756,7 @@ private fun TranscriptToolRow(m: ChatMessage) {
 @Composable
 private fun TranscriptApproval(prompt: ApprovalPrompt, onApprove: (String) -> Unit) {
     Column(
-        modifier = Modifier.fillMaxWidth().background(CompanionColor.VoidElevated).padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md).testTag("agents.approval"),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md).testTag("agents.approval"),
     ) {
         Text(
             text = "${prompt.speaker?.uppercase() ?: "TOOL"} wants · ${prompt.command}",
@@ -750,20 +767,19 @@ private fun TranscriptApproval(prompt: ApprovalPrompt, onApprove: (String) -> Un
             prompt.choices.forEach { choice ->
                 val deny = choice.equals("deny", ignoreCase = true)
                 val color = if (deny) CompanionColor.Danger else CompanionColor.Signal
-                Text(
+                ActionText(
                     text = if (deny) "DENY" else "ALLOW",
-                    style = CompanionType.MonoSmall.copy(color = color),
+                    style = CompanionType.Mono.copy(color = color),
                     modifier = Modifier
                         .testTag(if (deny) "agents.approval.deny" else "agents.approval.allow")
-                        .border(CompanionSpace.Hairline, color)
-                        .clickable { onApprove(choice) }
+
+                        .heightIn(min = 48.dp).clickable { onApprove(choice) }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                 )
             }
         }
     }
 }
-
 
 /**
  * Inline directory picker for the NEW panel: root chips, recents, `..`, and the subdirectories of
@@ -781,7 +797,7 @@ private fun DirPicker(
     onPick: (String) -> Unit,
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth().border(CompanionSpace.Hairline, CompanionColor.Line).background(CompanionColor.Void).padding(CompanionSpace.Sm).testTag("agents.dirs"),
+        modifier = Modifier.fillMaxWidth().background(CompanionColor.Void).padding(CompanionSpace.Sm).testTag("agents.dirs"),
         verticalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
     ) {
         val roots = listing?.roots.orEmpty()
@@ -789,60 +805,60 @@ private fun DirPicker(
         if (roots.isNotEmpty() || recent.isNotEmpty()) {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
                 roots.forEach { r ->
-                    Text(
+                    ActionText(
                         text = r.label,
-                        style = CompanionType.MonoSmall.copy(color = if (listing?.path == r.path) CompanionColor.Signal else CompanionColor.TextDim),
-                        modifier = Modifier.testTag("agents.dirs.root.${r.label}").border(CompanionSpace.Hairline, CompanionColor.LineStrong).clickable { onNavigate(r.path) }.padding(horizontal = 8.dp, vertical = 4.dp),
+                        style = CompanionType.Caption.copy(color = if (listing?.path == r.path) CompanionColor.Signal else CompanionColor.TextDim),
+                        modifier = Modifier.testTag("agents.dirs.root.${r.label}").heightIn(min = 48.dp).clickable { onNavigate(r.path) }.padding(horizontal = 8.dp, vertical = 4.dp),
                     )
                 }
                 recent.forEach { r ->
-                    Text(
+                    ActionText(
                         text = "↺ " + r.substringAfterLast('/').ifBlank { r },
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
-                        modifier = Modifier.border(CompanionSpace.Hairline, CompanionColor.Line).clickable { onNavigate(r) }.padding(horizontal = 8.dp, vertical = 4.dp),
+                        style = CompanionType.Caption.copy(color = CompanionColor.TextDim),
+                        modifier = Modifier.heightIn(min = 48.dp).clickable { onNavigate(r) }.padding(horizontal = 8.dp, vertical = 4.dp),
                         maxLines = 1,
                     )
                 }
             }
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
-            Text(
+            ActionText(
                 text = "..",
                 style = CompanionType.Mono.copy(color = if (listing?.parent != null) CompanionColor.Signal else CompanionColor.TextMute),
-                modifier = Modifier.testTag("agents.dirs.up").clickable(enabled = listing?.parent != null) { listing?.parent?.let(onNavigate) }.padding(horizontal = CompanionSpace.Sm, vertical = CompanionSpace.Xs),
+                modifier = Modifier.testTag("agents.dirs.up").heightIn(min = 48.dp).clickable(enabled = listing?.parent != null) { listing?.parent?.let(onNavigate) }.padding(horizontal = CompanionSpace.Sm, vertical = CompanionSpace.Xs),
             )
             Text(
                 text = (listing?.path ?: current).ifBlank { "…" } + if (listing?.git == true) "  ⎇" else "",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Text),
+                style = CompanionType.Caption.copy(color = CompanionColor.Text),
                 maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).testTag("agents.dirs.path"),
             )
-            Text(
+            ActionText(
                 text = if (showHidden) "•hidden" else "hidden",
-                style = CompanionType.MonoSmall.copy(color = if (showHidden) CompanionColor.Signal else CompanionColor.TextMute),
-                modifier = Modifier.testTag("agents.dirs.hidden").clickable { onToggleHidden(!showHidden) }.padding(horizontal = CompanionSpace.Xs),
+                style = CompanionType.Caption.copy(color = if (showHidden) CompanionColor.Signal else CompanionColor.TextMute),
+                modifier = Modifier.testTag("agents.dirs.hidden").heightIn(min = 48.dp).clickable { onToggleHidden(!showHidden) }.padding(horizontal = CompanionSpace.Xs),
             )
         }
-        if (!error.isNullOrBlank()) Text(text = error, style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn), modifier = Modifier.testTag("agents.dirs.error"))
+        if (!error.isNullOrBlank()) Text(text = error, style = CompanionType.Caption.copy(color = CompanionColor.Warn), modifier = Modifier.testTag("agents.dirs.error"))
         if (loading && listing == null) {
             FetchRow(label = "LISTING", padded = false, modifier = Modifier.testTag("agents.dirs.loading"))
         } else if (listing != null) {
             Column(Modifier.fillMaxWidth().heightIn(max = 260.dp).verticalScroll(rememberScrollState())) {
                 if (listing.dirs.isEmpty()) {
-                    Text(text = "// no subdirectories", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute), modifier = Modifier.padding(CompanionSpace.Xs))
+                    Text(text = "// no subdirectories", style = CompanionType.Caption.copy(color = CompanionColor.TextMute), modifier = Modifier.padding(CompanionSpace.Xs))
                 }
                 listing.dirs.forEach { d ->
                     Row(
-                        modifier = Modifier.fillMaxWidth().clickable { onNavigate(d.path) }.padding(horizontal = CompanionSpace.Xs, vertical = 7.dp).testTag("agents.dirs.row.${d.name}"),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { onNavigate(d.path) }.padding(horizontal = CompanionSpace.Xs, vertical = 7.dp).testTag("agents.dirs.row.${d.name}"),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
                     ) {
-                        Text(text = "▸", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
+                        Text(text = "▸", style = CompanionType.Caption.copy(color = CompanionColor.Signal))
                         Text(text = d.name, style = CompanionType.Mono.copy(color = if (d.git || d.project) CompanionColor.Text else CompanionColor.TextDim), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                        if (d.git) Text(text = "⎇", style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal))
-                        else if (d.project) Text(text = "proj", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim))
+                        if (d.git) Text(text = "⎇", style = CompanionType.Caption.copy(color = CompanionColor.Signal))
+                        else if (d.project) Text(text = "proj", style = CompanionType.Caption.copy(color = CompanionColor.TextDim))
                     }
                 }
-                if (listing.truncated) Text(text = "// list truncated", style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute))
+                if (listing.truncated) Text(text = "// list truncated", style = CompanionType.Caption.copy(color = CompanionColor.TextMute))
             }
             if (loading) FetchRow(label = "LISTING", padded = false, modifier = Modifier.testTag("agents.dirs.loading"))
             ActionButton(

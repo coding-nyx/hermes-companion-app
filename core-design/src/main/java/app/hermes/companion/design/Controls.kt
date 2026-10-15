@@ -10,10 +10,17 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -33,9 +40,24 @@ import androidx.compose.ui.unit.dp
 /** Visual weight of an [ActionButton]. One accent, no fills except the primary. */
 enum class ActionKind { PRIMARY, GHOST, DANGER }
 
+/** Centers text inside the action's touch target instead of using text as a 48dp spacer. */
+@Composable
+fun ActionText(
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle = CompanionType.Label,
+    maxLines: Int = 2,
+    softWrap: Boolean = true,
+    overflow: TextOverflow = TextOverflow.Ellipsis,
+) {
+    Box(modifier.heightIn(min = CompanionSpace.Touch), contentAlignment = Alignment.Center) {
+        Text(text, style = style, maxLines = maxLines, softWrap = softWrap, overflow = overflow)
+    }
+}
+
 /**
- * The one button. `[LABEL]` mono, hairline border, optional busy state that dims it and swaps the
- * label so a tap in flight is visible without a spinner. Disabled buttons drop to mute.
+ * Shared action with a 48dp target, wrapping text and an explicit busy state.
+ * Primary actions use the accent fill; secondary actions stay unfilled.
  */
 @Composable
 fun ActionButton(
@@ -52,18 +74,17 @@ fun ActionButton(
         ActionKind.PRIMARY, ActionKind.GHOST -> CompanionColor.Signal
         ActionKind.DANGER -> CompanionColor.Danger
     }
-    val fg = if (active) accent else CompanionColor.TextMute
-    val border = if (active) accent else CompanionColor.Line
-    val bg = if (kind == ActionKind.PRIMARY && active) CompanionColor.SignalDim else Color.Transparent
+    val fg = if (!active) CompanionColor.TextMute else if (kind == ActionKind.PRIMARY) CompanionColor.Void else accent
+    val bg = if (kind == ActionKind.PRIMARY && active) CompanionColor.Signal else Color.Transparent
     val shape = RoundedCornerShape(CompanionSpace.RadiusSmall)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .clip(shape)
-            .border(CompanionSpace.Hairline, border, shape)
             .background(bg)
-            .clickable(enabled = active, onClick = onClick)
-            .padding(horizontal = CompanionSpace.Lg, vertical = 10.dp),
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+            .clickable(enabled = active, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 12.dp),
     ) {
         if (busy) {
             SignalCursor()
@@ -71,14 +92,14 @@ fun ActionButton(
         }
         Text(
             text = if (busy) busyLabel else label,
-            style = CompanionType.MonoSmall.copy(color = fg),
-            maxLines = 1,
-            softWrap = false,
+            style = CompanionType.Label.copy(color = fg),
+            maxLines = 2,
+            softWrap = true,
         )
     }
 }
 
-/** `TITLE ……… trailing` row that opens every section on the tab screens. */
+/** Shared section label with optional trailing actions. */
 @Composable
 fun SectionHeader(
     title: String,
@@ -92,9 +113,9 @@ fun SectionHeader(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = title.uppercase(),
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-            maxLines = 1,
+            text = title,
+            style = CompanionType.Title,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
@@ -102,7 +123,7 @@ fun SectionHeader(
     }
 }
 
-/** `label   value` on one mono line; value takes the brighter colour. */
+/** Weighted label/value row; values use the brighter text color. */
 @Composable
 fun KeyValueRow(label: String, value: String, modifier: Modifier = Modifier, valueColor: Color = CompanionColor.Text) {
     Row(
@@ -113,21 +134,21 @@ fun KeyValueRow(label: String, value: String, modifier: Modifier = Modifier, val
     ) {
         Text(
             text = label,
-            style = CompanionType.MonoSmall,
-            maxLines = 1,
-            modifier = Modifier.width(96.dp),
+            style = CompanionType.Caption,
+            maxLines = 3,
+            modifier = Modifier.weight(0.36f),
         )
         Text(
             text = value,
-            style = CompanionType.Mono.copy(color = valueColor),
-            maxLines = 2,
+            style = CompanionType.Caption.copy(color = valueColor),
+            maxLines = 4,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(0.64f),
         )
     }
 }
 
-/** Tappable `LABEL  on/off` line with a small state box; the box is the only colour change. */
+/** Accessible switch row with a shared label and optional helper text. */
 @Composable
 fun ToggleRow(
     label: String,
@@ -140,28 +161,23 @@ fun ToggleRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled, onClick = onToggle)
-            .padding(vertical = CompanionSpace.Sm),
+            .heightIn(min = 72.dp)
+            .toggleable(value = on, enabled = enabled, role = Role.Switch, onValueChange = { onToggle() })
+            .padding(vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
             Text(
                 text = label,
-                style = CompanionType.Mono.copy(color = if (on) CompanionColor.Text else CompanionColor.TextDim),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                style = CompanionType.RowTitle,
             )
             if (!hint.isNullOrBlank()) {
-                Text(text = hint, style = CompanionType.MonoSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(4.dp))
+                Text(text = hint, style = CompanionType.Caption)
             }
         }
         Spacer(Modifier.width(CompanionSpace.Md))
-        Text(
-            text = if (on) "■ ON" else "□ OFF",
-            style = CompanionType.MonoSmall.copy(color = if (on) CompanionColor.Signal else CompanionColor.TextMute),
-            maxLines = 1,
-            softWrap = false,
-        )
+        androidx.compose.material3.Switch(checked = on, onCheckedChange = null, enabled = enabled)
     }
 }
 
@@ -182,26 +198,24 @@ fun StatusStrip(
         modifier = modifier
             .fillMaxWidth()
             .clip(shape)
-            .border(CompanionSpace.Hairline, tone.copy(alpha = 0.35f), shape)
-            .background(CompanionColor.VoidElevated)
+            .drawBehind { drawLine(tone, Offset(0f, 0f), Offset(0f, size.height), 2.dp.toPx()) }
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
     ) {
         Text(
             text = text,
-            style = CompanionType.MonoSmall.copy(color = tone),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
+            style = CompanionType.Caption.copy(color = tone),
             modifier = Modifier.weight(1f),
         )
         if (actionLabel != null && onAction != null) {
             Text(
                 text = actionLabel,
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
+                style = CompanionType.Caption.copy(color = CompanionColor.TextDim),
                 modifier = Modifier
-                    .clickable(onClick = onAction)
-                    .padding(CompanionSpace.Xs),
+                    .heightIn(min = 48.dp)
+                    .clickable(role = Role.Button, onClick = onAction)
+                    .padding(vertical = 12.dp, horizontal = 4.dp),
             )
         }
     }

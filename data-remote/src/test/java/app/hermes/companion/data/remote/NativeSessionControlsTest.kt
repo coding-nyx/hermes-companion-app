@@ -18,6 +18,8 @@ class NativeSessionControlsTest {
             assertEquals("low", settings.reasoning); assertEquals("normal", settings.fast)
             assertEquals(listOf("fixture-provider", "other"), settings.models.map { it.provider })
             assertEquals(false, settings.models.first().canDisableReasoning)
+            assertTrue(settings.models.first().reasoningSupportReported)
+            assertFalse(settings.models.last().reasoningSupportReported)
             val result = api.setSessionSetting(origin, session, "model", "new-model --provider other --session")
             assertTrue(result.confirmationRequired); assertFalse(result.deferred)
             val params = calls.last()["params"]!!.jsonObject

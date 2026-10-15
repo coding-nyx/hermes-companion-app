@@ -1,216 +1,77 @@
 package app.hermes.companion.reminders
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import app.hermes.companion.design.CompanionColor
-import app.hermes.companion.design.CompanionSpace
-import app.hermes.companion.design.CompanionType
-import app.hermes.companion.design.FetchPane
-import app.hermes.companion.design.FetchRow
-import app.hermes.companion.design.Hairline
+import app.hermes.companion.design.*
 import app.hermes.companion.model.CronJob
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RemindersScreen(
-    jobs: List<CronJob>,
-    isLoading: Boolean,
-    onRefresh: () -> Unit,
-    onTriggerJob: (String) -> Unit,
-    onToggleJob: (String, Boolean) -> Unit,
+    jobs: List<CronJob>, isLoading: Boolean, onRefresh: () -> Unit,
+    onTriggerJob: (String) -> Unit, onToggleJob: (String, Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(CompanionColor.Void)
-            .testTag("reminders.screen"),
-    ) {
-        // Header
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "CRON JOBS // ",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-                )
-                Text(
-                    text = "${jobs.size} ACTIVE",
-                    style = CompanionType.Mono.copy(color = CompanionColor.Signal),
-                )
-            }
-            Text(
-                text = if (isLoading) "SYNCING" else "REFRESH",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                modifier = Modifier
-                    .testTag("reminders.refresh")
-                    .clickable(enabled = !isLoading, onClick = onRefresh)
-                    .padding(CompanionSpace.Xs),
-            )
+    var selectedId by remember { mutableStateOf<String?>(null) }
+    var runRequest by remember { mutableStateOf<CronJob?>(null) }
+    val selected = jobs.firstOrNull { it.id == selectedId }
+    Column(modifier.fillMaxSize().testTag("reminders.screen")) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("${jobs.count { it.enabled }} active · ${jobs.size} total", style = CompanionType.Caption, modifier = Modifier.weight(1f))
+            ActionButton(if (isLoading) "Refreshing…" else "Refresh", onRefresh, enabled = !isLoading, modifier = Modifier.testTag("reminders.refresh"))
         }
-        Hairline()
-
-        if (jobs.isEmpty()) {
-            FetchPane(
-                label = if (isLoading) "LOADING SCHEDULED TASKS" else "NO CRON JOBS",
-                hint = if (isLoading) "// handshake" else "// idle",
-                scanning = isLoading,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag(if (isLoading) "reminders.loading" else "reminders.empty"),
-            )
-        } else {
-            if (isLoading) {
-                FetchRow(label = "SYNCING CRON", modifier = Modifier.testTag("reminders.loading"))
-            }
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(horizontal = CompanionSpace.Lg),
-            ) {
-                items(jobs, key = { it.id }) { job ->
-                    CronJobCard(
-                        job = job,
-                        onTrigger = { onTriggerJob(job.id) },
-                        onToggle = { onToggleJob(job.id, job.enabled) },
-                    )
+        if (jobs.isEmpty()) FetchPane(if (isLoading) "Loading schedules…" else "No schedules yet",
+            hint = if (isLoading) "Reading scheduled work from this host." else "Schedules created in Hermes will appear here.",
+            scanning = isLoading, modifier = Modifier.weight(1f).testTag(if (isLoading) "reminders.loading" else "reminders.empty"))
+        else LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(32.dp)) {
+            if (isLoading) item { FetchRow("Refreshing schedules…", modifier = Modifier.testTag("reminders.loading")) }
+            listOf(true to "Active", false to "Paused").forEach { (enabled, label) ->
+                val group = jobs.filter { it.enabled == enabled }
+                if (group.isNotEmpty()) item(key = label) {
+                    GroupedSection(label) {
+                        group.forEach { job -> PreferenceRow(job.name.ifBlank { job.id }, job.scheduleDisplay,
+                            value = if (job.enabled) "Active" else "Paused", onClick = { selectedId = job.id },
+                            modifier = Modifier.testTag("reminders.job.${job.id}")) }
+                    }
                 }
             }
         }
     }
-}
-
-@Composable
-private fun CronJobCard(
-    job: CronJob,
-    onTrigger: () -> Unit,
-    onToggle: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = CompanionSpace.Md),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .width(4.dp)
-                        .height(16.dp)
-                        .background(if (job.enabled) CompanionColor.Signal else CompanionColor.TextMute),
-                )
-                Spacer(Modifier.width(CompanionSpace.Sm))
-                Text(
-                    text = job.name.ifBlank { job.id },
-                    style = CompanionType.Body.copy(
-                        color = if (job.enabled) CompanionColor.Text else CompanionColor.TextDim,
-                    ),
-                )
+    if (selected != null) ModalBottomSheet(onDismissRequest = { selectedId = null },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = CompanionColor.Void, contentColor = CompanionColor.Text) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 24.dp)
+            .testTag("reminders.detail"), verticalArrangement = Arrangement.spacedBy(32.dp)) {
+            SheetHeading(selected.name.ifBlank { "Schedule" }, { selectedId = null })
+            GroupedSection("Schedule") {
+                PreferenceRow("Repeat", selected.scheduleDisplay.ifBlank { "Not reported" })
+                PreferenceRow("Profile", selected.profile.ifBlank { "Host default" })
+                PreferenceRow("State", if (selected.enabled) "Active" else "Paused")
+                PreferenceRow("Next run", selected.nextRunAt ?: if (selected.enabled) "Not reported" else "Paused")
             }
-            Box(
-                modifier = Modifier
-                    .background(CompanionColor.VoidElevated)
-                    .border(1.dp, if (job.enabled) CompanionColor.SignalDim else CompanionColor.Line)
-                    .padding(horizontal = CompanionSpace.Sm, vertical = 2.dp),
-            ) {
-                Text(
-                    text = if (job.enabled) "ACTIVE" else "PAUSED",
-                    style = CompanionType.MonoSmall.copy(
-                        color = if (job.enabled) CompanionColor.Signal else CompanionColor.TextMute,
-                    ),
-                )
+            if (selected.prompt.isNotBlank()) GroupedSection("Instruction", padded = true) { Text(selected.prompt, style = CompanionType.Body) }
+            GroupedSection("Latest outcome") {
+                PreferenceRow("Last run", selected.lastRunAt ?: "Not reported")
+                PreferenceRow("Result", selected.lastStatus ?: "No outcome reported yet")
+                selected.lastError?.takeIf { it.isNotBlank() }?.let { PreferenceRow("Error", it) }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ActionButton(if (selected.enabled) "Pause schedule" else "Resume schedule", { onToggleJob(selected.id, selected.enabled) },
+                    enabled = !isLoading, modifier = Modifier.testTag("reminders.toggle"))
+                ActionButton("Run now", { runRequest = selected }, enabled = !isLoading, kind = ActionKind.PRIMARY,
+                    modifier = Modifier.testTag("reminders.run"))
             }
         }
-
-        Spacer(Modifier.height(CompanionSpace.Xs))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = "expr: ${job.scheduleDisplay}",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-            )
-            if (job.profile.isNotBlank()) {
-                Text(
-                    text = "profile: ${job.profile}",
-                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
-                )
-            }
-        }
-
-        if (job.nextRunAt != null) {
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = "next: ${job.nextRunAt}",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextMute),
-            )
-        }
-
-        if (job.lastStatus != null) {
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = "last status: ${job.lastStatus}" + if (job.lastError != null) " (${job.lastError})" else "",
-                style = CompanionType.MonoSmall.copy(
-                    color = if (job.lastStatus == "ok") CompanionColor.TextDim else CompanionColor.Danger,
-                ),
-            )
-        }
-
-        Spacer(Modifier.height(CompanionSpace.Sm))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            Text(
-                text = if (job.enabled) "[PAUSE]" else "[RESUME]",
-                style = CompanionType.MonoSmall.copy(
-                    color = if (job.enabled) CompanionColor.Warn else CompanionColor.Signal,
-                ),
-                modifier = Modifier
-                    .clickable(onClick = onToggle)
-                    .padding(CompanionSpace.Xs),
-            )
-            Spacer(Modifier.width(CompanionSpace.Md))
-            Text(
-                text = "[TRIGGER NOW]",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                modifier = Modifier
-                    .clickable(onClick = onTrigger)
-                    .padding(CompanionSpace.Xs),
-            )
-        }
-        Spacer(Modifier.height(CompanionSpace.Sm))
-        Hairline()
     }
+    runRequest?.let { job -> AlertDialog(onDismissRequest = { runRequest = null }, title = { Text("Run this schedule now?") },
+        text = { Text("Start one run of ${job.name.ifBlank { job.id }}. The recurring schedule stays unchanged.") },
+        confirmButton = { TextButton(onClick = { runRequest = null; onTriggerJob(job.id) }) { Text("Run now") } },
+        dismissButton = { TextButton(onClick = { runRequest = null }) { Text("Cancel") } }) }
 }

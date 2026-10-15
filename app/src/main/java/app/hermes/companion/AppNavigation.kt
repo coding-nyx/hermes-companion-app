@@ -3,11 +3,13 @@ package app.hermes.companion
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -44,37 +46,38 @@ internal fun navigationDestination(tab: MainTab, inChat: Boolean): NavigationDes
 
 @Composable
 internal fun AppNavigationBar(state: CompanionState, inChat: Boolean, onTab: (MainTab) -> Unit,
-    onMore: () -> Unit, onVoice: () -> Unit = {}) {
+    onMore: () -> Unit, onVoice: () -> Unit = {}, onDictate: () -> Unit = {}) {
     val selected = navigationDestination(state.tab, inChat)
     val largeText = androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.5f
-    Column(Modifier.fillMaxWidth().background(CompanionColor.VoidElevated).navigationBarsPadding()
-        .padding(horizontal = 8.dp, vertical = 4.dp).testTag("navigation.bar")) {
-        if (largeText) {
-            VoiceNavigationAction(state.isVoiceStreamActive, onVoice, Modifier.align(Alignment.CenterHorizontally), expanded = true)
-            NavigationDestination.entries.chunked(2).forEach { pair ->
-                Row(Modifier.fillMaxWidth().selectableGroup()) {
-                    pair.forEach { destination ->
-                        NavigationItem(state, destination, selected, onTab, onMore, Modifier.weight(1f), horizontal = true)
-                    }
-                }
-            }
-        } else {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+    Column(Modifier.fillMaxWidth().background(CompanionColor.Void).navigationBarsPadding().testTag("navigation.bar")) {
+        HorizontalDivider(color = CompanionColor.Line)
+        Box(Modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
+        Row(Modifier.fillMaxWidth().selectableGroup(), verticalAlignment = Alignment.Bottom) {
+            // Keep Voice centered. At large text sizes the selected destination keeps its
+            // readable label; the others retain their accessible names and 48dp targets.
+            Row(Modifier.weight(2f), verticalAlignment = Alignment.Bottom) {
                 NavigationDestination.entries.take(2).forEach { destination ->
-                    NavigationItem(state, destination, selected, onTab, onMore, Modifier.weight(1f))
-                }
-                VoiceNavigationAction(state.isVoiceStreamActive, onVoice, Modifier.weight(1f))
-                NavigationDestination.entries.drop(2).forEach { destination ->
-                    NavigationItem(state, destination, selected, onTab, onMore, Modifier.weight(1f))
+                    NavigationItem(state, destination, selected, onTab, onMore,
+                        Modifier.weight(if (largeText && destination == selected) 2f else 1f),
+                        showLabel = !largeText || destination == selected)
                 }
             }
+            VoiceNavigationAction(state.isVoiceStreamActive, onVoice, Modifier.weight(1f), onDictate = onDictate, showLabel = !largeText)
+            Row(Modifier.weight(2f), verticalAlignment = Alignment.Bottom) {
+                NavigationDestination.entries.drop(2).forEach { destination ->
+                    NavigationItem(state, destination, selected, onTab, onMore,
+                        Modifier.weight(if (largeText && destination == selected) 2f else 1f),
+                        showLabel = !largeText || destination == selected)
+                }
+            }
+        }
         }
     }
 }
 
 @Composable
 private fun NavigationItem(state: CompanionState, destination: NavigationDestination, selected: NavigationDestination,
-    onTab: (MainTab) -> Unit, onMore: () -> Unit, modifier: Modifier, horizontal: Boolean = false) {
+    onTab: (MainTab) -> Unit, onMore: () -> Unit, modifier: Modifier, horizontal: Boolean = false, showLabel: Boolean = true) {
     val active = destination == selected
     val color = if (active) CompanionColor.Signal else CompanionColor.TextDim
     val status = when (destination) {
@@ -87,16 +90,16 @@ private fun NavigationItem(state: CompanionState, destination: NavigationDestina
         .testTag(destination.tab?.let { "nav.${it.name.lowercase()}" } ?: "nav.more")
         .clip(RoundedCornerShape(16.dp))
         .selectable(active, role = Role.Tab, onClick = { destination.tab?.let(onTab) ?: onMore() })
-        .semantics { if (status != null) stateDescription = status }
+        .semantics { contentDescription = destination.label; if (status != null) stateDescription = status }
     val content: @Composable () -> Unit = {
         Box(Modifier.size(if (horizontal) 40.dp else 46.dp, 28.dp)
             .clip(RoundedCornerShape(14.dp))
-            .background(if (active) CompanionColor.SignalSubtle else Color.Transparent), contentAlignment = Alignment.Center) {
+            , contentAlignment = Alignment.Center) {
             NavigationIcon(destination, color)
             if (status != null) Box(Modifier.align(Alignment.TopEnd).padding(3.dp).size(6.dp)
                 .background(if (destination == NavigationDestination.CHATS) CompanionColor.Signal else CompanionColor.Warn, RoundedCornerShape(3.dp)))
         }
-        Text(destination.label, style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp, letterSpacing = 0.sp, lineHeight = 18.sp), color = color,
+        if (showLabel) Text(destination.label, style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp, letterSpacing = 0.sp, lineHeight = 18.sp), color = color,
             maxLines = 1, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }
@@ -106,20 +109,21 @@ private fun NavigationItem(state: CompanionState, destination: NavigationDestina
         horizontalAlignment = Alignment.CenterHorizontally) { content() }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun VoiceNavigationAction(active: Boolean, onClick: () -> Unit, modifier: Modifier, expanded: Boolean = false) {
+private fun VoiceNavigationAction(active: Boolean, onClick: () -> Unit, modifier: Modifier, expanded: Boolean = false, showLabel: Boolean = true, onDictate: () -> Unit = {}) {
     val action = modifier.heightIn(min = 72.dp).clip(RoundedCornerShape(18.dp))
-        .clickable(role = Role.Button, onClick = onClick).testTag("nav.voice")
+        .combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onDictate, onLongClickLabel = "Dictate message").testTag("nav.voice")
         .semantics { contentDescription = if (active) "Open voice controls" else "Start voice conversation" }
     val icon: @Composable () -> Unit = {
-        Box(Modifier.size(54.dp).clip(RoundedCornerShape(20.dp)).background(CompanionColor.Signal), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(54.dp).clip(CircleShape).background(CompanionColor.Signal), contentAlignment = Alignment.Center) {
             VoiceControlIcon(VoiceControlGlyph.WAVE, CompanionColor.Void)
         }
     }
     if (expanded) Row(action.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)) { icon(); Text("Voice", color = CompanionColor.Signal) }
-    else Column(action, verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.Bottom), horizontalAlignment = Alignment.CenterHorizontally) {
-        icon(); Text("Voice", style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp, letterSpacing = 0.sp), color = CompanionColor.Signal)
+    else Column(action, verticalArrangement = Arrangement.spacedBy(4.dp, if (showLabel) Alignment.Bottom else Alignment.CenterVertically), horizontalAlignment = Alignment.CenterHorizontally) {
+        icon(); if (showLabel) Text("Voice", style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp, letterSpacing = 0.sp), color = CompanionColor.Signal)
     }
 }
 
@@ -171,9 +175,9 @@ internal fun NavigationMoreSheet(state: CompanionState, onTab: (MainTab) -> Unit
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = CompanionColor.VoidElevated, contentColor = CompanionColor.Text,
         scrimColor = CompanionColor.Void.copy(alpha = 0.72f)) {
-        Column(Modifier.fillMaxWidth().background(CompanionColor.VoidElevated).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)
             .padding(bottom = 24.dp).testTag("navigation.more")) {
-            Text("More", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(12.dp))
+            app.hermes.companion.design.SheetHeading("More", onDismiss, modifier = Modifier.padding(horizontal = 8.dp))
             Text(state.hostName.ifBlank { "Connected host" }, color = CompanionColor.TextDim,
                 style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
             moreDestinations.forEach { destination ->
@@ -190,13 +194,6 @@ internal fun NavigationMoreSheet(state: CompanionState, onTab: (MainTab) -> Unit
 
 @Composable
 private fun MoreRow(label: String, description: String, tag: String, selected: Boolean, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).testTag(tag).clip(RoundedCornerShape(12.dp))
-        .background(if (selected) CompanionColor.SignalSubtle else Color.Transparent)
-        .clickable(role = Role.Button, onClick = onClick).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(label, style = MaterialTheme.typography.titleMedium, color = if (selected) CompanionColor.Signal else CompanionColor.Text)
-            Text(description, style = MaterialTheme.typography.bodyMedium, color = CompanionColor.TextDim)
-        }
-        Text(if (selected) "✓" else "›", color = CompanionColor.TextDim, modifier = Modifier.padding(start = 12.dp))
-    }
+    app.hermes.companion.design.PreferenceRow(label, description, modifier = Modifier.testTag(tag),
+        value = if (selected) "Current" else null, selected = selected, onClick = onClick)
 }

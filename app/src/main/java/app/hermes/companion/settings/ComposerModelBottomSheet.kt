@@ -18,20 +18,24 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.hermes.companion.SessionControlsPanel
-import app.hermes.companion.design.CompanionColor
+import app.hermes.companion.design.*
+
+enum class ComposerSettingsSection { MODEL, REASONING }
 
 /** Session inventory and applied settings come from the same captured host/profile/session. */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ComposerModelBottomSheet(
     panel: SessionControlsPanel,
     onSet: (String, String, Boolean) -> Unit,
     onRefresh: () -> Unit,
     onDismiss: () -> Unit,
+    initialSection: ComposerSettingsSection = ComposerSettingsSection.MODEL,
 ) {
     var query by remember(panel.owner) { mutableStateOf("") }
     var provider by remember(panel.owner) { mutableStateOf<String?>(null) }
     var providersOpen by remember { mutableStateOf(false) }
+    var section by remember(panel.owner, initialSection) { mutableStateOf(initialSection) }
     val settings = panel.settings
     val models = settings?.models.orEmpty().distinctBy { it.provider to it.id }
     val providers = models.map { it.provider }.distinct().sorted()
@@ -41,18 +45,11 @@ fun ComposerModelBottomSheet(
     }.groupBy { it.provider }.toSortedMap()
     val current = models.find { it.id == settings?.model && it.provider == settings.provider }
     val enabled = !panel.loading && !panel.busy && panel.pending.isEmpty() && panel.confirmationKey == null && settings != null
-    var previousReasoning by remember(panel.owner) { mutableStateOf("medium") }
-    LaunchedEffect(settings?.reasoning) {
-        settings?.reasoning?.takeIf { it !in setOf("none", "off", "disabled", "") }?.let { previousReasoning = it }
-    }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = CompanionColor.VoidElevated, contentColor = CompanionColor.Text) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp)
-            .testTag("composer.models"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Model and reasoning", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                TextButton(onClick = onDismiss, modifier = Modifier.testTag("composer.models.done")) { Text("Done") }
-            }
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp)
+            .testTag("composer.models"), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            SheetHeading("Model & reasoning", onDismiss, closeModifier = Modifier.testTag("composer.models.done"))
             Text("For this conversation", style = MaterialTheme.typography.bodySmall, color = CompanionColor.TextDim)
             if (panel.loading || panel.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             Text(settings?.model ?: "Reading model from Hermes…", style = MaterialTheme.typography.titleMedium)
@@ -65,8 +62,14 @@ fun ComposerModelBottomSheet(
                     Text("Confirm model change")
                 }
             }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                TextButton(onClick = { section = ComposerSettingsSection.MODEL }, modifier = Modifier.testTag("composer.tab.model")) { Text(if (section == ComposerSettingsSection.MODEL) "✓ Model" else "Model") }
+                TextButton(onClick = { section = ComposerSettingsSection.REASONING }, modifier = Modifier.testTag("composer.tab.reasoning")) { Text(if (section == ComposerSettingsSection.REASONING) "✓ Reasoning" else "Reasoning") }
+            }
+            if (section == ComposerSettingsSection.MODEL) {
             Text("Model", style = MaterialTheme.typography.titleSmall)
-            OutlinedTextField(query, { query = it }, label = { Text("Search models") }, singleLine = true,
+            app.hermes.companion.design.HairlineField(query, { query = it }, placeholder = "Search models or providers",
+                keyboardType = androidx.compose.ui.text.input.KeyboardType.Text,
                 modifier = Modifier.fillMaxWidth().testTag("composer.models.search"))
             Box {
                 OutlinedButton(onClick = { providersOpen = true }, modifier = Modifier.testTag("composer.models.providers")) {
@@ -94,33 +97,14 @@ fun ComposerModelBottomSheet(
                             colors = ListItemDefaults.colors(containerColor = CompanionColor.VoidElevated),
                             modifier = Modifier.testTag("composer.models.item.${model.provider}/${model.id}")
                                 .semantics { this.selected = selected }
-                                .clickable(enabled = enabled && !selected && "config.model" !in panel.unsupported, role = Role.RadioButton) {
+                                .heightIn(min = 48.dp).clickable(enabled = enabled && !selected && "config.model" !in panel.unsupported, role = Role.RadioButton) {
                                     onSet("model", "${model.id} --provider ${model.provider} --session", false)
                                 },
                         )
                     }
                 }
             }
-            HorizontalDivider()
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Reasoning", style = MaterialTheme.typography.titleSmall)
-                    Text(settings?.reasoning ?: "Not reported", style = MaterialTheme.typography.bodySmall, color = CompanionColor.TextDim)
-                }
-                Switch(checked = settings?.reasoning?.let { it !in setOf("none", "off", "disabled", "") } == true,
-                    enabled = enabled && settings?.reasoning != null && current?.reasoning == true &&
-                        current.canDisableReasoning == true && "config.reasoning" !in panel.unsupported,
-                    onCheckedChange = { onSet("reasoning", if (it) previousReasoning else "none", false) },
-                    modifier = Modifier.testTag("composer.models.reasoning").semantics { contentDescription = "Reasoning" })
-            }
-            val reason = when {
-                current == null -> "Reasoning controls need model capabilities from Hermes."
-                !current.reasoning -> "This model does not offer configurable reasoning."
-                current.canDisableReasoning == false -> "Reasoning cannot be turned off for this model."
-                current.canDisableReasoning == null -> "Hermes has not reported whether reasoning can be turned off."
-                else -> null
-            }
-            reason?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = CompanionColor.TextDim) }
+            } else GroupedSection("Reasoning", padded = true) { ReasoningControls(panel, onSet) }
             TextButton(onClick = onRefresh, enabled = !panel.busy, modifier = Modifier.testTag("composer.models.refresh")) { Text("Refresh from Hermes") }
             Spacer(Modifier.height(12.dp))
         }
