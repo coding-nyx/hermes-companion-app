@@ -55,17 +55,16 @@ class VoiceStreamEngineTest {
         }
     }
 
-    @Test fun aResultAfterRecognizerFailureCannotSubmitDuringTheRetryDelay() = runTest {
+    @Test fun recognitionFailureDoesNotAutomaticallyReopenOrAcceptLateResults() = runTest {
         Fixture(this).use { f ->
             f.engine.startStream(); runCurrent()
-            val oldResult = f.input.result
+            val oldResult=f.input.result
             f.input.error(SpeechRecognizer.ERROR_NETWORK); runCurrent()
-            oldResult("late result"); runCurrent()
-            assertTrue(f.prompts.isEmpty())
-            advanceTimeBy(500); runCurrent()
-            assertEquals(2, f.input.starts)
-            f.input.result("retried question"); runCurrent()
-            assertEquals(listOf("retried question"), f.prompts)
+            oldResult("late result"); runCurrent(); advanceTimeBy(500); runCurrent()
+            assertTrue(f.prompts.isEmpty()); assertEquals(1,f.input.starts)
+            assertEquals(VoiceStreamState.IDLE,f.engine.state)
+            f.engine.startStream(); runCurrent(); f.input.result("retried question");runCurrent()
+            assertEquals(listOf("retried question"),f.prompts)
         }
     }
 
@@ -123,11 +122,11 @@ class VoiceStreamEngineTest {
         }
     }
 
-    @Test fun stalePlaybackAndRetryCallbacksCannotAffectANewConversation() = runTest {
+    @Test fun stalePlaybackCallbacksCannotAffectANewConversation() = runTest {
         Fixture(this).use { f ->
             f.engine.startStream(); runCurrent()
             val old = f.outputs.single().callbacks
-            f.input.error(SpeechRecognizer.ERROR_RECOGNIZER_BUSY); runCurrent()
+            f.engine.setMicrophoneMuted(true); runCurrent()
             f.engine.stopStream(); runCurrent()
             f.engine.startStream(); runCurrent()
             val starts = f.input.starts
@@ -139,14 +138,41 @@ class VoiceStreamEngineTest {
         }
     }
 
-    @Test fun recognizerRestartsDoNotPostponeTheSilenceDeadline() = runTest {
+    @Test fun silencePausesOnceWithoutARepeatingRecognitionBeepLoop() = runTest {
         Fixture(this).use { f ->
-            f.engine.startStream(); runCurrent()
-            advanceTimeBy(400); f.input.error(SpeechRecognizer.ERROR_NO_MATCH); runCurrent()
-            advanceTimeBy(400); f.input.error(SpeechRecognizer.ERROR_SPEECH_TIMEOUT); runCurrent()
-            advanceTimeBy(250); runCurrent()
-            assertEquals(VoiceStreamState.IDLE, f.engine.state)
-            assertEquals(1, f.audio.releases)
+            f.engine.startStream();runCurrent()
+            f.input.error(SpeechRecognizer.ERROR_NO_MATCH);runCurrent()
+            advanceTimeBy(5_000);runCurrent()
+            assertEquals(VoiceStreamState.MUTED,f.engine.state)
+            assertEquals(1,f.input.starts);assertTrue(f.prompts.isEmpty())
+            f.engine.setMicrophoneMuted(false);runCurrent()
+            assertEquals(2,f.input.starts)
+        }
+    }
+
+    @Test fun listeningDeadlinePausesWithoutDroppingTheConversation() = runTest {
+        Fixture(this).use { f ->
+            f.engine.startStream();runCurrent();advanceTimeBy(1_100);runCurrent()
+            assertEquals(VoiceStreamState.MUTED,f.engine.state)
+            assertTrue(f.audio.held);assertEquals(1,f.input.starts)
+        }
+    }
+
+    @Test fun microphoneReadinessIsRealAndHasABoundedStartupWait() = runTest {
+        Fixture(this).use { f ->
+            f.input.reportsReadiness=true
+            f.engine.startStream();runCurrent()
+            assertTrue(f.readiness.isEmpty())
+            advanceTimeBy(500);f.input.ready();runCurrent()
+            assertEquals(listOf(true),f.readiness)
+            f.engine.stopStream();runCurrent()
+            assertEquals(listOf(true,false),f.readiness)
+        }
+        Fixture(this).use { f ->
+            f.input.reportsReadiness=true
+            f.engine.startStream();runCurrent();advanceTimeBy(10_100);runCurrent()
+            assertEquals(VoiceStreamState.IDLE,f.engine.state)
+            assertTrue(f.errors.single().contains("did not become ready"))
         }
     }
 
@@ -200,6 +226,62 @@ class VoiceStreamEngineTest {
         }
     }
 
+    @Test fun muteCancelsCaptureAndFencesLateResultsUntilExplicitResume() = runTest {
+        Fixture(this).use { f ->
+            f.engine.startStream(); runCurrent()
+            val late = f.input.result
+            f.engine.setMicrophoneMuted(true); runCurrent()
+            assertEquals(VoiceStreamState.MUTED, f.engine.state)
+            late("must not send"); runCurrent()
+            advanceTimeBy(2_000); runCurrent()
+            assertTrue(f.prompts.isEmpty())
+            assertEquals(1, f.input.starts)
+            assertTrue(f.audio.held)
+            f.engine.setMicrophoneMuted(false); runCurrent()
+            assertEquals(VoiceStreamState.LISTENING, f.engine.state)
+            assertEquals(2, f.input.starts)
+            f.input.result("resumed question"); runCurrent()
+            assertEquals(listOf("resumed question"), f.prompts)
+        }
+    }
+
+    @Test fun muteDuringReplyAllowsPlaybackButNeverReopensTheMicrophone() = runTest {
+        Fixture(this).use { f ->
+            f.engine.startStream(); runCurrent(); f.input.result("question"); runCurrent()
+            f.engine.setMicrophoneMuted(true); runCurrent()
+            f.engine.onAssistantDelta("answer"); runCurrent()
+            assertEquals(VoiceStreamState.SPEAKING, f.engine.state)
+            f.engine.onAssistantTurnCompleted(); runCurrent()
+            assertEquals(VoiceStreamState.MUTED, f.engine.state)
+            assertEquals(1, f.input.starts)
+            assertEquals(listOf("answer"), f.outputs.single().text)
+            f.engine.stopStream(); runCurrent()
+            assertFalse(f.engine.isMicrophoneMuted)
+            assertFalse(f.audio.held)
+        }
+    }
+
+    @Test fun mutingTranscriptionCancelsItsDeadlineAndDropsItsResult() = runTest {
+        Fixture(this).use { f ->
+            f.engine.startStream(); runCurrent(); f.input.processing(); runCurrent()
+            val late=f.input.result
+            f.engine.setMicrophoneMuted(true); runCurrent()
+            late("canceled transcript"); runCurrent(); advanceTimeBy(2_100); runCurrent()
+            assertEquals(VoiceStreamState.MUTED, f.engine.state)
+            assertTrue(f.errors.isEmpty()); assertTrue(f.prompts.isEmpty())
+        }
+    }
+
+    @Test fun resumeThenStopCannotRestartRecognitionFromTheOldOwner() = runTest {
+        Fixture(this).use { f ->
+            f.engine.startStream(); runCurrent(); f.engine.setMicrophoneMuted(true); runCurrent()
+            f.engine.setMicrophoneMuted(false); f.engine.stopStream(); runCurrent()
+            assertEquals(1, f.input.starts)
+            assertEquals(VoiceStreamState.IDLE, f.engine.state)
+            assertFalse(f.audio.held)
+        }
+    }
+
     private class Fixture(test: TestScope) : AutoCloseable {
         val dispatcher = StandardTestDispatcher(test.testScheduler)
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -208,19 +290,22 @@ class VoiceStreamEngineTest {
         val outputs = mutableListOf<Output>()
         val prompts = mutableListOf<String>()
         val errors = mutableListOf<String>()
+        val readiness = mutableListOf<Boolean>()
         val engine = VoiceStreamEngine(RuntimeEnvironment.getApplication(), scope, prompts::add, {}, {}, errors::add,
             inactivityTimeoutMs = 1_000, voiceInput = input, outputFactory = { Output(it).also(outputs::add) },
-            audioSession = audio, mainDispatcher = dispatcher, nowMs = { test.testScheduler.currentTime }, transcriptionTimeoutMs = 2_000)
+            audioSession = audio, mainDispatcher = dispatcher, nowMs = { test.testScheduler.currentTime }, transcriptionTimeoutMs = 2_000, onReadinessChange=readiness::add)
         override fun close() { engine.shutdown(); scope.cancel() }
     }
     private class Input : SpeechInput {
+        override var reportsReadiness=false
+        var ready: () -> Unit = {}
         var starts = 0
         var result: (String) -> Unit = {}
         var error: (Int) -> Unit = {}
         var processing: () -> Unit = {}
         override fun startListening(onPartial: (String) -> Unit, onResult: (String) -> Unit, onError: (String) -> Unit,
             onErrorCode: ((Int) -> Unit)?, onStateChange: (Boolean) -> Unit, onActivity: () -> Unit, onProcessing: () -> Unit) {
-            starts++; result = onResult; error = { onErrorCode?.invoke(it) }; processing = onProcessing
+            starts++; result = onResult; error = { onErrorCode?.invoke(it) }; processing = onProcessing; ready={onStateChange(true)}
         }
         override fun stopListening() = Unit
     }

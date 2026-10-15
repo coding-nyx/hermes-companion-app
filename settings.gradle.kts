@@ -34,3 +34,5 @@ include(":feature-chat")
 include(":feature-profiles")
 include(":feature-gateway")
 include(":feature-device")
+
+include(":core-voice")

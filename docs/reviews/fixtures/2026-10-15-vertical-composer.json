@@ -1,0 +1,25 @@
+{
+  "date": "2026-10-15",
+  "change": "Vertical composer side controls with icon actions",
+  "apk_sha256": "a77e96e076e0de2c8be72da05cec7c3fd607d4587697ef6e75150af22ce4272d",
+  "installed_hash_matches": true,
+  "render_tests": {
+    "chat": 18,
+    "navigation": 6,
+    "failures": 0
+  },
+  "device_tests": {
+    "passed": 1,
+    "duration_seconds": 3.533,
+    "microphone_used": false,
+    "content": "synthetic"
+  },
+  "saved_connection": {
+    "profile_id": "ash",
+    "origin": "http://100.85.151.99:9120"
+  },
+  "previous_apk_backup": "Wireless connection dropped during pull; immediate previous APK was not preserved. Older tested checkpoints remain available.",
+  "device_screenshot_review": "Composer controls and rich-text field visually verified; system volume overlay appears outside composer.",
+  "test_package_removed": true,
+  "normal_app_relaunched": true
+}

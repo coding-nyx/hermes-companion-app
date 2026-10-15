@@ -200,6 +200,7 @@ class RoomSessionManager(
         val recovered = if (pending.any { it.text == savedDraft.trim() && it.state != "failed" }) "" else savedDraft
         _state.update {
             it.copy(
+                tab = MainTab.THREADS, chatMinimized = false,
                 openRoomId = room.id,
                 openRoom = room,
                 openSessionId = null,

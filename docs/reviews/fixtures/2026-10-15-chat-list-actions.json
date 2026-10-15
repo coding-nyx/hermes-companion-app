@@ -1,0 +1,14 @@
+{
+  "date": "2026-10-15",
+  "changes": [
+    "New chat floating action",
+    "New agent room in options",
+    "Room capability gating",
+    "Conversation list bottom inset"
+  ],
+  "apk_sha256": "c9c2c2cc998ae8d6877a0d41893b810e51f49b1c617b213b85b4492bd44e2a69",
+  "focused_render_tests": 17,
+  "device_test_seconds": 5.687,
+  "device_test": "passed",
+  "content": "synthetic, no prompts or microphone"
+}

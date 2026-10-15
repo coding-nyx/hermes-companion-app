@@ -1,0 +1,30 @@
+{
+  "date": "2026-10-15",
+  "feature": "Focused composer model and reasoning panel",
+  "models": "Native session-scoped inventory grouped and filtered by provider",
+  "reasoning": "Enabled only with reported capability and permission to disable; unknown remains disabled",
+  "drafts": "Host-backed chats supported; recovered local-only drafts show a disabled settings control until promoted by sending",
+  "scope": "Current host/profile/persisted session; no profile-default mutation",
+  "automated_unique_tests": 553,
+  "automated_failures": 0,
+  "release_lint": {
+    "Warning": 54,
+    "Information": 2
+  },
+  "minified_release_build": "passed",
+  "apk_sha256": "4df5268353c761f8e8428a10853f2107f8e1ab9fdfbede0ead9fc733bb1a632e",
+  "device_gate": "Pending operator unlock; attempted run stopped at keyguard prerequisite",
+  "chat_list_device_gate": "Passed earlier in this session",
+  "rollback_apk": "/private/tmp/companion-chat-list-actions-20261015/installed.apk",
+  "installed_hash_matches": true,
+  "saved_connection": {
+    "profile_id": "ash",
+    "origin": "http://100.85.151.99:9120"
+  },
+  "instrumentation_package": "Retained for pending unlocked device check",
+  "subsequent_device_validation": {
+    "result": "Passed inside the Center dock S22 navigation check",
+    "fixture": "2026-10-15-center-voice-dock.json",
+    "note": "Historical APK and initial keyguard result above are preserved. The later test package was removed."
+  }
+}

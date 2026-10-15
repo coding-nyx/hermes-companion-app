@@ -875,7 +875,7 @@ class DashboardClient internal constructor(
         val fast = socket.request("config.get", "{$fields,\"key\":\"fast\"}")
         return app.hermes.companion.model.NativeSessionSettings(model.str("model").takeIf { it.isNotBlank() },
             model.str("provider").takeIf { it.isNotBlank() }, reasoning.str("value").takeIf { it.isNotBlank() },
-            fast.str("value").takeIf { it.isNotBlank() })
+            fast.str("value").takeIf { it.isNotBlank() }, parseModelCatalog(model).models)
     }
 
     suspend fun setSessionSetting(origin: String, session: SessionRef, key: String, value: String, confirmed: Boolean = false): app.hermes.companion.model.NativeConfigResult {
@@ -1711,25 +1711,7 @@ class DashboardClient internal constructor(
     suspend fun getModelCatalog(origin: String): ModelCatalog =
         get(hostMachine(origin, "/api/model/options")) { body ->
             val obj = Json.parseToJsonElement(body).jsonObject
-            val currentModel = obj["model"]?.jsonPrimitive?.contentOrNull.orEmpty()
-            val currentProvider = obj["provider"]?.jsonPrimitive?.contentOrNull.orEmpty()
-            val providers = obj["providers"]?.jsonArray ?: emptyList()
-            val options = mutableListOf<ModelOption>()
-            for (p in providers) {
-                val pObj = p.jsonObject
-                val pSlug = pObj["slug"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                val pName = pObj["name"]?.jsonPrimitive?.contentOrNull ?: pSlug
-                val models = pObj["models"]?.jsonArray ?: emptyList()
-                val caps = pObj["capabilities"]?.jsonObject
-                for (m in models) {
-                    val mName = m.jsonPrimitive.contentOrNull.orEmpty()
-                    val mCaps = caps?.get(mName)?.jsonObject
-                    val reasoning = mCaps?.get("reasoning")?.jsonPrimitive?.booleanOrNull ?: false
-                    val fast = mCaps?.get("fast")?.jsonPrimitive?.booleanOrNull ?: false
-                    options.add(ModelOption(id = mName, provider = pSlug, name = "$pName · $mName", reasoning = reasoning, fast = fast))
-                }
-            }
-            ModelCatalog(currentModel = currentModel, currentProvider = currentProvider, models = options)
+            parseModelCatalog(obj)
         }
 
     suspend fun switchModel(origin: String, model: String, provider: String, profile: String? = null): Boolean {

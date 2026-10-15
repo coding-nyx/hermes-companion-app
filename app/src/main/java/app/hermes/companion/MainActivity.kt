@@ -456,6 +456,9 @@ class MainActivity : FragmentActivity() {
                         }
                     },
                     onToggleVoiceSpeaker = vm::toggleVoiceSpeaker,
+                    onToggleVoiceMicrophone = vm::toggleVoiceMicrophone,
+                    onStopVoiceStream = { vm.stopVoiceStream() },
+                    onReturnToVoiceConversation = vm::returnToVoiceConversation,
                     onToggleAttach = vm::toggleAttach,
                     onPickPhoto = {
                         pickerOutstanding = true

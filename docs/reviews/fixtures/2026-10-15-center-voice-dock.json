@@ -1,0 +1,49 @@
+{
+  "date": "2026-10-15",
+  "feature": "Center voice dock (approved option 1)",
+  "apk_sha256": "ec491cf4938410f2e793c1ad78b5829cabba2bee01bceb1476afd0bbb7581567",
+  "version_name": "0.1.0",
+  "version_code": 1,
+  "automated_unique_tests": 588,
+  "automated_failures": 0,
+  "release_lint": {
+    "Warning": 60,
+    "Information": 2
+  },
+  "minified_release_build": "passed",
+  "changes": [
+    "Chats / Agents / Voice / Device / More center dock",
+    "Large-text navigation reflows into Voice row and two destination rows",
+    "Long-press composer microphone starts conversation; tap keeps dictation",
+    "Voice remains bound to its conversation across module navigation",
+    "Persistent mute/end controls remain above the keyboard",
+    "Starting voice outside a chat requires an explicit conversation choice",
+    "Switching conversations during voice requires confirmation",
+    "Muted recognition callbacks cannot submit or restart capture",
+    "Module loading errors do not fail healthy speech turns; actual chat failures stop speech",
+    "Landscape typing hides the header and compacts the voice strip while preserving touch targets"
+  ],
+  "composer": "Restored rich-text editor and vertical side controls preserved",
+  "device_gate": "Passed: both scripted S22 tests; 17.989 seconds",
+  "spoken_recognition_and_conversation": "Deferred at operator request",
+  "incoming_calls": "Remain disabled; no placeholder calling implementation exposed",
+  "raj": "Excluded at operator request",
+  "rollback_apk": "/private/tmp/companion-center-dock-20261015/previous.apk",
+  "rollback_sha256": "4df5268353c761f8e8428a10853f2107f8e1ab9fdfbede0ead9fc733bb1a632e",
+  "plugin_protocol": "Unchanged; no mobile tool or broker behavior changes",
+  "installed_hash_matches": true,
+  "installed_sha256": "ec491cf4938410f2e793c1ad78b5829cabba2bee01bceb1476afd0bbb7581567",
+  "scripted_device_checks": "NavigationDeviceTest and VoiceTurnDeviceTest; synthetic content; no microphone or speaker hardware used",
+  "device_tests_passed": 2,
+  "device_tests_failed": 0,
+  "saved_connection": {
+    "profile_id": "ash",
+    "origin": "http://100.85.151.99:9120"
+  },
+  "screenshots_reviewed": [
+    "navigation-device-voice-controls.png",
+    "navigation-device-voice-keyboard.png"
+  ],
+  "test_package_removed": true,
+  "normal_app_relaunched": true
+}

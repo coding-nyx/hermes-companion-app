@@ -163,6 +163,9 @@ fun CompanionShell(
     onVoiceClick: () -> Unit = {},
     onToggleVoiceStream: () -> Unit = {},
     onToggleVoiceSpeaker: () -> Unit = {},
+    onToggleVoiceMicrophone: () -> Unit = {},
+    onStopVoiceStream: () -> Unit = {},
+    onReturnToVoiceConversation: () -> Unit = {},
     onPair: () -> Unit = {},
     onCancelPair: () -> Unit = {},
     onRevokePair: () -> Unit = {},
@@ -218,6 +221,7 @@ fun CompanionShell(
     onFetchMedia: suspend (String) -> ByteArray? = { null },
     onDismissError: () -> Unit = {},
     onPairLink: (String, String, String) -> Unit = { _, _, _ -> },
+    imeVisible: Boolean = WindowInsets.isImeVisible,
 ) {
     if (state.origin == null) {
         // Parent takes the status bar so ConnectScreen's own inset padding doesn't double under the strip.
@@ -246,42 +250,76 @@ fun CompanionShell(
         return
     }
 
-    val inChat = state.openSessionId != null || state.inRoom
-    val imeVisible = WindowInsets.isImeVisible
+    val inChat = state.tab == MainTab.THREADS && !state.chatMinimized && (state.openSessionId != null || state.inRoom)
     BackHandler(enabled = inChat && !imeVisible, onBack = onCloseChat)
     BackHandler(enabled = !inChat && state.openAgentId != null && state.tab == MainTab.CONSOLE, onBack = onAgentClose)
 
+    val compactTyping = imeVisible && androidx.compose.ui.platform.LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val focusManager = LocalFocusManager.current
+    val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(CompanionColor.Void)
             .statusBarsPadding()
             .displayCutoutPadding()
+            .imePadding()
             // Tap on empty chrome drops focus (and with it the IME). Clickable children win first.
             .pointerInput(Unit) { detectTapGestures { focusManager.clearFocus() } },
     ) {
         var showProfileSheet by rememberSaveable { mutableStateOf(false) }
         var showModelSheet by rememberSaveable { mutableStateOf(false) }
         var showSettingsSheet by rememberSaveable { mutableStateOf(false) }
+        var showComposerModels by remember(state.origin, state.activeProfileId, state.openSessionId) { mutableStateOf(false) }
         var showSessionSheet by remember(state.openSessionId) { mutableStateOf(false) }
         var showMoreSheet by rememberSaveable { mutableStateOf(false) }
+        var showVoiceControls by remember { mutableStateOf(false) }
+        var showVoiceStart by remember { mutableStateOf(false) }
+        var pendingVoiceChange by remember { mutableStateOf<(() -> Unit)?>(null) }
+        val openVoice: () -> Unit = {
+            focusManager.clearFocus(); keyboardController?.hide()
+            if (state.isVoiceStreamActive) showVoiceControls = true
+            else if (inChat && !state.inRoom) onToggleVoiceStream()
+            else showVoiceStart = true
+        }
+        fun changeConversation(action: () -> Unit) {
+            if (state.isVoiceStreamActive) pendingVoiceChange = action else action()
+        }
+        LaunchedEffect(state.isVoiceStreamActive) { if (!state.isVoiceStreamActive) showVoiceControls = false }
+        if (pendingVoiceChange != null) {
+            androidx.compose.material3.AlertDialog(onDismissRequest = { pendingVoiceChange = null },
+                title = { Text("End voice to switch conversations?") },
+                text = { Text("Voice is attached to ${state.voiceSessionTitle.ifBlank { state.openSession?.title ?: "this conversation" }}. Your conversation and draft stay saved.") },
+                confirmButton = { androidx.compose.material3.TextButton(onClick = {
+                    val action = pendingVoiceChange; pendingVoiceChange = null
+                    onStopVoiceStream(); action?.invoke()
+                }) { Text("End voice and switch") } },
+                dismissButton = { androidx.compose.material3.TextButton(onClick = { pendingVoiceChange = null }) { Text("Stay here") } })
+        }
+        if (showVoiceControls && state.isVoiceStreamActive) VoiceControlsSheet(state,
+            onDismiss = { showVoiceControls = false }, onMute = onToggleVoiceMicrophone,
+            onSpeaker = onToggleVoiceSpeaker, onStop = { showVoiceControls = false; onStopVoiceStream() },
+            onConversation = { showVoiceControls = false; onReturnToVoiceConversation() })
+        if (showVoiceStart) VoiceStartSheet(state, onDismiss = { showVoiceStart = false },
+            onStart = { showVoiceStart = false; onToggleVoiceStream() },
+            onChoose = { showVoiceStart = false; onTab(MainTab.THREADS) })
 
         LaunchedEffect(showModelSheet, showSettingsSheet) {
             if ((showModelSheet || showSettingsSheet) && state.modelCatalog == null) {
                 onRefreshModels()
             }
         }
+        if (!compactTyping || !inChat) {
         Header(
             state = state,
             inChat = inChat,
             onCloseChat = onCloseChat,
-            onProfileTap = { showProfileSheet = true },
+            onProfileTap = { changeConversation { showProfileSheet = true } },
             onOpenSettings = { showSettingsSheet = true },
             onSessionActions = { showSessionSheet = true },
-            onToggleVoice = onToggleVoiceStream,
         )
         Hairline()
+        }
         if (showSessionSheet && !state.inRoom) {
             state.openSession?.takeUnless { app.hermes.companion.domain.DraftThread.isDraft(it) }?.let { session ->
                 app.hermes.companion.settings.SessionBottomSheet(
@@ -293,7 +331,10 @@ fun CompanionShell(
             }
         }
         state.sessionControls?.let { panel ->
-            app.hermes.companion.settings.SessionControlsBottomSheet(panel, onSessionControls, onSetSessionSetting,
+            if (showComposerModels) {
+                app.hermes.companion.settings.ComposerModelBottomSheet(panel, onSetSessionSetting, onSessionControls,
+                    { showComposerModels = false; onDismissSessionControls() })
+            } else app.hermes.companion.settings.SessionControlsBottomSheet(panel, onSessionControls, onSetSessionSetting,
                 onRedirectSession, onNativeCommand, onDismissSessionControls)
         }
         state.contextPanel?.let { panel ->
@@ -301,7 +342,6 @@ fun CompanionShell(
         }
         if (showMoreSheet) {
             NavigationMoreSheet(state, { tab ->
-                if (inChat) onCloseChat()
                 onTab(tab)
             }, { showSettingsSheet = true }, { showMoreSheet = false })
         }
@@ -315,7 +355,6 @@ fun CompanionShell(
                 },
                 onOpenAll = {
                     showProfileSheet = false
-                    if (inChat) onCloseChat()
                     onTab(MainTab.PROFILES)
                 },
                 onDismiss = { showProfileSheet = false },
@@ -356,7 +395,6 @@ fun CompanionShell(
                 },
                 onTab = { tab ->
                     showSettingsSheet = false
-                    if (inChat) onCloseChat()
                     onTab(tab)
                 },
                 onSpeechBackend = onSpeechBackend,
@@ -422,13 +460,20 @@ fun CompanionShell(
                 onReadAloud = onReadAloud,
                 readAloudMessageId = state.readAloudMessageId,
                 onVoiceClick = onVoiceClick,
+                onVoiceLongClick = openVoice,
+                compactComposer = compactTyping,
                 loading = state.transcriptLoading,
                 historySource = state.historySource,
                 onRetryHistory = { state.openSession?.let(onOpenSession) },
                 modelOverride = state.modelOverride,
                 modelCatalog = state.modelCatalog,
                 onSwitchModel = onSwitchModel,
-                onOpenModelPicker = { showModelSheet = true },
+                onOpenModelPicker = {
+                    if (app.hermes.companion.domain.DraftThread.isPersisted(state.openSessionId)) {
+                        showComposerModels = true
+                        onSessionControls()
+                    }
+                },
                 pendingAttachments = state.pendingAttachments,
                 attachOpen = state.attachOpen,
                 onToggleAttach = onToggleAttach,
@@ -474,13 +519,16 @@ fun CompanionShell(
                     roomsLoading = state.roomsLoading,
                     roomsError = state.roomsError,
                     unreadRooms = state.unreadRooms,
-                    onOpenRoom = onOpenRoom,
-                    onNewRoom = onNewRoom,
+                    onOpenRoom = { room -> changeConversation { onOpenRoom(room) } },
+                    onNewRoom = { changeConversation(onNewRoom) },
                     onDeleteRoom = onDeleteRoom,
-                    onOpen = onOpenSession,
-                    onNew = onNewThread,
+                    onOpen = { session ->
+                        if (session.id == state.openSessionId && state.isVoiceStreamActive) onReturnToVoiceConversation()
+                        else changeConversation { onOpenSession(session) }
+                    },
+                    onNew = { changeConversation(onNewThread) },
                     hasLocalDraft = state.hasLocalDraft,
-                    onResumeLocalDraft = onResumeLocalDraft,
+                    onResumeLocalDraft = { changeConversation(onResumeLocalDraft) },
                     onRetry = onRetrySessions,
                     onDeleteRequest = onRequestDelete,
                     onConfirmDelete = onConfirmDelete,
@@ -641,26 +689,11 @@ fun CompanionShell(
                 )
             }
         }
-        // The bar gives its height to the keyboard while typing (A18.4 / A18.7).
+        // The shell owns IME insets, keeping active voice controls above the keyboard.
+        if (state.isVoiceStreamActive) VoiceDock(state, openVoice, onToggleVoiceMicrophone, onStopVoiceStream, compact = compactTyping)
         if (!imeVisible) {
-            if (state.voiceStreamState != VoiceStreamState.IDLE) {
-                VoiceStageHud(
-                    state = state.voiceStreamState,
-                    onStop = onToggleVoiceStream,
-                    speaker = state.voiceSpeaker,
-                    onSpeaker = onToggleVoiceSpeaker,
-                )
-            }
             Hairline()
-            AppNavigationBar(
-                state = state,
-                inChat = inChat,
-                onTab = { tab ->
-                    if (inChat) onCloseChat()
-                    onTab(tab)
-                },
-                onMore = { showMoreSheet = true },
-            )
+            AppNavigationBar(state, inChat, onTab, { showMoreSheet = true }, openVoice)
         }
     }
 }
@@ -797,7 +830,6 @@ private fun Header(
     onProfileTap: () -> Unit,
     onOpenSettings: () -> Unit = {},
     onSessionActions: () -> Unit = {},
-    onToggleVoice: () -> Unit = {},
 ) {
     Row(
         modifier = Modifier
@@ -864,14 +896,7 @@ private fun Header(
                 )
             }
         }
-        if ((inChat || state.tab == MainTab.THREADS) && !state.inRoom) {
-            androidx.compose.material3.TextButton(onClick = onToggleVoice,
-                modifier = Modifier.testTag("header.voice").semantics {
-                    contentDescription = if (state.isVoiceStreamActive) "End voice chat" else "Start voice chat"
-                }) {
-                Text(if (state.isVoiceStreamActive) "End voice" else "Voice", color = CompanionColor.Signal)
-            }
-        } else LinkPill(state)
+        if (!inChat && state.tab != MainTab.THREADS) LinkPill(state)
         Box(
             modifier = Modifier
                 .size(48.dp)
@@ -951,76 +976,4 @@ private fun HudGlyph(label: String, state: HudState) {
         degraded = state == HudState.DEGRADED,
         modifier = Modifier.testTag("hud.${label.lowercase()}"),
     )
-}
-
-@Composable
-private fun VoiceStageHud(
-    state: VoiceStreamState,
-    onStop: () -> Unit,
-    speaker: Boolean,
-    onSpeaker: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    if (state == VoiceStreamState.IDLE) return
-    val stateLabel = when (state) {
-        VoiceStreamState.LISTENING -> "LISTENING"
-        VoiceStreamState.TRANSCRIBING -> "TRANSCRIBING…"
-        VoiceStreamState.THINKING -> "THINKING…"
-        VoiceStreamState.SPEAKING -> "SPEAKING"
-        VoiceStreamState.IDLE -> ""
-    }
-    val wave = when (state) {
-        VoiceStreamState.LISTENING -> "ılı.lıllılı.ıllı."
-        VoiceStreamState.SPEAKING -> " ▃▅▇█▇▅▃ "
-        VoiceStreamState.TRANSCRIBING -> "◐"
-        VoiceStreamState.THINKING -> "◐ ◓ ◑ ◒"
-        VoiceStreamState.IDLE -> ""
-    }
-    val hudShape = RoundedCornerShape(14.dp)
-    val btnShape = RoundedCornerShape(8.dp)
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = CompanionSpace.Sm, vertical = 4.dp)
-            .clip(hudShape)
-            .background(CompanionColor.VoidElevated)
-            .border(CompanionSpace.Hairline, if (state == VoiceStreamState.LISTENING) CompanionColor.Signal else CompanionColor.Warn, hudShape)
-            .padding(horizontal = CompanionSpace.Md, vertical = 8.dp)
-            .testTag("voice.stage"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            LiveDot(color = if (state == VoiceStreamState.LISTENING) CompanionColor.Signal else CompanionColor.Warn)
-            Text(
-                text = "Voice · $stateLabel",
-                style = CompanionType.MonoSmall.copy(
-                    color = CompanionColor.Signal,
-                    fontWeight = FontWeight.Bold,
-                ),
-            )
-            Text(
-                text = wave,
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
-            )
-        }
-        Text(
-            text = if (speaker) "Speaker" else "Auto",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-            modifier = Modifier.testTag("voice.stage.speaker").clickable(onClick = onSpeaker).padding(8.dp),
-        )
-        Text(
-            text = "End",
-            style = CompanionType.MonoSmall.copy(color = CompanionColor.Warn, fontWeight = FontWeight.Bold),
-            modifier = Modifier
-                .testTag("voice.stage.stop")
-                .clip(btnShape)
-                .background(CompanionColor.Warn.copy(alpha = 0.15f))
-                .clickable(onClick = onStop)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-        )
-    }
 }

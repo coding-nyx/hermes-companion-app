@@ -48,6 +48,11 @@ android {
     defaultConfig {
         applicationId = "app.hermes.companion"
         minSdk = 31
+        // Optional device build: avoid shipping other CPUs over wireless ADB. Universal by default.
+        providers.gradleProperty("hermesDeviceAbi").orNull?.let { abi ->
+            require(abi in setOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64"))
+            ndk.abiFilters.add(abi)
+        }
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionCode = (System.getenv("HERMES_VERSION_CODE")?.toIntOrNull()) ?: 1
@@ -112,6 +117,7 @@ android {
 dependencies {
     implementation("com.google.firebase:firebase-messaging:25.0.1")
     implementation("io.github.webrtc-sdk:android:150.7871.01")
+    implementation(project(":core-voice"))
     implementation(project(":core-model"))
     implementation(project(":core-design"))
     implementation(project(":domain"))

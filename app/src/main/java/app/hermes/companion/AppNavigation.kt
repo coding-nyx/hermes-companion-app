@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
@@ -42,40 +43,83 @@ internal fun navigationDestination(tab: MainTab, inChat: Boolean): NavigationDes
         NavigationDestination.entries.firstOrNull { it.tab == tab } ?: NavigationDestination.MORE
 
 @Composable
-internal fun AppNavigationBar(state: CompanionState, inChat: Boolean, onTab: (MainTab) -> Unit, onMore: () -> Unit) {
+internal fun AppNavigationBar(state: CompanionState, inChat: Boolean, onTab: (MainTab) -> Unit,
+    onMore: () -> Unit, onVoice: () -> Unit = {}) {
     val selected = navigationDestination(state.tab, inChat)
-    Row(Modifier.fillMaxWidth().background(CompanionColor.VoidElevated).navigationBarsPadding()
-        .padding(horizontal = 8.dp, vertical = 8.dp).selectableGroup().testTag("navigation.bar")) {
-        NavigationDestination.entries.forEach { destination ->
-            val active = destination == selected
-            val color = if (active) CompanionColor.Signal else CompanionColor.TextDim
-            val status = when (destination) {
-                NavigationDestination.CHATS -> if (state.visibleSessions.any { it.unread } || state.unreadRooms.isNotEmpty()) "Unread conversations" else null
-                NavigationDestination.DEVICE -> if (state.arm != DeviceArm.DISARMED) "Hands armed" else null
-                NavigationDestination.MORE -> if (state.hud.gateway == HudState.OFF) "Check host status" else null
-                else -> null
-            }
-            Column(Modifier.weight(1f).heightIn(min = 64.dp)
-                .testTag(destination.tab?.let { "nav.${it.name.lowercase()}" } ?: "nav.more")
-                .clip(RoundedCornerShape(16.dp))
-                .selectable(active, role = Role.Tab, onClick = { destination.tab?.let(onTab) ?: onMore() })
-                .semantics { if (status != null) stateDescription = status }
-                .padding(vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
-                horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(Modifier.size(52.dp, 28.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(if (active) CompanionColor.SignalSubtle else Color.Transparent), contentAlignment = Alignment.Center) {
-                    NavigationIcon(destination, color)
-                    if (status != null) Box(Modifier.align(Alignment.TopEnd).padding(3.dp).size(6.dp)
-                        .background(if (destination == NavigationDestination.CHATS) CompanionColor.Signal else CompanionColor.Warn,
-                            RoundedCornerShape(3.dp)))
+    val largeText = androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.5f
+    Column(Modifier.fillMaxWidth().background(CompanionColor.VoidElevated).navigationBarsPadding()
+        .padding(horizontal = 8.dp, vertical = 4.dp).testTag("navigation.bar")) {
+        if (largeText) {
+            VoiceNavigationAction(state.isVoiceStreamActive, onVoice, Modifier.align(Alignment.CenterHorizontally), expanded = true)
+            NavigationDestination.entries.chunked(2).forEach { pair ->
+                Row(Modifier.fillMaxWidth().selectableGroup()) {
+                    pair.forEach { destination ->
+                        NavigationItem(state, destination, selected, onTab, onMore, Modifier.weight(1f), horizontal = true)
+                    }
                 }
-                Text(destination.label, style = MaterialTheme.typography.labelMedium.copy(letterSpacing = 0.sp, lineHeight = 18.sp), color = color,
-                    maxLines = 1, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+                NavigationDestination.entries.take(2).forEach { destination ->
+                    NavigationItem(state, destination, selected, onTab, onMore, Modifier.weight(1f))
+                }
+                VoiceNavigationAction(state.isVoiceStreamActive, onVoice, Modifier.weight(1f))
+                NavigationDestination.entries.drop(2).forEach { destination ->
+                    NavigationItem(state, destination, selected, onTab, onMore, Modifier.weight(1f))
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun NavigationItem(state: CompanionState, destination: NavigationDestination, selected: NavigationDestination,
+    onTab: (MainTab) -> Unit, onMore: () -> Unit, modifier: Modifier, horizontal: Boolean = false) {
+    val active = destination == selected
+    val color = if (active) CompanionColor.Signal else CompanionColor.TextDim
+    val status = when (destination) {
+        NavigationDestination.CHATS -> if (state.visibleSessions.any { it.unread } || state.unreadRooms.isNotEmpty()) "Unread conversations" else null
+        NavigationDestination.DEVICE -> if (state.arm != DeviceArm.DISARMED) "Hands armed" else null
+        NavigationDestination.MORE -> if (state.hud.gateway == HudState.OFF) "Check host status" else null
+        else -> null
+    }
+    val itemModifier = modifier.heightIn(min = if (horizontal) 56.dp else 64.dp)
+        .testTag(destination.tab?.let { "nav.${it.name.lowercase()}" } ?: "nav.more")
+        .clip(RoundedCornerShape(16.dp))
+        .selectable(active, role = Role.Tab, onClick = { destination.tab?.let(onTab) ?: onMore() })
+        .semantics { if (status != null) stateDescription = status }
+    val content: @Composable () -> Unit = {
+        Box(Modifier.size(if (horizontal) 40.dp else 46.dp, 28.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (active) CompanionColor.SignalSubtle else Color.Transparent), contentAlignment = Alignment.Center) {
+            NavigationIcon(destination, color)
+            if (status != null) Box(Modifier.align(Alignment.TopEnd).padding(3.dp).size(6.dp)
+                .background(if (destination == NavigationDestination.CHATS) CompanionColor.Signal else CompanionColor.Warn, RoundedCornerShape(3.dp)))
+        }
+        Text(destination.label, style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp, letterSpacing = 0.sp, lineHeight = 18.sp), color = color,
+            maxLines = 1, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+    }
+    if (horizontal) Row(itemModifier, verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally)) { content() }
+    else Column(itemModifier.padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally) { content() }
+}
+
+@Composable
+private fun VoiceNavigationAction(active: Boolean, onClick: () -> Unit, modifier: Modifier, expanded: Boolean = false) {
+    val action = modifier.heightIn(min = 72.dp).clip(RoundedCornerShape(18.dp))
+        .clickable(role = Role.Button, onClick = onClick).testTag("nav.voice")
+        .semantics { contentDescription = if (active) "Open voice controls" else "Start voice conversation" }
+    val icon: @Composable () -> Unit = {
+        Box(Modifier.size(54.dp).clip(RoundedCornerShape(20.dp)).background(CompanionColor.Signal), contentAlignment = Alignment.Center) {
+            VoiceControlIcon(VoiceControlGlyph.WAVE, CompanionColor.Void)
+        }
+    }
+    if (expanded) Row(action.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)) { icon(); Text("Voice", color = CompanionColor.Signal) }
+    else Column(action, verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.Bottom), horizontalAlignment = Alignment.CenterHorizontally) {
+        icon(); Text("Voice", style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp, letterSpacing = 0.sp), color = CompanionColor.Signal)
     }
 }
 

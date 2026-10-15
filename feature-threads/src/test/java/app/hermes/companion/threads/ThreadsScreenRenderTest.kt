@@ -9,7 +9,11 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.assertTextContains
 import app.hermes.companion.design.CompanionTheme
 import app.hermes.companion.domain.SessionLists
 import app.hermes.companion.domain.ThreadSort
@@ -32,8 +36,50 @@ class ThreadsScreenRenderTest {
         rule.setContent {
             CompanionTheme { ThreadsScreen(sessions = emptyList(), roomsAvailable = false) }
         }
+        rule.mainClock.advanceTimeBy(500)
+        capture("chat-list-empty-primary-action")
         rule.onNodeWithTag("threads.new").assertIsDisplayed()
+        rule.onNodeWithTag("threads.new").assertTextContains("New chat")
         rule.onNodeWithTag("threads.newroom").assertDoesNotExist()
+        rule.onNodeWithTag("threads.options").assertDoesNotExist()
+    }
+    @Test fun newChatIsPrimaryAndRoomsAreAnExplicitSecondaryAction() {
+        var chats = 0
+        var rooms = 0
+        rule.setContent { CompanionTheme { ThreadsScreen(sessions = rows,
+            onNew = { chats++ }, onNewRoom = { rooms++ }) } }
+        rule.onNodeWithTag("threads.newroom").assertDoesNotExist()
+        val action = rule.onNodeWithTag("threads.new").fetchSemanticsNode().boundsInRoot
+        val filter = rule.onNodeWithTag("threads.filter").fetchSemanticsNode().boundsInRoot
+        assertTrue(action.top > filter.bottom)
+        rule.onNodeWithTag("threads.options").performClick()
+        rule.onNodeWithText("New agent room").assertIsDisplayed().performClick()
+        assertEquals(1, rooms); assertEquals(0, chats)
+        rule.onNodeWithTag("threads.newroom").assertDoesNotExist()
+        rule.onNodeWithTag("threads.new").performClick()
+        assertEquals(1, chats); assertEquals(1, rooms)
+        capture("chat-list-primary-action")
+    }
+
+    @Test fun finalConversationScrollsClearOfTheNewChatButton() {
+        val many = (1..20).map { row("chat-$it", "Conversation $it", now - it * hour) }
+        rule.setContent { CompanionTheme { ThreadsScreen(sessions = many) } }
+        rule.onNodeWithTag("threads.rail").performScrollToNode(hasTestTag("threads.row.chat-20"))
+        rule.onNodeWithTag("threads.row.chat-20").assertIsDisplayed()
+        val last = rule.onNodeWithTag("threads.row.chat-20").fetchSemanticsNode().boundsInRoot
+        val action = rule.onNodeWithTag("threads.new").fetchSemanticsNode().boundsInRoot
+        assertTrue("New chat must not cover the last conversation", last.bottom <= action.top)
+    }
+
+    private fun capture(name: String) {
+        rule.waitForIdle()
+        val view = rule.activity.window.decorView
+        val bitmap = android.graphics.Bitmap.createBitmap(view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888)
+        rule.runOnIdle { view.draw(android.graphics.Canvas(bitmap)) }
+        val file = java.io.File("build/reports/threads-render/$name.png")
+        file.parentFile?.mkdirs()
+        file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        bitmap.recycle()
     }
     @Test fun recoveringAnUnsentDraftIsSeparateFromCreatingAThread() {
         var resumed = 0

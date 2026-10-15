@@ -12,6 +12,8 @@ import android.speech.SpeechRecognizer
 import java.util.Locale
 
 class VoiceInputManager(private val context: Context) : SpeechInput {
+    override val reportsReadiness = true
+    private var recognitionActive = false
     private var recognizer: SpeechRecognizer? = null
     private var generation = 0L
 
@@ -66,6 +68,7 @@ class VoiceInputManager(private val context: Context) : SpeechInput {
                 override fun onEndOfSpeech() { if (current == generation) { onStateChange(false); onProcessing() } }
                 override fun onError(error: Int) {
                     if (current != generation) return
+                    recognitionActive = false
                     onStateChange(false)
                     onErrorCode?.invoke(error)
                     onError(when (error) {
@@ -82,6 +85,7 @@ class VoiceInputManager(private val context: Context) : SpeechInput {
 
                 override fun onResults(results: Bundle?) {
                     if (current != generation) return
+                    recognitionActive = false
                     onStateChange(false)
                     val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     val text = matches?.firstOrNull().orEmpty()
@@ -99,13 +103,15 @@ class VoiceInputManager(private val context: Context) : SpeechInput {
 
                 override fun onEvent(eventType: Int, params: Bundle?) {}
             })
+            recognitionActive = true
             startListening(intent)
         }
     }
 
     override fun stopListening() {
         generation++
-        runCatching { recognizer?.cancel() }
+        if (recognitionActive) runCatching { recognizer?.cancel() }
+        recognitionActive = false
         runCatching { recognizer?.destroy() }
         recognizer = null
     }

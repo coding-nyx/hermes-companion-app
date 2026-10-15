@@ -5,6 +5,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,6 +17,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -35,6 +40,8 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
@@ -55,15 +62,20 @@ import app.hermes.companion.design.CompanionType
 import app.hermes.companion.design.Hairline
 import app.hermes.companion.domain.MarkdownWrap
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MarkdownComposer(
     value: String,
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier,
     onSend: () -> Unit = {},
+    onOpenModelSettings: (() -> Unit)? = null,
+    modelSettingsEnabled: Boolean = true,
 ) {
     var field by remember { mutableStateOf(TextFieldValue(value)) }
     var focused by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(value) {
         if (value != field.text) field = TextFieldValue(value, TextRange(value.length))
     }
@@ -91,10 +103,21 @@ fun MarkdownComposer(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            FormatChip("B", "chat.fmt.bold") { format(MarkdownWrap::bold) }
-            FormatChip("I", "chat.fmt.italic") { format(MarkdownWrap::italic) }
-            FormatChip("`", "chat.fmt.code") { format(MarkdownWrap::code) }
-            FormatChip("-", "chat.fmt.list") { format(MarkdownWrap::bullet) }
+            FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                FormatChip("B", "chat.fmt.bold") { format(MarkdownWrap::bold) }
+                FormatChip("I", "chat.fmt.italic") { format(MarkdownWrap::italic) }
+                FormatChip("`", "chat.fmt.code") { format(MarkdownWrap::code) }
+                FormatChip("-", "chat.fmt.list") { format(MarkdownWrap::bullet) }
+            }
+            if (focused && onOpenModelSettings != null) {
+                IconButton(onClick = { focusManager.clearFocus(); keyboard?.hide(); onOpenModelSettings() }, enabled = modelSettingsEnabled,
+                    modifier = Modifier.testTag("chat.model.settings").semantics {
+                        contentDescription = if (modelSettingsEnabled) "Model and reasoning" else "Create a host chat to change model and reasoning"
+                    }) {
+                    ComposerActionIcon(ComposerIcon.SETTINGS,
+                        if (modelSettingsEnabled) CompanionColor.Signal else CompanionColor.TextMute)
+                }
+            }
         }
         Hairline()
         BasicTextField(

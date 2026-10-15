@@ -45,6 +45,7 @@ class HostSpeechInput(
     private val dispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
 ) : SpeechInput {
     override val terminalErrors = true
+    override val reportsReadiness = true
     private val generation = AtomicLong()
     private var job: Job? = null
 

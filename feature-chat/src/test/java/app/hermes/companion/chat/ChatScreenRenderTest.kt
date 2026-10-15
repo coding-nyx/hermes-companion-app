@@ -9,10 +9,13 @@ import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
 import app.hermes.companion.design.CompanionTheme
@@ -69,6 +72,12 @@ class ChatScreenRenderTest {
         readAloudMessageId: String? = null,
         approval: app.hermes.companion.model.ApprovalPrompt? = null,
         approvalBusy: Boolean = false,
+        onSend: () -> Unit = {},
+        onInterrupt: () -> Unit = {},
+        onVoice: () -> Unit = {},
+        onVoiceLong: (() -> Unit)? = null,
+        onAttach: () -> Unit = {},
+        onModels: () -> Unit = {},
         onApproval: (String) -> Unit = {},
     ) {
         rule.mainClock.autoAdvance = false
@@ -87,8 +96,12 @@ class ChatScreenRenderTest {
                         approval = approval,
                         approvalBusy = approvalBusy,
                         onDraftChange = {},
-                        onSend = {},
-                        onInterrupt = {},
+                        onSend = onSend,
+                        onInterrupt = onInterrupt,
+                        onVoiceClick = onVoice,
+                        onVoiceLongClick = onVoiceLong,
+                        onToggleAttach = onAttach,
+                        onOpenModelPicker = onModels,
                         onApproval = onApproval,
                         threadId = "s1",
                         participants = participants,
@@ -141,12 +154,12 @@ class ChatScreenRenderTest {
 
     @Test fun aDraftDuringGenerationSteersTheActiveTurn() {
         mount(listOf(user, agentLive), streaming = true, draft = "use the other directory")
-        rule.onNodeWithText("STEER").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Steer reply").assertIsDisplayed()
     }
 
     @Test fun sendingAndCreationShowTheirOwnComposerState() {
         mount(listOf(user), streaming = false, submitting = true)
-        rule.onNodeWithText("SENDING").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Sending message").assertIsDisplayed().assertIsNotEnabled()
     }
 
     @Test fun restoredComposerKeepsRichTextControlsVisible() {
@@ -155,9 +168,48 @@ class ChatScreenRenderTest {
             rule.onNodeWithTag("chat.fmt.$tag").assertIsDisplayed()
         }
         rule.onNodeWithTag("chat.slash").assertIsDisplayed()
-        rule.onNodeWithText("MIC").assertIsDisplayed()
-        rule.onNodeWithText("SEND").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Dictate message").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Send message").assertIsDisplayed()
         snap("13-restored-rich-text-composer")
+    }
+
+    @Test fun composerControlsStackBesideAWideDraftAndDispatchTheirOwnActions() {
+        val actions = mutableListOf<String>()
+        mount(emptyList(), streaming = false, onSend = { actions += "send" },
+            onVoice = { actions += "voice" }, onAttach = { actions += "attach" })
+        fun bounds(tag: String) = rule.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
+        val attach = bounds("chat.attach")
+        val slash = bounds("chat.slash")
+        val voice = bounds("chat.voice")
+        val send = bounds("chat.send")
+        val draft = bounds("chat.draft")
+        assertTrue(attach.left == slash.left && attach.bottom < slash.top)
+        assertTrue(voice.left == send.left && voice.bottom < send.top)
+        assertTrue(draft.left >= attach.right && draft.right <= send.left)
+        assertTrue(draft.width > attach.width * 3)
+        rule.onNodeWithTag("chat.attach").performClick()
+        rule.onNodeWithTag("chat.voice").performClick()
+        rule.onNodeWithTag("chat.send").performClick()
+        assertTrue(actions == listOf("attach", "voice", "send"))
+        snap("14-vertical-composer-controls")
+    }
+
+    @Test fun stopIconInterruptsInsteadOfSendingAnEmptySteer() {
+        val actions = mutableListOf<String>()
+        mount(listOf(agentLive), streaming = true, onSend = { actions += "send" }, onInterrupt = { actions += "stop" })
+        rule.onNodeWithContentDescription("Interrupt reply").performClick()
+        assertTrue(actions == listOf("stop"))
+    }
+
+    @Test fun modelSettingsAppearOnFocusAndKeepAllFormattingAvailable() {
+        var opened = 0
+        mount(emptyList(), streaming = false, draft = "Keep **this** draft", onModels = { opened++ })
+        rule.onNodeWithTag("chat.model.settings").assertDoesNotExist()
+        rule.onNodeWithTag("chat.draft").performClick()
+        rule.mainClock.advanceTimeBy(200)
+        rule.onNodeWithTag("chat.model.settings").assertIsDisplayed().performClick()
+        for (tag in listOf("bold", "italic", "code", "list")) rule.onNodeWithTag("chat.fmt.$tag").assertIsDisplayed()
+        assertTrue(opened == 1)
     }
 
     @Test
@@ -205,7 +257,7 @@ class ChatScreenRenderTest {
         rule.onNodeWithTag("chat.mentions").assertIsDisplayed()
         rule.onNodeWithTag("chat.mention.OPS").assertIsDisplayed()
         // v2: the operator is never locked out of a room; SEND stays, STOP lives in the room bar.
-        rule.onNodeWithText("SEND").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Send message").assertIsDisplayed()
         rule.onAllNodesWithText("INTERRUPT ALL").assertCountEquals(0)
         rule.onAllNodesWithTag("chat.attach").assertCountEquals(0)
         rule.onAllNodesWithText("HERMES").assertCountEquals(0)
@@ -220,6 +272,16 @@ class ChatScreenRenderTest {
         rule.onNodeWithText("thinking").assertIsDisplayed()
         rule.onNodeWithText("coder").assertIsDisplayed()
         snap("06-room-thinking")
+    }
+
+    @Test fun microphoneTapDictatesAndLongPressStartsVoiceWithoutADuplicateTap() {
+        var taps=0; var holds=0
+        mount(emptyList(),false,onVoice={taps++},onVoiceLong={holds++})
+        rule.onNodeWithTag("chat.voice").performClick()
+        rule.onNodeWithTag("chat.voice").performTouchInput { longClick() }
+        org.junit.Assert.assertEquals(1,taps)
+        org.junit.Assert.assertEquals(1,holds)
+        rule.onNodeWithTag("chat.fmt.bold").assertIsDisplayed()
     }
 
     /** Software-draws the decor view; Compose's idle wait never settles with infinite blink animations. */
@@ -249,7 +311,7 @@ class ChatScreenRenderTest {
         rule.onNodeWithText("HERMES").assertIsDisplayed()
         rule.onAllNodesWithTag("chat.cursor").assertCountEquals(0)
         rule.onAllNodesWithTag("chat.pending").assertCountEquals(0)
-        rule.onNodeWithText("MIC").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Dictate message").assertIsDisplayed()
         snap("01-idle")
     }
 
@@ -259,7 +321,7 @@ class ChatScreenRenderTest {
         rule.onNodeWithTag("chat.tool.running").assertIsDisplayed()
         rule.onNodeWithTag("chat.pending").assertIsDisplayed()
         rule.onNodeWithText("running · terminal").assertIsDisplayed()
-        rule.onNodeWithText("INTERRUPT").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Interrupt reply").assertIsDisplayed()
         snap("02-tool-running")
     }
 

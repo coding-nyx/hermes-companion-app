@@ -39,9 +39,6 @@ import app.hermes.companion.model.SessionRef
 
 enum class MainTab { THREADS, CONSOLE, REVIEW, REMINDERS, PROFILES, GATEWAY, DEVICE }
 
-/** Real-time conversational voice stream lifecycle states. */
-enum class VoiceStreamState { IDLE, LISTENING, TRANSCRIBING, THINKING, SPEAKING }
-
 /** External `hermes-companion://open` request awaiting user confirmation (A7.10). */
 data class DeepLinkRequest(val profileId: String, val sessionId: String, val origin: String = "", val roomId: String = "")
 
@@ -73,6 +70,8 @@ data class CompanionState(
     /** Include host-archived threads (A18.12). Sticky; toggling refetches with `archived=include`. */
     val showArchived: Boolean = false,
     val tab: MainTab = MainTab.THREADS,
+    /** Browsing modules or the chat list must not discard the live conversation. */
+    val chatMinimized: Boolean = false,
     val openSessionId: String? = null,
     val openSessionRef: SessionRef? = null,
     val hasLocalDraft: Boolean = false,
@@ -179,6 +178,10 @@ data class CompanionState(
     val appLocked: Boolean = false,
     val isListeningVoice: Boolean = false,
     val voiceStreamState: VoiceStreamState = VoiceStreamState.IDLE,
+    val voiceMicrophoneMuted: Boolean = false,
+    val voiceMicrophoneReady: Boolean = false,
+    val voicePauseReason: String = "",
+    val voiceSessionTitle: String = "",
     val voiceSpeaker: Boolean = true,
     val speechBackend: app.hermes.companion.model.SpeechBackend = app.hermes.companion.model.SpeechBackend.SYSTEM,
     val readAloudMessageId: String? = null,
@@ -235,6 +238,7 @@ data class CompanionState(
         contextPanel = null,
         sessionControls = null,
         nativeCommands = emptyList(), nativeCommandsOwner = null,
+        chatMinimized = false,
         openSessionId = null,
         openSessionRef = null,
         hasLocalDraft = false,

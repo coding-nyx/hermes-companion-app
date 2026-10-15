@@ -137,7 +137,7 @@ class CompanionViewModel(
         voiceConversationEpoch = epoch
         return VoiceStreamEngine(
             context = runtime, scope = viewModelScope,
-            voiceInput = speechInput(st), outputFactory = { cb -> speechOutput(st, cb) },
+            voiceInput = speechInput(st), outputFactory = { cb -> BriefSpeechOutput(speechOutput(st, cb)) },
             onSendPrompt = { prompt ->
                 if (epoch == chat.conversationEpoch && st.origin == _state.value.origin && st.activeProfileId == _state.value.activeProfileId) {
                     chat.sendPrompt(prompt)
@@ -147,7 +147,10 @@ class CompanionViewModel(
                 }
             }, onInterrupt = { if (epoch == chat.conversationEpoch) chat.interrupt() },
             onStateChange = { next -> _state.update { it.copy(voiceStreamState = next) } },
-            onError = { error -> noteError(error) })
+            onError = { error -> noteError(error) },
+            onMutedChange = { muted -> _state.update { it.copy(voiceMicrophoneMuted = muted, voicePauseReason = if(muted)it.voicePauseReason else "") } },
+            onReadinessChange = { ready -> _state.update { it.copy(voiceMicrophoneReady = ready) } },
+            onInputPaused = { reason -> _state.update { it.copy(voicePauseReason = reason) } }).also { it.useSpeaker(st.voiceSpeaker) }
     }
 
     fun setSpeechBackend(backend: SpeechBackend) {
@@ -187,13 +190,14 @@ class CompanionViewModel(
         }
         chat.onAssistantDelta = { delta -> if (voiceConversationEpoch == chat.conversationEpoch) voiceStream.onAssistantDelta(delta) }
         chat.onTurnCompleted = {
-            if (_state.value.error != null) voiceStream.stopStream() else {
+            if (voiceConversationEpoch == chat.conversationEpoch) {
                 val finalText = _state.value.messages.lastOrNull { it.role == app.hermes.companion.model.MessageRole.ASSISTANT && !it.reasoning }?.text.orEmpty()
                 voiceStream.onAssistantFinal(finalText)
                 voiceStream.onAssistantTurnCompleted()
             }
         }
         chat.onTurnInterrupted = { voiceStream.onAssistantTurnInterrupted() }
+        chat.onTurnFailed = { if (voiceConversationEpoch == chat.conversationEpoch) voiceStream.stopStream() }
         viewModelScope.launch {
             deviceNode.state.collect { node -> _state.update { it.mirror(node) } }
         }
@@ -461,7 +465,9 @@ class CompanionViewModel(
     }
 
     fun selectTab(tab: MainTab) {
-        _state.update { it.copy(tab = tab) }
+        cancelDictation()
+        readAloud.stop()
+        _state.update { it.copy(tab = tab, chatMinimized = true) }
         if (tab == MainTab.CONSOLE) {
             agents.refreshSessions()
             if (_state.value.agentTools.isEmpty()) agents.refreshTools()
@@ -665,14 +671,18 @@ class CompanionViewModel(
             _state.update { it.copy(error = "Voice chat is available in individual threads") }
             return
         }
-        if (st.voiceStreamState == VoiceStreamState.IDLE && (st.origin == null || st.streaming || st.submitting || st.creatingThread)) {
+        if (st.voiceStreamState == VoiceStreamState.IDLE && (st.origin == null || st.activeProfileId == null || st.streaming || st.submitting || st.creatingThread)) {
             _state.update { it.copy(error = "Connect and wait for the current reply before starting voice") }
             return
         }
         _state.update { it.copy(error = null) }
         if (_state.value.voiceStreamState == VoiceStreamState.IDLE) {
             cancelDictation(); readAloud.stop(); voiceStream.shutdown()
-            if (_state.value.openSessionId == null && !_state.value.inRoom) chat.newThread()
+            if (_state.value.openSessionId == null && !_state.value.inRoom) {
+                chat.newThread()
+                _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = false) }
+            }
+            _state.update { it.copy(voiceSessionTitle = it.openSession?.title ?: "Voice conversation") }
             try { voiceStream = createVoiceStream(_state.value) }
             catch (e: Exception) { noteError(e.message ?: "Speech could not start"); return }
         }
@@ -686,6 +696,12 @@ class CompanionViewModel(
         cancelDictation()
     }
 
+    fun toggleVoiceMicrophone() = voiceStream.setMicrophoneMuted(!voiceStream.isMicrophoneMuted)
+
+    fun returnToVoiceConversation() {
+        if (_state.value.openSessionId != null) _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = false) }
+    }
+
     fun toggleVoiceSpeaker() {
         val enabled = !_state.value.voiceSpeaker
         _state.update { it.copy(voiceSpeaker = enabled) }
@@ -693,8 +709,19 @@ class CompanionViewModel(
     }
 
     // ---- chat: ChatSessionManager ----
-    fun openSession(session: SessionRef) { cancelDictation(); readAloud.stop(); voiceStream.stopStream(); if (_state.value.inRoom) rooms.closeRoom(); chat.openSession(session) }
+    fun openSession(session: SessionRef) {
+        if (voiceStream.isActive && _state.value.openSessionId == session.id) { returnToVoiceConversation(); return }
+        cancelDictation(); readAloud.stop(); voiceStream.stopStream()
+        if (_state.value.inRoom) rooms.closeRoom()
+        _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = false) }
+        chat.openSession(session)
+    }
     fun closeChat() {
+        if (voiceStream.isActive) {
+            cancelDictation()
+            _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = true) }
+            return
+        }
         voiceStream.stopStream()
         readAloud.stop()
         cancelDictation()
@@ -704,6 +731,7 @@ class CompanionViewModel(
     // ---- Agent rooms (P21) ----
     fun refreshRooms() = rooms.refreshRooms()
     fun openRoom(room: RoomRef) {
+        _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = false) }
         voiceStream.stopStream()
         readAloud.stop()
         cancelDictation()
@@ -741,7 +769,7 @@ class CompanionViewModel(
     fun unlinkPeer(name: String) = rooms.unlinkPeer(name)
     fun loadOlder() = chat.loadOlder()
     fun respondApproval(decision: String) = if (_state.value.inRoom) rooms.respondApproval(decision) else chat.respondApproval(decision)
-    fun newThread() { cancelDictation(); readAloud.stop(); voiceStream.stopStream(); if (_state.value.inRoom) rooms.closeRoom(); chat.createThread() }
+    fun newThread() { _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = false) }; cancelDictation(); readAloud.stop(); voiceStream.stopStream(); if (_state.value.inRoom) rooms.closeRoom(); chat.createThread() }
     fun requestDelete(session: SessionRef) = chat.requestDelete(session)
     fun retryMessage(id: String) { if (_state.value.inRoom) rooms.retryMessage(id) else chat.retryMessage(id) }
     fun renameSession(title: String) = chat.updateSession(title = title)

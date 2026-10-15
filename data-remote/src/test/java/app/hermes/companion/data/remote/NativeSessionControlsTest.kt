@@ -16,6 +16,8 @@ class NativeSessionControlsTest {
             val settings = api.sessionSettings(origin, session)
             assertEquals("fixture-model", settings.model); assertEquals("fixture-provider", settings.provider)
             assertEquals("low", settings.reasoning); assertEquals("normal", settings.fast)
+            assertEquals(listOf("fixture-provider", "other"), settings.models.map { it.provider })
+            assertEquals(false, settings.models.first().canDisableReasoning)
             val result = api.setSessionSetting(origin, session, "model", "new-model --provider other --session")
             assertTrue(result.confirmationRequired); assertFalse(result.deferred)
             val params = calls.last()["params"]!!.jsonObject
@@ -52,7 +54,7 @@ class NativeSessionControlsTest {
                     val id = request["id"]!!.jsonPrimitive.content; val method = request["method"]!!.jsonPrimitive.content
                     val value = when (method) {
                         "session.resume" -> """{"session_id":"live","stored_session_id":"stored"}"""
-                        "model.options" -> """{"model":"fixture-model","provider":"fixture-provider"}"""
+                        "model.options" -> """{"model":"fixture-model","provider":"fixture-provider","providers":[{"slug":"fixture-provider","models":["fixture-model"],"capabilities":{"fixture-model":{"reasoning":true,"can_disable_reasoning":false}}},{"slug":"other","models":["fixture-model"]}]}"""
                         "config.get" -> if (request["params"]!!.jsonObject["key"]!!.jsonPrimitive.content == "reasoning") """{"value":"low"}""" else """{"value":"normal"}"""
                         "config.set" -> if (fail) { ws.close(1001, "lost response"); return } else """{"key":"model","confirm_required":true,"confirm_message":"Confirm cost","scope":"session"}"""
                         "commands.catalog" -> """{"pairs":[["/status","Status"],null,[],["bad name","bad"],["status","duplicate"]]}"""

@@ -29,19 +29,24 @@ class VoiceStreamEngine(
     private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val nowMs: () -> Long = { SystemClock.elapsedRealtime() },
     private val transcriptionTimeoutMs: Long = 65_000,
+    private val onMutedChange: (Boolean) -> Unit = {},
+    private val onReadinessChange: (Boolean) -> Unit = {},
+    private val onInputPaused: (String) -> Unit = {},
+    private val readinessTimeoutMs: Long = 10_000,
 ) {
     private val generation = AtomicLong()
     private var activeGeneration = 0L
     private var streamState = VoiceStreamState.IDLE
     private var inactivityJob: Job? = null
-    private var retryJob: Job? = null
-    private var retryCount = 0
     private var lastSpeechAt = 0L
     private var waitingForReply = false
     private var speaker = true
     private var tts: SpeechOutput? = null
     private var closed = false
-    // A conversation contains many recognition attempts, including retries. Fence each one.
+    private var microphoneMuted = false
+    private var microphoneReady = false
+    val isMicrophoneMuted: Boolean get() = microphoneMuted
+    // A conversation contains many recognition attempts. Fence each one.
     private var inputGeneration = 0L
 
     val state: VoiceStreamState get() = streamState
@@ -70,7 +75,6 @@ class VoiceStreamEngine(
                 fail("The selected voice audio route is unavailable")
                 return@launch
             }
-            retryCount = 0
             lastSpeechAt = nowMs()
             waitingForReply = false
             updateState(VoiceStreamState.LISTENING)
@@ -99,6 +103,19 @@ class VoiceStreamEngine(
         }
     }
 
+    /** Muting fences recognition immediately. Reply playback may finish, but cannot reopen capture. */
+    fun setMicrophoneMuted(muted: Boolean) = onMain {
+        if (!isActive || microphoneMuted == muted) return@onMain
+        microphoneMuted = muted
+        onMutedChange(muted)
+        if (muted) {
+            stopInput()
+            inactivityJob?.cancel(); inactivityJob = null
+            if (streamState == VoiceStreamState.LISTENING || streamState == VoiceStreamState.TRANSCRIBING)
+                updateState(VoiceStreamState.MUTED)
+        } else if (streamState == VoiceStreamState.MUTED) startListeningLoop(newTurn = true)
+    }
+
     fun useSpeaker(enabled: Boolean) {
         speaker = enabled
         if (isActive) onMain {
@@ -107,7 +124,6 @@ class VoiceStreamEngine(
     }
 
     fun bargeIn() = onMain {
-        retryJob?.cancel()
         tts?.stop()
         waitingForReply = false
         onInterrupt()
@@ -137,29 +153,37 @@ class VoiceStreamEngine(
 
     private fun startListeningLoop(newTurn: Boolean = false) {
         if (!isActive) return
+        if (microphoneMuted) { updateState(VoiceStreamState.MUTED); return }
+        inactivityJob?.cancel(); inactivityJob = null
         if (newTurn) lastSpeechAt = nowMs()
-        retryJob?.cancel()
         tts?.stop()
         stopInput()
         updateState(VoiceStreamState.LISTENING)
-        armInactivityTimer()
         val epoch = activeGeneration
         val inputEpoch = inputGeneration
+        fun ready() {
+            if (inputEpoch != inputGeneration || streamState != VoiceStreamState.LISTENING) return
+            setReady(true); lastSpeechAt = nowMs(); armInactivityTimer()
+        }
+        if (!voiceInput.reportsReadiness) ready()
+        else inactivityJob = scope.launch(mainDispatcher) {
+            delay(readinessTimeoutMs)
+            if (current(epoch) && inputEpoch == inputGeneration && !microphoneReady && streamState == VoiceStreamState.LISTENING)
+                fail("Microphone did not become ready. Try starting voice again.")
+        }
         try {
             voiceInput.startListening(
                 onPartial = { onMain(epoch) {
                     if (inputEpoch == inputGeneration && streamState == VoiceStreamState.LISTENING) {
-                        lastSpeechAt = nowMs()
-                        armInactivityTimer()
+                        ready()
                     }
                 } },
                 onResult = { text -> onMain(epoch) {
                     if (inputEpoch != inputGeneration) return@onMain
                     if (streamState != VoiceStreamState.LISTENING && streamState != VoiceStreamState.TRANSCRIBING) return@onMain
                     stopInput()
-                    retryCount = 0
                     val clean = text.trim()
-                    if (clean.isBlank()) startListeningLoop()
+                    if (clean.isBlank()) pauseForSilence()
                     else {
                         inactivityJob?.cancel()
                         waitingForReply = true
@@ -171,15 +195,16 @@ class VoiceStreamEngine(
                 onError = { error -> if (voiceInput.terminalErrors) onMain(epoch) {
                     if (inputEpoch == inputGeneration) fail(error)
                 } },
-                onStateChange = {},
+                onStateChange = { isReady -> if (isReady) onMain(epoch) { ready() } },
                 onActivity = { onMain(epoch) {
                     if (inputEpoch == inputGeneration && streamState == VoiceStreamState.LISTENING) {
-                        lastSpeechAt = nowMs(); armInactivityTimer()
+                        ready()
                     }
                 } },
                 onProcessing = { onMain(epoch) {
                     if (inputEpoch == inputGeneration && streamState == VoiceStreamState.LISTENING) {
                         inactivityJob?.cancel()
+                        setReady(false)
                         updateState(VoiceStreamState.TRANSCRIBING)
                         inactivityJob = scope.launch(mainDispatcher) {
                             delay(transcriptionTimeoutMs)
@@ -196,28 +221,29 @@ class VoiceStreamEngine(
 
     private fun recognitionError(code: Int) {
         if (streamState != VoiceStreamState.LISTENING && streamState != VoiceStreamState.TRANSCRIBING) return
-        if (code == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS || code == -1) {
-            fail(if (code == -1) "Speech recognition is unavailable" else "Microphone permission denied")
-            return
+        if (code == SpeechRecognizer.ERROR_NO_MATCH || code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+            pauseForSilence(); return
         }
-        val silence = code == SpeechRecognizer.ERROR_NO_MATCH || code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
-        if (!silence && ++retryCount >= 3) {
-            fail(when (code) {
-                SpeechRecognizer.ERROR_AUDIO -> "Microphone recording failed"
-                SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Speech recognition network failed"
-                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Speech recognition is busy"
-                else -> "Speech recognition failed ($code)"
-            })
-            return
-        }
+        fail(when (code) {
+            -1 -> "Speech recognition is unavailable"
+            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission denied"
+            SpeechRecognizer.ERROR_AUDIO -> "Microphone recording failed"
+            SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Speech recognition network failed. Start voice again when connected."
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Speech recognition is busy. Start voice again when ready."
+            else -> "Speech recognition failed ($code)"
+        })
+    }
+
+    private fun pauseForSilence() {
         stopInput()
-        updateState(VoiceStreamState.LISTENING)
-        retryJob?.cancel()
-        val epoch = activeGeneration
-        retryJob = scope.launch(mainDispatcher) {
-            delay(if (silence) 150L else 500L)
-            if (current(epoch) && streamState == VoiceStreamState.LISTENING) startListeningLoop()
-        }
+        inactivityJob?.cancel(); inactivityJob = null
+        microphoneMuted = true; onMutedChange(true)
+        updateState(VoiceStreamState.MUTED)
+        onInputPaused("No speech detected. Tap Resume mic when you are ready.")
+    }
+
+    private fun setReady(ready: Boolean) {
+        if (microphoneReady != ready) { microphoneReady = ready; onReadinessChange(ready) }
     }
 
     private fun armInactivityTimer() {
@@ -225,7 +251,7 @@ class VoiceStreamEngine(
         val epoch = activeGeneration
         inactivityJob = scope.launch(mainDispatcher) {
             delay((inactivityTimeoutMs - (nowMs() - lastSpeechAt)).coerceAtLeast(0))
-            if (current(epoch) && streamState == VoiceStreamState.LISTENING) stopStream()
+            if (current(epoch) && streamState == VoiceStreamState.LISTENING) pauseForSilence()
         }
     }
 
@@ -236,8 +262,8 @@ class VoiceStreamEngine(
 
     private fun releaseResources() {
         inactivityJob?.cancel(); inactivityJob = null
-        retryJob?.cancel(); retryJob = null
         waitingForReply = false
+        if (microphoneMuted) { microphoneMuted = false; onMutedChange(false) }
         stopInput()
         tts?.shutdown(); tts = null
         audioSession.release()
@@ -245,6 +271,7 @@ class VoiceStreamEngine(
 
     private fun stopInput() {
         inputGeneration++
+        setReady(false)
         voiceInput.stopListening()
     }
 

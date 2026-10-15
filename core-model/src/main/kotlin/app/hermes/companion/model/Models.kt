@@ -459,6 +459,7 @@ data class ModelOption(
     val name: String,
     val reasoning: Boolean = false,
     val fast: Boolean = false,
+    val canDisableReasoning: Boolean? = null,
 )
 
 @Serializable

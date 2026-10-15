@@ -1,0 +1,63 @@
+{
+  "date": "2026-10-15",
+  "feature": "Brief spoken previews, silence pause and microphone readiness",
+  "apk_sha256": "ddb331f864a665cf95745dd71f543910c0b764b117f206a9e24d2bc2fb5c40bf",
+  "device_abi": "arm64-v8a",
+  "default_build_abis": "unchanged; device ABI is opt-in Gradle property",
+  "version_name": "0.1.0",
+  "version_code": 1,
+  "automated_unique_tests": 598,
+  "automated_failures": 0,
+  "release_lint": {
+    "Error": 0,
+    "Warning": 60,
+    "Information": 2
+  },
+  "minified_release_build": "passed",
+  "changes": [
+    "Conversational playback previews at most two sentences or 45 words, with a 600-character safety limit; full text and explicit read-aloud are preserved",
+    "No automatic recognizer retry after silence, no-match or errors; silence pauses with an explicit Resume mic action",
+    "A completed recognition attempt is destroyed without a redundant cancel",
+    "Preparing microphone is distinct from actual listening readiness; startup has a bounded timeout",
+    "Stale recognition callbacks cannot submit, unmute or restart capture; playback completion still waits for the original host turn to finish"
+  ],
+  "device_gate": "Passed: 2 scripted S22 engine tests; 0.035 seconds",
+  "spoken_recognition_and_conversation": "Deferred at operator request",
+  "acoustic_beep_verification": "Pending; provider-owned normal start/end tones may remain. No system volume suppression or provider switching.",
+  "host_speech_and_native_realtime": "Remain disabled by existing rollout gates",
+  "plugin_protocol": "Unchanged; no mobile tool or broker behavior changes",
+  "raj": "Excluded at operator request",
+  "rollback_apk": "/private/tmp/companion-voice-fixes-20261015/rollback.apk",
+  "rollback_sha256": "ec491cf4938410f2e793c1ad78b5829cabba2bee01bceb1476afd0bbb7581567",
+  "limitations": [
+    "This is still foreground half-duplex voice; it is not native realtime audio.",
+    "Short spoken previews do not reduce the host model generation time or change the full written answer.",
+    "After silence, recognition stays paused until Resume mic; it does not repeatedly reopen capture.",
+    "Real microphone recognition, acoustic tones and spoken end-to-end conversation are not claimed as verified."
+  ],
+  "device_tests_passed": 2,
+  "device_tests_failed": 0,
+  "installed_hash_matches": true,
+  "installed_sha256": "ddb331f864a665cf95745dd71f543910c0b764b117f206a9e24d2bc2fb5c40bf",
+  "test_package_removed": true,
+  "normal_app_relaunched": true,
+  "saved_connection_observed_after_checks": {
+    "origin": "http://100.85.151.99:9120",
+    "profile_id": "coder"
+  },
+  "device_checks": "Production engine and spoken-preview adapter with scripted input/output on Android; no microphone, speaker playback, host prompt or UI gestures",
+  "companion_only_export_validation": {
+    "automated_unique_tests": 572,
+    "automated_failures": 0,
+    "debug_apk": "passed",
+    "instrumentation_apk": "passed",
+    "release_lint": {
+      "Warning": 52,
+      "Information": 2
+    },
+    "minified_release": "passed",
+    "agp": "8.7.3",
+    "gradle": "8.9",
+    "note": "Validated the staged source without the uncommitted Desk modules or toolchain upgrades."
+  }
+}

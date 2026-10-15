@@ -78,6 +78,8 @@ class ChatSessionManager(
     var onAssistantDelta: ((String) -> Unit)? = null
     var onTurnCompleted: (() -> Unit)? = null
     var onTurnInterrupted: (() -> Unit)? = null
+    /** Only a failure of this conversation may end its speech owner. Module errors are independent. */
+    var onTurnFailed: (() -> Unit)? = null
 
     private fun turnModel(): String? = _state.value.modelOverride.trim().takeIf { it.isNotBlank() }
 
@@ -111,7 +113,7 @@ class ChatSessionManager(
         val generation = ++navigation
         historyJob?.cancel()
         _state.update {
-            it.copy(openSessionId = owned.id, openSessionRef = owned, messages = emptyList(),
+            it.copy(tab = MainTab.THREADS, chatMinimized = false, openSessionId = owned.id, openSessionRef = owned, messages = emptyList(),
                 transcriptLoading = true, historySource = "", draft = recovered?.text.orEmpty(), approval = null, approvalSubmittingRequestId = null,
                 submitting = false, creatingThread = false, pendingAttachments = recovered?.attachments.orEmpty(),
                 rewindTargetId = null, streaming = streamingFor(it, owned.id),
@@ -296,6 +298,7 @@ class ChatSessionManager(
         val draft = DraftThread.placeholder(profile)
         _state.update {
             it.copy(
+                tab = MainTab.THREADS, chatMinimized = false,
                 openSessionId = draft.id,
                 openSessionRef = draft,
                 transcriptLoading = false,
@@ -475,6 +478,7 @@ class ChatSessionManager(
                     else st.copy(submitting = false, error = t.toMonoError(),
                         messages = st.messages.filterNot { it.id == user.id })
                 }
+                if (!clearDraft && _state.value.owns(origin, profile) && generation == navigation) onTurnFailed?.invoke()
             }
         }
     }
@@ -541,6 +545,7 @@ class ChatSessionManager(
                         client(origin).streamTurn(origin, session.id, profile, text, spec, turnModel()).coalesceDeltas().collect { event ->
                             if (_state.value.shows(origin, profile, session.id)) {
                                 _state.update { applyEvent(it, event, assistantId) }
+                                if (event is ChatEvent.Final && event.status in setOf("error", "failed")) onTurnFailed?.invoke()
                                 if (event is ChatEvent.Accepted) {
                                     _state.update { it.copy(messages = it.messages.map { m ->
                                         if (m.id == user.id) m.copy(delivery = MessageDelivery.SENT) else m
@@ -564,6 +569,7 @@ class ChatSessionManager(
                 onTurnInterrupted?.invoke()
                 throw c
             } catch (t: Throwable) {
+                if (_state.value.shows(origin, profile, session.id)) onTurnFailed?.invoke()
                 onTurnCompleted?.invoke()
                 runCatching { client(origin).pageMessages(origin, session.id, profile) }.onSuccess { page ->
                     runCatching { cache.replaceMessages(origin, profile, session.id, page.messages) }
@@ -767,6 +773,7 @@ class ChatSessionManager(
                                 }
                                 if (_state.value.shows(origin, profile, item.sessionId)) {
                                     _state.update { if (!it.shows(origin, profile, item.sessionId)) it else applyEvent(it, event, assistantId) }
+                                    if (event is ChatEvent.Final && event.status in setOf("error", "failed")) onTurnFailed?.invoke()
                                     if (event is ChatEvent.AssistantDelta) {
                                         spokeDeltas = true
                                         onAssistantDelta?.invoke(event.text)
@@ -823,7 +830,7 @@ class ChatSessionManager(
                             else -> t.toMonoError()
                         })
                     }
-                    if (_state.value.shows(origin, profile, item.sessionId)) onTurnCompleted?.invoke()
+                    if (_state.value.shows(origin, profile, item.sessionId)) { onTurnFailed?.invoke(); onTurnCompleted?.invoke() }
                     if (delivery == MessageDelivery.QUEUED && !OutboxPolicy.exhausted(item.attempts + 1)) {
                         retryJob?.cancel()
                         retryJob = scope.launch { delay(OutboxPolicy.backoffMs(item.attempts + 1)); flushOutbox() }

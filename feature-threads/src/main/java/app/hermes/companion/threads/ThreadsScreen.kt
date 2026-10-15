@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,7 +20,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -29,6 +34,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -97,115 +105,127 @@ fun ThreadsScreen(
         if (telegramOnly) SessionLists.bySource(sessions, SessionLists.SOURCE_TELEGRAM) else sessions,
         query,
     )
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
             .background(CompanionColor.Void)
             .testTag("threads.list"),
     ) {
-        Toolbar(
-            total = sessions.size,
-            shown = filtered.size,
-            filtering = query.isNotBlank() || telegramOnly,
-            loading = loading,
-            onNew = onNew,
-            onNewRoom = onNewRoom,
-            roomsAvailable = roomsAvailable,
-            onRefresh = onRefresh,
-        )
-        if (hasLocalDraft) {
-            Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).testTag("threads.resumeDraft")
-                .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onResumeLocalDraft)
-                .padding(horizontal = CompanionSpace.Lg, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Continue unsent draft", style = CompanionType.Body, color = CompanionColor.Text)
-                    Text("Saved for this host and profile", style = androidx.compose.material3.MaterialTheme.typography.bodySmall, color = CompanionColor.TextDim)
+        Column(Modifier.fillMaxSize()) {
+            Toolbar(
+                total = sessions.size,
+                shown = filtered.size,
+                filtering = query.isNotBlank() || telegramOnly,
+                loading = loading,
+                onNewRoom = onNewRoom,
+                roomsAvailable = roomsAvailable,
+                onRefresh = onRefresh,
+            )
+            if (hasLocalDraft) {
+                Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).testTag("threads.resumeDraft")
+                    .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onResumeLocalDraft)
+                    .padding(horizontal = CompanionSpace.Lg, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Continue unsent draft", style = CompanionType.Body, color = CompanionColor.Text)
+                        Text("Saved for this host and profile", style = androidx.compose.material3.MaterialTheme.typography.bodySmall, color = CompanionColor.TextDim)
+                    }
+                    Text("›", color = CompanionColor.Signal)
                 }
-                Text("›", color = CompanionColor.Signal)
             }
-        }
-        Hairline()
-        SortRow(
-            sort = sort,
-            onSort = onSort,
-            showArchived = showArchived,
-            onToggleArchived = onToggleArchived,
-            telegramOnly = telegramOnly,
-            onToggleTelegram = { telegramOnly = it },
-        )
-        HairlineField(
-            value = query,
-            onValueChange = { query = it },
-            placeholder = "filter threads",
-            keyboardType = KeyboardType.Text,
-            imeAction = ImeAction.Search,
-            keepKeyboardOnDone = false,
-            modifier = Modifier
-                .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm)
-                .testTag("threads.filter"),
-        )
-        Hairline()
-        if (rooms.isNotEmpty() || !roomsError.isNullOrBlank() || (roomsLoading && sessions.isNotEmpty())) {
-            RoomsSection(rooms, roomsLoading, roomsError, unreadRooms, nowMs, onOpenRoom, onDeleteRoom)
-        }
-        pendingDelete?.let { target ->
-            DeleteStrip(target, onConfirmDelete, onCancelDelete)
             Hairline()
-        }
-        if (loading) {
-            FetchRow(label = "LOADING THREADS", modifier = Modifier.testTag("threads.loading"))
-        }
-        if (sessions.isEmpty() && !loading) {
-            val failed = !error.isNullOrBlank()
-            val profileHint = activeProfileId?.takeIf { it.isNotBlank() }?.let { "profile=$it" } ?: "idle"
-            FetchPane(
-                label = if (failed) "SESSIONS FAILED" else "NO SESSIONS",
-                hint = if (failed) error else "// $profileHint",
-                retryLabel = if (failed) "RETRY" else null,
-                onRetry = if (failed) onRetry else null,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag(if (failed) "threads.failed" else "threads.empty"),
+            SortRow(
+                sort = sort,
+                onSort = onSort,
+                showArchived = showArchived,
+                onToggleArchived = onToggleArchived,
+                telegramOnly = telegramOnly,
+                onToggleTelegram = { telegramOnly = it },
             )
-            return
-        }
-        if (sessions.isEmpty() && loading) {
-            FetchSkeleton()
-            return
-        }
-        if (filtered.isEmpty()) {
-            FetchPane(
-                label = "NO MATCH",
-                hint = "// " + listOfNotNull(
-                    if (telegramOnly) "telegram" else null,
-                    query.trim().ifBlank { null },
-                ).joinToString(" · "),
-                scanning = false,
+            HairlineField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = "filter threads",
+                keyboardType = KeyboardType.Text,
+                imeAction = ImeAction.Search,
+                keepKeyboardOnDone = false,
                 modifier = Modifier
-                    .weight(1f)
-                    .testTag("threads.nomatch"),
+                    .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm)
+                    .testTag("threads.filter"),
             )
-            return
-        }
-        val rail = railItems(filtered, sort, nowMs)
-        LazyColumn(modifier = Modifier.testTag("threads.rail")) {
-            rail.forEach { item ->
-                when (item) {
-                    is RailItem.Group -> item(key = "group:${item.label}") {
-                        GroupHeader(item.label)
-                    }
-                    is RailItem.Thread -> item(key = item.session.id) {
-                        ThreadRow(
-                            session = item.session,
-                            stamp = item.stamp,
-                            onOpen = onOpen,
-                            onDeleteRequest = onDeleteRequest,
-                        )
-                        Hairline()
+            Hairline()
+            if (rooms.isNotEmpty() || !roomsError.isNullOrBlank() || (roomsLoading && sessions.isNotEmpty())) {
+                RoomsSection(rooms, roomsLoading, roomsError, unreadRooms, nowMs, onOpenRoom, onDeleteRoom)
+            }
+            pendingDelete?.let { target ->
+                DeleteStrip(target, onConfirmDelete, onCancelDelete)
+                Hairline()
+            }
+            if (loading) {
+                FetchRow(label = "LOADING THREADS", modifier = Modifier.testTag("threads.loading"))
+            }
+            if (sessions.isEmpty() && !loading) {
+                val failed = !error.isNullOrBlank()
+                val profileHint = activeProfileId?.takeIf { it.isNotBlank() }?.let { "profile=$it" } ?: "idle"
+                FetchPane(
+                    label = if (failed) "SESSIONS FAILED" else "NO SESSIONS",
+                    hint = if (failed) error else "// $profileHint",
+                    retryLabel = if (failed) "RETRY" else null,
+                    onRetry = if (failed) onRetry else null,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag(if (failed) "threads.failed" else "threads.empty"),
+                )
+                return@Column
+            }
+            if (sessions.isEmpty() && loading) {
+                FetchSkeleton()
+                return@Column
+            }
+            if (filtered.isEmpty()) {
+                FetchPane(
+                    label = "NO MATCH",
+                    hint = "// " + listOfNotNull(
+                        if (telegramOnly) "telegram" else null,
+                        query.trim().ifBlank { null },
+                    ).joinToString(" · "),
+                    scanning = false,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("threads.nomatch"),
+                )
+                return@Column
+            }
+            val rail = railItems(filtered, sort, nowMs)
+            LazyColumn(modifier = Modifier.testTag("threads.rail"), contentPadding = PaddingValues(bottom = 96.dp)) {
+                rail.forEach { item ->
+                    when (item) {
+                        is RailItem.Group -> item(key = "group:${item.label}") {
+                            GroupHeader(item.label)
+                        }
+                        is RailItem.Thread -> item(key = item.session.id) {
+                            ThreadRow(
+                                session = item.session,
+                                stamp = item.stamp,
+                                onOpen = onOpen,
+                                onDeleteRequest = onDeleteRequest,
+                            )
+                            Hairline()
+                        }
                     }
                 }
             }
+        }
+        ExtendedFloatingActionButton(
+            onClick = onNew,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).testTag("threads.new")
+                .semantics { contentDescription = "New chat" },
+            containerColor = CompanionColor.Signal,
+            contentColor = CompanionColor.Void,
+        ) {
+            Text("+", style = androidx.compose.material3.MaterialTheme.typography.headlineSmall)
+            Spacer(Modifier.width(12.dp))
+            Text("New chat", style = androidx.compose.material3.MaterialTheme.typography.labelLarge)
         }
     }
 }
@@ -244,74 +264,57 @@ private fun Toolbar(
     shown: Int,
     filtering: Boolean,
     loading: Boolean,
-    onNew: () -> Unit,
     onNewRoom: () -> Unit,
     roomsAvailable: Boolean,
     onRefresh: (() -> Unit)?,
 ) {
-    val pillShape = RoundedCornerShape(16.dp)
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = CompanionSpace.Lg),
     ) {
-        Box(
-            modifier = Modifier
-                .testTag("threads.new")
-                .clip(pillShape)
-                .background(CompanionColor.SignalDim)
-                .border(CompanionSpace.Hairline, CompanionColor.Signal, pillShape)
-                .clickable(onClick = onNew)
-                .padding(horizontal = 14.dp, vertical = 6.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "NEW",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontWeight = FontWeight.Bold),
-            )
-        }
-        if (roomsAvailable) Box(
-            modifier = Modifier
-                .testTag("threads.newroom")
-                .clip(pillShape)
-                .background(CompanionColor.VoidElevated)
-                .border(CompanionSpace.Hairline, CompanionColor.LineStrong, pillShape)
-                .clickable(onClick = onNewRoom)
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = "NEW ROOM",
-                style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal, fontWeight = FontWeight.SemiBold),
-            )
-        }
-        Spacer(Modifier.weight(1f))
+        Text("Conversations", style = androidx.compose.material3.MaterialTheme.typography.labelMedium,
+            color = CompanionColor.TextDim)
+        Spacer(Modifier.width(8.dp))
         Text(
             text = if (filtering) "$shown/$total" else total.toString(),
             style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim),
             modifier = Modifier.testTag("threads.count"),
         )
+        Spacer(Modifier.weight(1f))
         if (onRefresh != null) {
             Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(CompanionColor.VoidElevated)
-                    .clickable(enabled = !loading, onClick = onRefresh)
+                modifier = Modifier.size(48.dp).clip(CircleShape)
+                    .clickable(enabled = !loading, role = Role.Button, onClick = onRefresh)
+                    .semantics { contentDescription = "Refresh conversations" }
                     .testTag("threads.refresh"),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = "↻",
-                    style = CompanionType.Mono.copy(
-                        color = if (loading) CompanionColor.TextMute else CompanionColor.Signal,
-                    ),
-                )
+                Text("↻", style = CompanionType.Mono.copy(
+                    color = if (loading) CompanionColor.TextMute else CompanionColor.Signal))
             }
-        } else {
-            Spacer(Modifier.width(CompanionSpace.Lg))
+        }
+        if (roomsAvailable) {
+            var menuOpen by remember { mutableStateOf(false) }
+            Box {
+                Box(
+                    modifier = Modifier.size(48.dp).clip(CircleShape)
+                        .clickable(role = Role.Button) { menuOpen = true }
+                        .semantics { contentDescription = "Conversation options" }
+                        .testTag("threads.options"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("⋮", style = androidx.compose.material3.MaterialTheme.typography.headlineSmall,
+                        color = CompanionColor.TextDim)
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false },
+                    containerColor = CompanionColor.VoidElevated) {
+                    DropdownMenuItem(
+                        text = { Text("New agent room", color = CompanionColor.Text) },
+                        modifier = Modifier.testTag("threads.newroom"),
+                        onClick = { menuOpen = false; onNewRoom() },
+                    )
+                }
+            }
         }
     }
 }

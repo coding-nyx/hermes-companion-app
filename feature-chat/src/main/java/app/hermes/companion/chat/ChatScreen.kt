@@ -35,7 +35,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -116,6 +115,8 @@ fun ChatScreen(
     onCancelRewind: () -> Unit = {},
     isListeningVoice: Boolean = false,
     onVoiceClick: () -> Unit = {},
+    onVoiceLongClick: (() -> Unit)? = null,
+    compactComposer: Boolean = false,
     loading: Boolean = false,
     historySource: String = "",
     onRetryHistory: () -> Unit = {},
@@ -450,73 +451,6 @@ fun ChatScreen(
                 }
             }
         }
-        val activeModel = modelOverride.ifBlank { modelCatalog?.currentModel.orEmpty() }
-        if (activeModel.isNotBlank() && !roomMode) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                val modelShape = RoundedCornerShape(8.dp)
-                Row(
-                    modifier = Modifier
-                        .testTag("chat.model")
-                        .clip(modelShape)
-                        .border(CompanionSpace.Hairline, CompanionColor.LineStrong, modelShape)
-                        .background(CompanionColor.VoidElevated)
-                        .clickable { onOpenModelPicker() }
-                        .padding(horizontal = 10.dp, vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = "model · $activeModel",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = "▾",
-                        style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                    )
-                }
-
-                // Quick alternative model chips (up to 2 options)
-                val quickOptions = modelCatalog?.models
-                    ?.filter { it.id != activeModel }
-                    ?.take(2)
-                    .orEmpty()
-
-                if (quickOptions.isNotEmpty()) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        for (opt in quickOptions) {
-                            val optShape = RoundedCornerShape(6.dp)
-                            Box(
-                                modifier = Modifier
-                                    .clip(optShape)
-                                    .border(CompanionSpace.Hairline, CompanionColor.Line, optShape)
-                                    .background(CompanionColor.VoidElevated)
-                                    .clickable { onSwitchModel(opt.id, opt.provider) }
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                                    .testTag("chat.model.quick.${opt.id}"),
-                            ) {
-                                Text(
-                                    text = opt.id.substringAfterLast("/").take(14),
-                                    style = CompanionType.MonoSmall.copy(color = CompanionColor.TextDim, fontSize = 10.sp),
-                                    maxLines = 1,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         val slashCommands = remember(onArm, onDisarm, onOpenModelPicker, onVoiceClick, onDraftChange, onSend, nativeCommands) {
             listOf(
                 SlashCmd("/arm", "arm hands") { onArm(); onDraftChange("") },
@@ -582,128 +516,66 @@ fun ChatScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md),
+                .padding(horizontal = CompanionSpace.Lg, vertical = if (compactComposer) 4.dp else CompanionSpace.Md),
             verticalAlignment = Alignment.Bottom,
         ) {
-            val pillShape = RoundedCornerShape(20.dp)
             if (!roomMode) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(CompanionColor.VoidElevated)
-                        .border(CompanionSpace.Hairline, CompanionColor.LineStrong, CircleShape)
-                        .clickable(onClick = onToggleAttach)
-                        .testTag("chat.attach"),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "+",
-                        style = CompanionType.Mono.copy(
-                            color = CompanionColor.Signal,
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                        ),
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ComposerButton("Add attachment", "chat.attach", onToggleAttach) { tint ->
+                        Text("+", style = CompanionType.Mono.copy(color = tint, fontSize = 22.sp))
+                    }
+                    val commandsActive = slashOpen || draft.startsWith("/")
+                    ComposerButton(
+                        if (slashOpen) "Hide commands" else "Show commands",
+                        "chat.slash", { slashOpen = !slashOpen },
+                        foreground = if (commandsActive) CompanionColor.Warn else CompanionColor.Signal,
+                        background = if (commandsActive) CompanionColor.Warn.copy(alpha = 0.2f) else CompanionColor.VoidElevated,
+                        border = if (commandsActive) CompanionColor.Warn else CompanionColor.LineStrong,
+                    ) { tint -> Text("/", style = CompanionType.Mono.copy(color = tint, fontSize = 20.sp)) }
                 }
-                Spacer(Modifier.width(6.dp))
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (slashOpen || draft.startsWith("/")) CompanionColor.Warn.copy(alpha = 0.2f)
-                            else CompanionColor.VoidElevated,
-                        )
-                        .border(
-                            CompanionSpace.Hairline,
-                            if (slashOpen || draft.startsWith("/")) CompanionColor.Warn else CompanionColor.LineStrong,
-                            CircleShape,
-                        )
-                        .clickable { slashOpen = !slashOpen }
-                        .testTag("chat.slash"),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "/",
-                        style = CompanionType.Mono.copy(
-                            color = if (slashOpen || draft.startsWith("/")) CompanionColor.Warn else CompanionColor.Signal,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp,
-                        ),
-                    )
-                }
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(8.dp))
             }
             MarkdownComposer(
                 value = draft,
                 onValueChange = onDraftChange,
                 onSend = { if (!submitting && !creatingThread) onSend() },
                 modifier = Modifier.weight(1f),
+                onOpenModelSettings = if (!roomMode) onOpenModelPicker else null,
+                modelSettingsEnabled = !creatingThread && app.hermes.companion.domain.DraftThread.isPersisted(threadId),
             )
-            if (!roomMode) {
-                Spacer(Modifier.width(6.dp))
-                Box(
-                    modifier = Modifier
-                        .height(40.dp)
-                        .clip(pillShape)
-                        .background(
-                            if (isListeningVoice) CompanionColor.Warn.copy(alpha = 0.2f)
-                            else CompanionColor.VoidElevated,
-                        )
-                        .border(
-                            CompanionSpace.Hairline,
-                            if (isListeningVoice) CompanionColor.Warn else CompanionColor.LineStrong,
-                            pillShape,
-                        )
-                        .clickable(onClick = onVoiceClick)
-                        .padding(horizontal = 10.dp)
-                        .testTag("chat.voice"),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = if (isListeningVoice) "..." else "MIC",
-                        style = CompanionType.MonoSmall.copy(
-                            color = if (isListeningVoice) CompanionColor.Warn else CompanionColor.Signal,
-                            fontWeight = FontWeight.SemiBold,
-                        ),
-                        maxLines = 1,
-                        softWrap = false,
-                    )
+            Spacer(Modifier.width(8.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                if (!roomMode) {
+                    ComposerButton(
+                        if (isListeningVoice) "Stop dictation" else "Dictate message",
+                        "chat.voice", onVoiceClick,
+                        onLongClick = onVoiceLongClick,
+                        foreground = if (isListeningVoice) CompanionColor.Warn else CompanionColor.Signal,
+                        background = if (isListeningVoice) CompanionColor.Warn.copy(alpha = 0.2f) else CompanionColor.VoidElevated,
+                        border = if (isListeningVoice) CompanionColor.Warn else CompanionColor.LineStrong,
+                    ) { tint -> ComposerActionIcon(if (isListeningVoice) ComposerIcon.STOP else ComposerIcon.MICROPHONE, tint) }
                 }
-            }
-            Spacer(Modifier.width(6.dp))
-            val interrupting = streaming && !roomMode && draft.isBlank()
-            val action = when {
-                creatingThread -> "CREATING" to ({})
-                submitting -> "SENDING" to ({})
-                interrupting -> "INTERRUPT" to onInterrupt
-                streaming && !roomMode -> "STEER" to onSend
-                else -> "SEND" to onSend
-            }
-            val sendBg = if (interrupting) CompanionColor.Warn.copy(alpha = 0.2f) else CompanionColor.SignalDim
-            val sendBorder = if (interrupting) CompanionColor.Warn else CompanionColor.Signal
-            val sendFg = if (interrupting) CompanionColor.Warn else CompanionColor.Signal
-            Box(
-                modifier = Modifier
-                    .height(40.dp)
-                    .clip(pillShape)
-                    .background(sendBg)
-                    .border(CompanionSpace.Hairline, sendBorder, pillShape)
-                    .clickable(enabled = !submitting && !creatingThread, onClick = action.second)
-                    .padding(horizontal = 14.dp)
-                    .testTag("chat.send"),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = action.first,
-                    style = CompanionType.MonoSmall.copy(
-                        color = sendFg,
-                        fontWeight = FontWeight.Bold,
-                    ),
-                    maxLines = 1,
-                    softWrap = false,
-                )
+                val interrupting = streaming && !roomMode && draft.isBlank()
+                val busy = submitting || creatingThread
+                val label = when {
+                    creatingThread -> "Creating thread"
+                    submitting -> "Sending message"
+                    interrupting -> "Interrupt reply"
+                    streaming && !roomMode -> "Steer reply"
+                    else -> "Send message"
+                }
+                val icon = when {
+                    interrupting -> ComposerIcon.STOP
+                    streaming && !roomMode -> ComposerIcon.STEER
+                    else -> ComposerIcon.SEND
+                }
+                ComposerButton(
+                    label, "chat.send", if (interrupting) onInterrupt else onSend,
+                    enabled = !busy,
+                    foreground = if (interrupting) CompanionColor.Warn else CompanionColor.Signal,
+                    background = if (interrupting) CompanionColor.Warn.copy(alpha = 0.2f) else CompanionColor.SignalDim,
+                    border = if (interrupting) CompanionColor.Warn else CompanionColor.Signal,
+                ) { tint -> ComposerActionIcon(icon, tint, busy) }
             }
         }
     }

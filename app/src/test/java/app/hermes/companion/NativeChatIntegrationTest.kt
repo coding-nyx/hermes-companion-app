@@ -260,6 +260,45 @@ class NativeChatIntegrationTest {
         }
     }
 
+    @Test fun browsingAModuleWithAnErrorDoesNotFailAHealthyVoiceTurn() = runBlocking {
+        Fixture().use { f ->
+            val failed=AtomicInteger(); val completed=AtomicInteger()
+            f.manager.onTurnFailed={failed.incrementAndGet()}; f.manager.onTurnCompleted={completed.incrementAndGet()}
+            f.connect(); f.manager.newThread(); f.manager.sendPrompt("synthetic voice prompt")
+            f.await { f.state.value.messages.any { it.delivery==MessageDelivery.SENT } }
+            f.state.update { it.copy(tab=MainTab.REVIEW,chatMinimized=true,error="Git is unavailable") }
+            f.finish("voice reply")
+            f.await { completed.get()==1 }
+            assertEquals(0,failed.get()); assertEquals(1,f.submits.get())
+            assertTrue(f.state.value.messages.any { it.text=="voice reply" })
+        }
+    }
+
+    @Test fun aFailedNativeVoiceTurnSignalsFailureOnceEvenWhileItsChatIsMinimized() = runBlocking {
+        Fixture().use { f ->
+            val failed=AtomicInteger()
+            f.manager.onTurnFailed={failed.incrementAndGet()}
+            f.connect(); f.manager.newThread(); f.manager.sendPrompt("synthetic voice prompt")
+            f.await { f.state.value.messages.any { it.delivery==MessageDelivery.SENT } }
+            f.state.update { it.copy(tab=MainTab.DEVICE,chatMinimized=true) }
+            f.event("message.complete",f.activeId,buildJsonObject { put("text","");put("status","error");put("error","Provider failed") })
+            f.await { failed.get()>0 }
+            assertEquals(1,failed.get()); assertEquals(1,f.submits.get())
+        }
+    }
+
+    @Test fun failedVoiceSessionCreationSignalsFailureWithoutSubmittingOrLosingTheDraft() = runBlocking {
+        Fixture().use { f ->
+            val failed=AtomicInteger();f.manager.onTurnFailed={failed.incrementAndGet()}
+            f.rejectCreate=true;f.connect();f.manager.newThread()
+            f.state.update { it.copy(draft="Keep my keyboard draft") }
+            f.manager.sendPrompt("synthetic voice prompt")
+            f.await { failed.get()==1 }
+            assertFalse(f.state.value.submitting);assertEquals(0,f.submits.get())
+            assertEquals("Keep my keyboard draft",f.state.value.draft)
+        }
+    }
+
     private class Fixture(val legacy: Boolean = false, recovery: Boolean = false) : AutoCloseable {
         val server = MockWebServer()
         val http = OkHttpClient()

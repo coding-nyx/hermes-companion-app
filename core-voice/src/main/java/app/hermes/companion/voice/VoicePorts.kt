@@ -2,6 +2,8 @@ package app.hermes.companion.voice
 
 interface SpeechInput {
     val terminalErrors: Boolean get() = false
+    /** True when the input signals actual microphone readiness through onStateChange(true). */
+    val reportsReadiness: Boolean get() = false
     fun startListening(
         onPartial: (String) -> Unit = {},
         onResult: (String) -> Unit,
