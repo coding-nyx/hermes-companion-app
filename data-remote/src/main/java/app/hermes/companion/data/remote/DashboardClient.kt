@@ -92,7 +92,7 @@ class DashboardException(val code: String, message: String) : RuntimeException(m
 
 class DashboardClient internal constructor(
     http: OkHttpClient,
-    attachToken: Boolean,
+    private val attachToken: Boolean,
 ) {
     @Volatile
     var sessionToken: String? = null
@@ -100,6 +100,7 @@ class DashboardClient internal constructor(
     @Volatile
     var gated: Boolean = false
 
+    private val bootstrapRefreshLock = Mutex()
     private val credentialScope = HostCredentialScope()
     private val cookies = MemoryCookieJar(credentialScope::permits)
 
@@ -1518,15 +1519,31 @@ class DashboardClient internal constructor(
         }
     }
 
-    private suspend fun <T> get(url: String, parse: (String) -> T): T = withContext(Dispatchers.IO) {
+    private suspend fun <T> get(url: String, parse: (String) -> T): T = getRead(url, true, parse)
+
+    private suspend fun <T> getRead(url: String, mayRecover: Boolean, parse: (String) -> T): T = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(url).header("Accept", "application/json").get().build()
-        http.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw httpError(response.code, body, url)
-            }
-            parse(body)
+        val (code, body, sentToken) = http.newCall(request).execute().use { response ->
+            Triple(response.code, response.body?.string().orEmpty(), response.request.header("X-Hermes-Session-Token"))
         }
+        if (code !in 200..299) {
+            val origin = credentialScope.nativeReadOrigin(request.url)
+            if (code == 401 && mayRecover && attachToken && !gated && !sentToken.isNullOrBlank() && origin != null &&
+                recoverBootstrapToken(origin, sentToken)) {
+                return@withContext getRead(url, false, parse)
+            }
+            throw httpError(code, body, url)
+        }
+        parse(body)
+    }
+
+    /** Coalesce successful rotation recovery. Never re-login or replay POST/DELETE/RPC mutations. */
+    private suspend fun recoverBootstrapToken(origin: String, rejected: String?): Boolean = bootstrapRefreshLock.withLock {
+        if (gated) return@withLock false
+        val current = sessionToken
+        if (!current.isNullOrBlank() && current != rejected) return@withLock true
+        val fresh = adoptLoopbackToken(origin)
+        !fresh.isNullOrBlank() && fresh != rejected
     }
 
     private fun modelField(model: String?): String =

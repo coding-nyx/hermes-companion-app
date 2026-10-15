@@ -22,6 +22,14 @@ internal class HostCredentialScope {
         return prefix.isEmpty() || url.encodedPath == prefix || url.encodedPath.startsWith("$prefix/")
     }
 
+    /** Only native dashboard reads may recover a rotated loopback bootstrap token. */
+    fun nativeReadOrigin(url: HttpUrl): String? {
+        val current = owner ?: return null
+        if (!permits(url)) return null
+        val path = url.encodedPath.removePrefix(current.encodedPath.trimEnd('/'))
+        return current.toString().trimEnd('/').takeIf { path.startsWith("/api/") }
+    }
+
     fun pluginRoute(url: HttpUrl): Boolean {
         val current = owner ?: return false
         return permits(url) && url.encodedPath.removePrefix(current.encodedPath.trimEnd('/')).startsWith("/companion/")

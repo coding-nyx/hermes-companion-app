@@ -82,11 +82,16 @@ class ThreadsScreenRenderTest {
     @Test fun finalConversationScrollsClearOfTheNewChatButton() {
         val many = (1..20).map { row("chat-$it", "Conversation $it", now - it * hour) }
         rule.setContent { CompanionTheme { ThreadsScreen(sessions = many) } }
+        val viewport = rule.onNodeWithTag("threads.list").fetchSemanticsNode().boundsInRoot
+        val rail = rule.onNodeWithTag("threads.rail").fetchSemanticsNode().boundsInRoot
+        assertEquals("The list must continue beside the floating button, without a full-width empty footer",
+            viewport.bottom, rail.bottom, 1f)
         rule.onNodeWithTag("threads.rail").performScrollToNode(hasTestTag("threads.row.chat-20"))
         rule.onNodeWithTag("threads.row.chat-20").assertIsDisplayed()
         val last = rule.onNodeWithTag("threads.row.chat-20").fetchSemanticsNode().boundsInRoot
         val action = rule.onNodeWithTag("threads.new").fetchSemanticsNode().boundsInRoot
         assertTrue("New chat must not cover the last conversation", last.bottom <= action.top)
+        capture("chat-list-floating-action-scroll-clearance")
     }
 
     private fun capture(name: String) {

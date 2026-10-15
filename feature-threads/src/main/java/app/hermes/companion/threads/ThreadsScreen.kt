@@ -121,7 +121,7 @@ fun ThreadsScreen(
             .background(CompanionColor.Void)
             .testTag("threads.list"),
     ) {
-        Column(Modifier.fillMaxSize().padding(bottom = createHeight + 32.dp)) {
+        Column(Modifier.fillMaxSize()) {
             if (showToolbar) Toolbar(
                 total = sessions.size,
                 shown = filtered.size,
@@ -203,7 +203,9 @@ fun ThreadsScreen(
                 return@Column
             }
             val rail = railItems(filtered, sort, nowMs)
-            LazyColumn(modifier = Modifier.weight(1f).testTag("threads.rail"), contentPadding = PaddingValues(bottom = 24.dp)) {
+            // Reserve scrollable space for the floating action, not a full-width footer.
+            LazyColumn(modifier = Modifier.weight(1f).testTag("threads.rail"),
+                contentPadding = PaddingValues(bottom = createHeight + 32.dp)) {
                 if (showRooms) item(key = "room-list") {
                     RoomsSection(rooms, roomsLoading, roomsError, unreadRooms, nowMs, onOpenRoom, onDeleteRoom)
                 }

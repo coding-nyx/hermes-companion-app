@@ -80,7 +80,7 @@
   "acceptance": "Automated checks are functional evidence. Operator visual acceptance and manual TalkBack remain separate gates.",
   "publication_validation": {
     "scope": "Exact staged Companion snapshot, excluding separate Desk modules/toolchain and shared voice-engine edits. The earlier workspace validation and installed APK above include those preserved local changes.",
-    "tests": 594,
+    "tests": 602,
     "failures": 0,
     "errors": 0,
     "skipped": 0,
@@ -96,7 +96,38 @@
       "Information": 2
     },
     "command": "JAVA_HOME=<JDK17> ANDROID_HOME=<AndroidSDK> ./gradlew testDebugUnitTest :domain:test :core-model:test :app:assembleDebug :app:assembleRelease :app:lintRelease :app:assembleDebugAndroidTest -PhermesDeviceAbi=arm64-v8a",
-    "device_checks": "Deferred by operator; publication build not installed during this check.",
-    "log": "/private/tmp/grouped-publish-validation.log"
+    "device_checks": "Both read-only S22 authentication tests passed: saved credential diagnosis and recovery from an intentionally expired token. No prompt, microphone use or operator preference write. UI, accessibility and spoken checks remain deferred.",
+    "log": "/private/tmp/grouped-publish-final-validation.log",
+    "follow_up_fixes": [
+      "The chat list fills the viewport beside New chat. Floating-action clearance is scrollable list padding, avoiding an empty full-width footer while preserving last-row clearance.",
+      "A rejected, previously sent loopback token can refresh through the same host/proxy bootstrap and retry a native GET once. Concurrent successful refreshes coalesce. Missing credentials, password hosts, plugin routes and mutations never use this recovery."
+    ],
+    "authentication_diagnosis": {
+      "saved_token_present": true,
+      "saved_token_matches_current": true,
+      "saved_token_read": "ok",
+      "reported_401_reproduced": false,
+      "limit": "The current saved token and session read pass; the reported failing route/action remains unconfirmed. Token rotation recovery fixes a source-confirmed gap, not a proven cause of the operator report."
+    },
+    "apks": {
+      "companion.apk": "7354edce560248532089fa2e487afdd01e57af3c6469ac919df20e45116372be",
+      "companion-release.apk": "b4ff930b7988334298d870d1492457ee6c8d5075f4af0ce2a8110d456edd9791",
+      "rollback.apk": "fb4d97cc588c7487ebc0221738087f34d18891817a9cbe6599e2593aabbbdfa1"
+    },
+    "artifact_directory": "/private/tmp/grouped-publish-20261015",
+    "device": {
+      "serial": "100.105.213.54:38281",
+      "installed": true,
+      "apk_sha256_verified": true,
+      "apk_sha256": "7354edce560248532089fa2e487afdd01e57af3c6469ac919df20e45116372be",
+      "authentication_tests_passed": 2,
+      "test_package_removed": true,
+      "normal_app_relaunched": true,
+      "logs": [
+        "/private/tmp/grouped-auth-before-device.log",
+        "/private/tmp/grouped-auth-after-device.log"
+      ],
+      "supersedes": "The earlier installation hash in this record; original UI acceptance limits remain unchanged."
+    }
   }
 }
