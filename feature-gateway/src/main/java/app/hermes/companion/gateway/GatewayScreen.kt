@@ -55,6 +55,13 @@ fun GatewayScreen(
     onLinkHost: (SavedGateway) -> Unit = {},
     onUnlinkPeer: (String) -> Unit = {},
     modifier: Modifier = Modifier,
+    nativeChatConnected: Boolean = false,
+    companionAvailability: CompanionAvailability = CompanionAvailability.UNKNOWN,
+    notifyGranted: Boolean = false,
+    onEnableNotify: () -> Unit = {},
+    phoneStreamEnabled: Boolean = false,
+    onOpenChats: () -> Unit = {},
+    onOpenDevice: () -> Unit = {},
 ) {
     var detail by rememberSaveable { mutableStateOf<String?>(null) }
     var name by rememberSaveable { mutableStateOf("") }
@@ -76,6 +83,32 @@ fun GatewayScreen(
     }
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).testTag("gateway.surface"),
         verticalArrangement = Arrangement.spacedBy(32.dp)) {
+        GroupedSection("Connection lanes", padded = true) {
+            ProtocolStatus("Hermes chats", if (nativeChatConnected) "Connected to native dashboard" else "Native gateway not connected", tone = if (nativeChatConnected) CompanionColor.Signal else CompanionColor.Warn,
+                modifier = Modifier.testTag("gateway.native.status"))
+            Text("Threads, streaming and approvals use the Hermes dashboard. Phone pairing is not required for native chat.", style = CompanionType.Caption)
+            ProtocolStatus("Companion relay", when (companionAvailability) {
+                CompanionAvailability.AVAILABLE -> "Available · pairing enables phone tools"
+                CompanionAvailability.UNAVAILABLE -> "Unavailable on this connection"
+                else -> "Availability not confirmed"
+            }, tone = if (companionAvailability == CompanionAvailability.AVAILABLE) CompanionColor.Accent else CompanionColor.TextDim,
+                modifier = Modifier.testTag("gateway.relay.status"))
+            Text("The optional relay adds rooms, Hands and phone-notification sharing. These capabilities are separate from chat.", style = CompanionType.Caption)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ActionButton("Open chats", onOpenChats, kind = ActionKind.PRIMARY, modifier = Modifier.testTag("gateway.open.chats"))
+                ActionButton("Permissions", onOpenDevice, modifier = Modifier.testTag("gateway.open.permissions"))
+            }
+        }
+        GroupedSection("Notifications") {
+            if (!notifyGranted) PreferenceRow("Android notifications", "Allow alerts on this phone. No device pairing required.", value = "Enable",
+                onClick = onEnableNotify, modifier = Modifier.testTag("gateway.notifications.enable"))
+            PreferenceRow("Native chat alerts", if (!notifyGranted) "Android notification permission needed" else if (nativeChatConnected) "Completions, approvals and errors · while connected" else "Waiting for this host and agent connection",
+                onClick = { detail = "Background connection" }, modifier = Modifier.testTag("gateway.notifications.native"))
+            PreferenceRow("Relay room alerts", if (ntfyTopic.isBlank()) "Review the topic URL for this host" else if (!notifyGranted) "Android notification permission needed" else "Topic URL entered · save changes to apply",
+                value = "Configure", onClick = { detail = "Background connection" }, modifier = Modifier.testTag("gateway.notifications.incoming"))
+            PreferenceRow("Phone notification sharing", if (phoneStreamEnabled) "Enabled · review destination and access" else "Off · your phone notifications are not shared",
+                value = "Review", onClick = onOpenDevice, modifier = Modifier.testTag("gateway.notifications.outgoing"))
+        }
         GroupedSection("Current connection") {
             PreferenceRow(current?.name ?: "Hermes host", current?.origin ?: "Connected host", value = "Current", selected = true,
                 onClick = { detail = "Connection" }, modifier = Modifier.testTag("gateway.current"))
@@ -185,8 +218,11 @@ fun GatewayScreen(
                 "Background connection" -> {
                     GroupedSection("Connection") { PreferenceToggle("Stay connected", stayConnected, onToggleStay,
                         summary = "Keep the operator connection active in the background", modifier = Modifier.testTag("gateway.stay")) }
-                    GroupedSection("Notification topic", padded = true) {
-                        HairlineField(ntfyTopic, onNtfyTopicChange, placeholder = "Topic name", onDone = onSaveNtfy, modifier = Modifier.testTag("gateway.ntfy"))
+                    GroupedSection("Notification topic URL", padded = true) {
+                        Text("Native chat alerts use the current host and agent connection for known sessions. They are local alerts, not remote push: Android stopping the app can interrupt delivery. Relay room alerts use the separate topic URL below, configured by your host publisher.", style = CompanionType.Caption)
+                        if (!notifyGranted) ActionButton("Enable Android notifications", onEnableNotify, modifier = Modifier.testTag("gateway.notifications.permission"))
+                        Text("Save for this exact host address. After upgrading, re-save any existing topic once to confirm its owner.", style = CompanionType.Caption)
+                        HairlineField(ntfyTopic, onNtfyTopicChange, placeholder = "https://ntfy.example/your-topic", onDone = onSaveNtfy, modifier = Modifier.testTag("gateway.ntfy"))
                         ActionButton("Save topic", onSaveNtfy, modifier = Modifier.testTag("gateway.ntfy.save"))
                     }
                 }

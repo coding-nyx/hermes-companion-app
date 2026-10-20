@@ -3,10 +3,16 @@ name: release
 on:
   push:
     tags: ["v*"]
+    branches: ["redesign/cyberpunk-command-center"]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   apk:
+    # The bounded preview below owns this tag. Never run the stable path for it.
+    if: github.ref != 'refs/heads/redesign/cyberpunk-command-center' && github.ref != 'refs/tags/v0.3.0-cyberpunk-preview.1' && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -44,6 +50,8 @@ jobs:
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'legacy' }}
           files: |
             dist/HermesCompanion-*.apk
             dist/SHA256SUMS.txt
@@ -52,3 +60,146 @@ jobs:
             Sideload APK (${{ steps.keystore.outputs.signed == 'true' && 'release-signed, R8 minified' || 'debug-signed, R8 minified — no HERMES_KEYSTORE_* secrets configured' }}). Enable unknown sources.
             Plugin: `hermes plugins install <owner>/<repo>/hermes-plugin` then `hermes plugins enable hermes-companion`.
             Phone origin: `http://<hermes-tailscale>:9120` (http only for LAN / Tailscale hosts; public hosts need https).
+
+  cyberpunk-preview-build:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/redesign/cyberpunk-command-center'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HERMES_VERSION_NAME: 0.3.0-cyberpunk-preview.1
+      HERMES_VERSION_CODE: "3"
+      PREVIEW_TAG: v0.3.0-cyberpunk-preview.1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+      - name: Test host plugin
+        run: |
+          python3 -m compileall -q hermes-plugin
+          python3 -m unittest discover -s hermes-plugin/tests -q
+      - name: Test, lint, and build the ARM64 evaluation APK
+        run: |
+          chmod +x gradlew
+          ./gradlew test :app:lintDebug :app:assembleDebug -PhermesDeviceAbi=arm64-v8a -PhermesPreview=true -Pkotlin.compiler.execution.strategy=in-process '-Dorg.gradle.jvmargs=-Xmx1536m -Dfile.encoding=UTF-8' --no-parallel --max-workers=1 --console=plain
+      - name: Stage verified preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          apk="HermesCompanion-${PREVIEW_TAG}-arm64-debug.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/${apk}"
+          build_tools="$(find "${ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          "${build_tools}/apksigner" verify --verbose --print-certs "dist/${apk}" > dist/APK-SIGNATURE.txt
+          "${build_tools}/aapt2" dump badging "dist/${apk}" > "${RUNNER_TEMP}/preview-badging.txt"
+          grep -F "package: name='app.hermes.companion.preview' versionCode='${HERMES_VERSION_CODE}' versionName='${HERMES_VERSION_NAME}'" "${RUNNER_TEMP}/preview-badging.txt"
+          grep -Fx "application-label:'Hermes Preview'" "${RUNNER_TEMP}/preview-badging.txt"
+          grep -Fx "minSdkVersion:'31'" "${RUNNER_TEMP}/preview-badging.txt"
+          grep -Fx "native-code: 'arm64-v8a'" "${RUNNER_TEMP}/preview-badging.txt"
+          printf 'Source commit: %s\nVersion name: %s\nVersion code: %s\nPackage: app.hermes.companion.preview\nLabel: Hermes Preview\nABI: arm64-v8a\nBuild type: debug\n' \
+            "$GITHUB_SHA" "$HERMES_VERSION_NAME" "$HERMES_VERSION_CODE" > dist/BUILD-INFO.txt
+          cp docs/reviews/2026-10-20-cyberpunk-redesign.md dist/REVIEW.md
+          cat > dist/RELEASE-NOTES.md <<'NOTES'
+          ## Cyberpunk command center preview
+
+          Evaluation prerelease, not a production-signed release. Android 12+ (API 31), ARM64 only.
+
+          - Cyberpunk visual system, opt-in glitch effects, reduced-motion support, and larger accessible controls.
+          - Faster access to new chats, voice, permissions, and host/profile/model context switching.
+          - Gateway-watch status, saved host-scoped notification topics, privacy-safe notifications, and stale-context navigation protection.
+
+          ### Verification and limitations
+
+          Automated module tests, host-plugin tests, debug lint, and the ARM64 debug build passed on this exact source commit before publication. See the attached review for coverage and remaining acceptance checks.
+
+          This APK installs as **Hermes Preview** (`app.hermes.companion.preview`) alongside the standard Hermes Companion app; it does not replace that app. It starts with separate configuration, Android permissions, and pairing, with no automatic data migration. Keep your existing app installed. Shared `hermes-companion` links may show an Android app chooser.
+
+          This APK is debug-signed with this CI runner's evaluation key, not a production key. Updating an older, differently signed preview build may be rejected. Physical-device TalkBack, large-font, microphone/voice, and live gateway end-to-end acceptance remain unverified. Optional native realtime and host speech stay gated off.
+
+          No live host/plugin deployment or user-device installation is performed by this release.
+          NOTES
+          printf '\nSource commit: `%s`\n\nCI run: %s/%s/actions/runs/%s\n' \
+            "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" >> dist/RELEASE-NOTES.md
+          printf '\n[Review and screenshot gallery](%s/%s/blob/%s/docs/reviews/2026-10-20-cyberpunk-redesign.md)\n' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> dist/RELEASE-NOTES.md
+          printf '\nAPK SHA-256: `%s`\n\n' "$(sha256sum "dist/${apk}" | cut -d ' ' -f 1)" >> dist/RELEASE-NOTES.md
+          grep 'certificate SHA-256 digest:' dist/APK-SIGNATURE.txt >> dist/RELEASE-NOTES.md
+          (cd dist && sha256sum "$apk" APK-SIGNATURE.txt BUILD-INFO.txt REVIEW.md RELEASE-NOTES.md > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cyberpunk-preview-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  cyberpunk-preview-publish:
+    needs: cyberpunk-preview-build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/redesign/cyberpunk-command-center'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # This is the existing release permission, scoped to the publishing job.
+    permissions:
+      contents: write
+    concurrency:
+      group: cyberpunk-preview-publication
+      cancel-in-progress: false
+    env:
+      PREVIEW_TAG: v0.3.0-cyberpunk-preview.1
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cyberpunk-preview-${{ github.sha }}
+          path: dist
+      - name: Refuse to replace an existing tag or release
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.error, urllib.request
+          repo, tag = os.environ["GITHUB_REPOSITORY"], os.environ["PREVIEW_TAG"]
+          headers = {"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json"}
+          branch = "git/ref/heads/redesign/cyberpunk-command-center"
+          request = urllib.request.Request(f"https://api.github.com/repos/{repo}/{branch}", headers=headers)
+          with urllib.request.urlopen(request) as response:
+              head = json.load(response)["object"]["sha"]
+          if head != os.environ["GITHUB_SHA"]:
+              raise SystemExit("Refusing to publish a superseded branch commit")
+          for path in (f"git/ref/tags/{tag}", f"releases/tags/{tag}"):
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repo}/{path}",
+                  headers=headers,
+              )
+              try:
+                  with urllib.request.urlopen(request) as response:
+                      json.load(response)
+              except urllib.error.HTTPError as error:
+                  if error.code == 404:
+                      continue
+                  raise
+              raise SystemExit(f"Refusing to replace existing {path}")
+          PY
+      - name: Publish this commit as a prerelease
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum --check SHA256SUMS.txt)
+          grep -Fx "Source commit: ${GITHUB_SHA}" dist/BUILD-INFO.txt
+          # Atomic create fails if another publisher has claimed the tag.
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f "ref=refs/tags/${PREVIEW_TAG}" -f "sha=${GITHUB_SHA}"
+          gh release create "$PREVIEW_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --target "$GITHUB_SHA" \
+            --prerelease --latest=false \
+            --title "Cyberpunk command center preview 1" \
+            --notes-file dist/RELEASE-NOTES.md \
+            dist/*

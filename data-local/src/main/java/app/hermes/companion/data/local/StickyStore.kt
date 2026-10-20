@@ -1,11 +1,12 @@
 package app.hermes.companion.data.local
 
 import android.content.Context
+import app.hermes.companion.domain.WakePolicy
 
 /**
  * Last origin, per-host last profile / ntfy topic, phone-wide toggles. Not secrets.
- * Per-host values are keyed by [HostKeys]; the pre-A8.5 global `profile_id` / `ntfy_topic`
- * remain as fallbacks so an upgrade keeps the current host's choices.
+ * Profiles use [HostKeys]; notification topics use exact dashboard origins including proxy paths.
+ * Legacy topics are retained but need an explicit re-save because their path owner is unknowable.
  */
 class StickyStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("companion.sticky", Context.MODE_PRIVATE)
@@ -40,27 +41,29 @@ class StickyStore(context: Context) {
             .apply()
     }
 
-    /** Global fallback ntfy topic (legacy). Use [ntfyTopicFor] / [setNtfyTopic]. */
+    /** Retained legacy value, never implicitly inherited by another host. */
     var ntfyTopic: String?
         get() = prefs.getString(KEY_NTFY, null)
         set(value) { prefs.edit().putString(KEY_NTFY, value?.trim()?.ifBlank { null }).apply() }
 
-    fun ntfyTopicFor(origin: String): String? =
-        prefs.getString(KEY_NTFY + "." + HostKeys.of(origin), null) ?: ntfyTopic
+    fun ntfyTopicFor(origin: String): String? {
+        val owner = WakePolicy.topicOwnerKey(origin) ?: return null
+        return prefs.getString(KEY_NTFY_OWNER + owner, null)
+    }
 
     fun setNtfyTopic(origin: String, topic: String?) {
+        val owner = WakePolicy.topicOwnerKey(origin) ?: return
         val clean = topic?.trim()?.ifBlank { null }
         prefs.edit()
-            .putString(KEY_NTFY + "." + HostKeys.of(origin), clean)
-            .putString(KEY_NTFY, clean)
+            .putString(KEY_NTFY_OWNER + owner, clean)
             .apply()
     }
 
-    /** Every host that has a per-host ntfy topic (for background wake subscriptions). */
+    /** Explicit exact-owner topics only. Legacy authority keys must never become trusted routing. */
     fun ntfyHosts(): Map<String, String> =
         prefs.all.entries
-            .filter { it.key.startsWith(KEY_NTFY + ".") && it.value is String && (it.value as String).isNotBlank() }
-            .associate { it.key.removePrefix(KEY_NTFY + ".") to (it.value as String) }
+            .filter { it.key.startsWith(KEY_NTFY_OWNER) && it.value is String && (it.value as String).isNotBlank() }
+            .associate { it.key.removePrefix(KEY_NTFY_OWNER) to (it.value as String) }
 
     var stayConnected: Boolean
         get() = prefs.getBoolean(KEY_STAY, false)
@@ -135,6 +138,7 @@ class StickyStore(context: Context) {
         private const val KEY_LAST_GOOD = "last_good_origin"
         private const val KEY_PROFILE = "profile_id"
         private const val KEY_NTFY = "ntfy_topic"
+        private const val KEY_NTFY_OWNER = "ntfy_owner_v2."
         private const val KEY_STAY = "stay_connected"
         private const val KEY_KEEP_A11Y = "keep_a11y_on"
         private const val KEY_BIOMETRIC = "biometric_lock"

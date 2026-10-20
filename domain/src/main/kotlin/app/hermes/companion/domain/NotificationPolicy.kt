@@ -148,9 +148,10 @@ object NotificationPolicy {
      */
     fun groupKey(origin: String): String = origin.trim().ifBlank { "hermes" }
 
-    /** Stable per-thread id so a second ping for the same thread replaces the first. */
-    fun notificationId(origin: String, sessionId: String, roomId: String): Int {
-        val where = roomId.trim().ifBlank { sessionId.trim() }
+    /** Stable (host, profile, thread) identity. Rooms are host-owned, not profile-owned. */
+    fun notificationId(origin: String, sessionId: String, roomId: String, profile: String = ""): Int {
+        val where = if (roomId.isNotBlank()) "room|${roomId.trim()}"
+        else "session|${profile.trim()}|${sessionId.trim()}"
         return (groupKey(origin) + "|" + where).hashCode()
     }
 

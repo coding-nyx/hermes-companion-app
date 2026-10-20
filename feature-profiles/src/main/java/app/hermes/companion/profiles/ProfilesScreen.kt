@@ -33,8 +33,7 @@ import app.hermes.companion.model.ProfileRef
 
 /**
  * Every agent on the host as a row: glyph, name, `id · model · sessions`, ACTIVE badge.
- * Tapping a row switches; while the new profile's threads load the row blinks and the
- * header says so, so a slow host never looks like a dead tap.
+ * Tapping a row switches; explicit loading text communicates a pending switch without blinking.
  */
 @Composable
 fun ProfilesScreen(
@@ -59,7 +58,7 @@ fun ProfilesScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = if (hostName.isBlank()) "Available profiles" else "Profiles on $hostName",
+                text = if (hostName.isBlank()) "Agent profiles" else "Agents on $hostName",
                 style = CompanionType.Title,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
@@ -81,54 +80,17 @@ fun ProfilesScreen(
             )
             return
         }
-        LazyColumn(Modifier.weight(1f)) {
+        LazyColumn(Modifier.weight(1f),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 24.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
+            item {
+                Text("Choose an agent profile for this host. Coding agent terminals are separate in More.", style = CompanionType.Caption)
+            }
             items(profiles, key = { it.id }) { profile ->
-                val selected = profile.id == activeId
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-
-                        .heightIn(min = 48.dp).clickable(enabled = !switching) { onSelect(profile.id) }
-                        .padding(horizontal = 24.dp, vertical = 16.dp)
-                        .testTag("profiles.row.${profile.id}"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
-                ) {
-                    ProfileGlyph(
-                        code = profile.glyph,
-                        selected = selected,
-                        modifier = Modifier.testTag("profiles.glyph.${profile.id}"),
-                    )
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = profile.displayName,
-                            style = CompanionType.Body.copy(color = if (selected) CompanionColor.Signal else CompanionColor.Text),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        val meta = buildList {
-                            add(profile.id)
-                            if (profile.model.isNotBlank()) add(profile.model.substringAfterLast("/"))
-                            if (profile.sessionCount > 0) add("${profile.sessionCount} threads")
-                            if (profile.gateway.isNotBlank()) add("gw ${profile.gateway}")
-                        }.joinToString(" · ")
-                        Text(text = meta, style = CompanionType.Caption, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
-                    if (selected && switching) {
-                        LiveDot()
-                        Spacer(Modifier.width(CompanionSpace.Xs))
-                    }
-                    if (selected) {
-                        Text(
-                            text = "✓",
-                            style = CompanionType.Caption.copy(color = CompanionColor.Signal),
-                            modifier = Modifier
-
-                                .padding(horizontal = CompanionSpace.Sm, vertical = 2.dp),
-                        )
-                    }
-                }
-                Hairline()
+                ProfileChoice(profile = profile, selected = profile.id == activeId,
+                    enabled = !switching, switching = switching,
+                    onSelect = { onSelect(profile.id) },
+                    modifier = Modifier.testTag("profiles.row.${profile.id}"))
             }
         }
     }

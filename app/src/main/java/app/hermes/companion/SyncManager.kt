@@ -9,13 +9,14 @@ import app.hermes.companion.domain.DraftThread
 import app.hermes.companion.domain.GatewayBook
 import app.hermes.companion.domain.GatewayHudMap
 import app.hermes.companion.domain.HostHealthMap
+import app.hermes.companion.domain.NativeNotificationPolicy
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.SessionLists
-import app.hermes.companion.domain.WakePing
 import app.hermes.companion.domain.WakePolicy
 import app.hermes.companion.model.BusFrame
 import app.hermes.companion.model.ChatEvent
 import app.hermes.companion.model.HudState
+import app.hermes.companion.model.MessageRole
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
@@ -44,10 +45,11 @@ class SyncManager(
     private val chat: ChatSessionManager,
     private val _state: MutableStateFlow<CompanionState>,
     private val scope: CoroutineScope,
-    private val onWake: (WakePing) -> Unit,
 ) {
     private val liveScope: CoroutineScope get() = runtime.appScope
     private var rosterJob: kotlinx.coroutines.Job? = null
+    private val wakeTopics = mutableMapOf<String, String>()
+    private val nativeNotifications = NativeNotificationPolicy()
     private fun client(origin: String): DashboardClient = clients.forOrigin(origin)
 
     fun stopAll() {
@@ -60,36 +62,48 @@ class SyncManager(
         runtime.fleetHealthJob = null
         runtime.wakeJobs.values.forEach { it.cancel() }
         runtime.wakeJobs.clear()
+        wakeTopics.clear()
     }
 
     /**
      * One ntfy subscription per host that has a topic (A8.5). A ping is attributed to the host whose
-     * topic it arrived on unless the payload names an `origin`, so hub pings open hub sessions even
-     * while lab is the active operator host.
+     * topic it arrived on. Publisher-controlled origin fields cannot repoint a trusted
+     * notification tap to another host.
      */
     fun startWake() {
-        val topics = sticky.ntfyHosts().toMutableMap()
-        _state.value.origin?.let { active ->
-            val own = _state.value.ntfyTopic.ifBlank { sticky.ntfyTopicFor(active).orEmpty() }
-            if (own.isNotBlank()) topics[HostClientPool.key(active)] = own
-        }
+        val active = _state.value.origin
+        val topics = WakePolicy.subscriptionTargets(
+            sticky.ntfyHosts(),
+            operatorCreds.loadGateways().map { it.origin } + listOfNotNull(sticky.lastGoodOrigin),
+            active,
+        )
         val wanted = topics.mapNotNull { (origin, topic) -> WakePolicy.sseUrl(topic)?.let { origin to it } }.toMap()
         // Drop subscriptions for hosts that lost their topic.
-        runtime.wakeJobs.keys.filter { it !in wanted }.forEach { runtime.wakeJobs.remove(it)?.cancel() }
+        runtime.wakeJobs.keys.filter { it !in wanted }.forEach {
+            runtime.wakeJobs.remove(it)?.cancel()
+            wakeTopics.remove(it)
+        }
         for ((origin, sse) in wanted) {
-            if (runtime.wakeJobs[origin]?.isActive == true) continue
+            if (runtime.wakeJobs[origin]?.isActive == true && wakeTopics[origin] == sse) continue
+            // Saving a different topic for the same host must replace the previous subscription.
+            runtime.wakeJobs.remove(origin)?.cancel()
+            wakeTopics[origin] = sse
             runtime.wakeJobs[origin] = liveScope.launch {
-                client(origin).wakeEvents(sse).collect { raw ->
-                    val ping = WakePolicy.parse(raw, origin) ?: return@collect
-                    _state.update { it.copy(lastWake = ping) }
-                    // Post the shade notification here, in appScope, not from a Compose effect
-                    // in MainActivity: this collector outlives the UI (StayConnectedService keeps
-                    // the process up), so a thread reply that arrives while the app is closed —
-                    // which is when a notification is actually the point — used to update state
-                    // and notify nobody.
-                    runCatching { WakeNotifier.show(runtime, ping) }
-                    // UI navigation; a no-op when no Activity is alive.
-                    onWake(ping)
+                try {
+                    client(origin).wakeEvents(sse).collect { raw ->
+                        val ping = WakePolicy.parseForSubscription(raw, origin) ?: return@collect
+                        _state.update { it.copy(lastWake = ping) }
+                        // Receipt is not a request to change host/profile/chat. Only the
+                        // notification's PendingIntent (a user tap) may navigate there.
+                        runCatching { WakeNotifier.show(runtime, ping) }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    _state.update {
+                        if (it.origin?.trim()?.trimEnd('/') != origin) it
+                        else it.copy(error = "Notification topic unavailable. Check its URL and access, then save it again.")
+                    }
                 }
             }
         }
@@ -157,6 +171,7 @@ class SyncManager(
     fun startWatch(origin: String, profileId: String) {
         rosterJob?.cancel()
         runtime.watchJob?.cancel()
+        _state.update { it.clearGatewayHello(origin, profileId) }
         runtime.watchJob = liveScope.launch {
             var backoff = 1_000L
             while (isActive && _state.value.owns(origin, profileId)) {
@@ -192,9 +207,9 @@ class SyncManager(
                         try { events.join() } finally { catchUp.cancel(); poll.cancel(); ping.cancel() }
                     }
                 } catch (c: CancellationException) { throw c }
-                catch (_: Throwable) {
-                    _state.update { if (!it.owns(origin, profileId)) it else it.copy(gatewayHello = null) }
-                }
+                catch (_: Throwable) { /* Reconnect only after clearing this owner's status below. */ }
+                // A clean EOF is disconnected too. Never clear a newer host/profile's handshake.
+                _state.update { it.clearGatewayHello(origin, profileId) }
                 delay(backoff)
                 backoff = (backoff * 2).coerceAtMost(30_000L)
             }
@@ -238,6 +253,7 @@ class SyncManager(
                 }
             }
             is BusFrame.Chat -> {
+                notifyNative(frame, origin, profileId)
                 val ev = frame.event
                 val open = _state.value.openSessionId
                 val forOpen = frame.sessionId != null && client(origin).matchesSession(open, frame.sessionId)
@@ -277,6 +293,37 @@ class SyncManager(
         }
     }
 
+    /** Local alerts only for known, routable sessions in the current authenticated watch. */
+    private fun notifyNative(frame: BusFrame.Chat, origin: String, profileId: String) {
+        val state = _state.value
+        if (!state.owns(origin, profileId) || frame.sessionId == null) return
+        val api = client(origin)
+        val session = (state.sessions + listOfNotNull(state.openSession)).firstOrNull {
+            it.profileId == profileId && api.matchesSession(it.id, frame.sessionId)
+        } ?: return
+        val forOpen = api.matchesSession(state.openSessionId, session.id)
+        val visible = runtime.fleetHealthForeground.value && state.tab == MainTab.THREADS &&
+            !state.appLocked && !state.chatMinimized && !state.inRoom && forOpen
+        val localSubmission = if (forOpen && streamingFor(state, session.id))
+            state.messages.lastOrNull { it.role == MessageRole.USER }?.id else null
+        val action = nativeNotifications.accept(
+            origin, profileId, session.id, frame.event, visible, session.title, localSubmission,
+        ) ?: return
+        if (!_state.value.owns(origin, profileId)) return
+        if (action.dismiss) {
+            runCatching { WakeNotifier.clear(runtime, action.ping) }
+        } else {
+            _state.update { current ->
+                if (!current.owns(origin, profileId)) current else current.copy(
+                    lastWake = action.ping,
+                    sessions = current.sessions.map { if (it.id == session.id) it.copy(unread = true) else it },
+                )
+            }
+            // Never expose transcript/command/secret payloads on the lock screen.
+            runCatching { WakeNotifier.show(runtime, action.ping) }
+        }
+    }
+
     companion object {
         private const val PING_MS = 15_000L
         private const val HUD_MS = 15_000L
@@ -284,3 +331,6 @@ class SyncManager(
         private const val PROBE_MS = 3_000L
     }
 }
+
+internal fun CompanionState.clearGatewayHello(origin: String, profile: String): CompanionState =
+    if (!owns(origin, profile)) this else copy(gatewayHello = null)

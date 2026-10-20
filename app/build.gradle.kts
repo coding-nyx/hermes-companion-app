@@ -1,6 +1,10 @@
 import java.util.Properties
 import groovy.json.JsonSlurper
 
+// Opt-in, separately sandboxed preview. The default application ID stays compatible
+// with existing stable builds; preview configuration and permissions never migrate.
+val hermesPreview = providers.gradleProperty("hermesPreview").map(String::toBooleanStrict).getOrElse(false)
+val hermesApplicationId = "app.hermes.companion" + if (hermesPreview) ".preview" else ""
 val firebaseClientFile = file("firebase-client.json")
 val firebaseConfig = if (firebaseClientFile.exists()) JsonSlurper().parse(firebaseClientFile) as Map<*, *> else null
 val firebaseProject = firebaseConfig?.get("project_info") as? Map<*, *>
@@ -8,7 +12,7 @@ val firebaseClients = firebaseConfig?.get("client") as? List<*>
 val firebaseClient = firebaseClients?.filterIsInstance<Map<*, *>>()?.firstOrNull { client ->
     val info = client["client_info"] as? Map<*, *>
     val android = info?.get("android_client_info") as? Map<*, *>
-    android?.get("package_name") == "app.hermes.companion"
+    android?.get("package_name") == hermesApplicationId
 }
 val firebaseInfo = firebaseClient?.get("client_info") as? Map<*, *>
 val firebaseApiKey = (firebaseClient?.get("api_key") as? List<*>)?.firstOrNull() as? Map<*, *>
@@ -46,7 +50,8 @@ android {
     namespace = "app.hermes.companion"
     compileSdk = 35
     defaultConfig {
-        applicationId = "app.hermes.companion"
+        applicationId = hermesApplicationId
+        manifestPlaceholders["applicationLabel"] = if (hermesPreview) "@string/app_name_preview" else "@string/app_name"
         minSdk = 31
         // Optional device build: avoid shipping other CPUs over wireless ADB. Universal by default.
         providers.gradleProperty("hermesDeviceAbi").orNull?.let { abi ->

@@ -109,12 +109,12 @@ class OpenCanvasScreensRenderTest {
         deviceLabel = "Samsung Galaxy S22", deviceLane = true, a11yBound = true, notifyGranted = true, overlayGranted = true,
         nlsBound = true, protectedCustom = listOf("com.example.bank"), keepA11yAvailable = true,
     )
-    private fun reviewPopulated(font: Float) {
+    private fun reviewPopulated(font: Float, suffix: String = "") {
         mount(font)
         MainTab.entries.forEach { tab ->
             rule.runOnIdle { screen = populated().copy(tab = tab) }
             rule.mainClock.advanceTimeBy(500)
-            capture("populated-${tab.name.lowercase()}-${font}x")
+            capture("populated-${tab.name.lowercase()}-${font}x$suffix")
         }
         rule.runOnIdle { screen = populated().copy(openSessionId = "design", draft = "Keep **formatting** visible", messages = listOf(
             ChatMessage("u", MessageRole.USER, "Can you summarize the release checks?", delivery = MessageDelivery.SENT),
@@ -122,8 +122,10 @@ class OpenCanvasScreensRenderTest {
         rule.mainClock.advanceTimeBy(500)
         rule.onNodeWithTag("chat.fmt.bold").assertIsDisplayed()
         rule.onNodeWithTag("chat.send").assertIsDisplayed()
-        capture("populated-chat-${font}x")
+        capture("populated-chat-${font}x$suffix")
     }
+    @Config(qualifiers = "w360dp-h800dp-night-xhdpi")
+    @Test fun populatedDarkPagesAndConversationVisualReview() = reviewPopulated(1f, "-dark")
     @Test fun populatedPagesAndConversationVisualReview() = reviewPopulated(1f)
     @Test fun populatedPagesAtDoubleTextVisualReview() = reviewPopulated(2f)
 

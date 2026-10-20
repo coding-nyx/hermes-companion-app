@@ -48,7 +48,15 @@ For **Hands, notification streaming, custom rooms and the agent console**, use t
 
 The rich-text composer keeps formatting visible and supports expanded draft editing. Tap the center **Voice** dock to open voice controls; long-press it to dictate into the selected conversation. Model and reasoning controls apply to that conversation and show host-confirmed settings. System speech remains available; native Host speech/streaming and realtime rollout remain disabled pending their acceptance gates. See the [prior reliability checkpoint and deferred work](docs/reviews/2026-10-15-closeout.md).
 
-### Grouped interface checkpoint
+### Cyberpunk command center preview
+
+The redesign adds a cyan/violet component system, static-by-default glitch accents, direct Gateway navigation, explicit Host/Agent context controls, and easier New chat, Model, Voice and permission access. Light/dark and enlarged-text Compose previews are included in the [implementation review](docs/reviews/2026-10-20-cyberpunk-redesign.md), alongside verification and remaining physical-device acceptance.
+
+Native completion and approval alerts are local notifications for known sessions on the connected host/profile, not durable push when Android stops the app. Optional ntfy relay subscriptions reconnect and replay safely. Existing topic users must re-save their topic for the exact host address, including any proxy path. See the [gateway integration audit](docs/design/gateway-integration-audit.md).
+
+The evaluation APK uses **Hermes Preview** (`app.hermes.companion.preview`) so it can coexist with the existing app. It has separate data, permissions and pairing, with no automatic migration. Keep the existing app installed; shared Hermes links may show an Android chooser. The preview is debug-signed, not a production update.
+
+### Previous grouped interface checkpoint
 
 The current interface uses consistent typography and spacing, grouped settings, focused detail sheets and system light/dark appearance across the existing app. Chat transcripts stay open, with vertical composer actions and the center Voice dock available through navigation.
 
@@ -65,6 +73,16 @@ Use JDK **17**, an Android SDK with API **35**, and the checked-in Gradle wrappe
 ./gradlew :app:testDebugUnitTest
 ./gradlew :app:assembleRelease
 ```
+
+To build the side-by-side ARM64 evaluation app:
+
+```sh
+HERMES_VERSION_NAME=0.3.0-cyberpunk-preview.1 HERMES_VERSION_CODE=3 \
+  ./gradlew test :app:lintDebug :app:assembleDebug \
+  -PhermesPreview=true -PhermesDeviceAbi=arm64-v8a --no-parallel --max-workers=1
+```
+
+Its APK is `app/build/outputs/apk/debug/app-debug.apk`. Omitting `hermesPreview` preserves the stable application ID and name. Preview Firebase configuration, if supplied, must explicitly match the preview package; the stable client's configuration is not reused.
 
 The release APK is under `app/build/outputs/apk/release/`. Without a configured release keystore, the build falls back to the debug signing key and warns; that is a sideload/testing artifact, not evidence of a production-signed release.
 
@@ -87,6 +105,9 @@ Feature modules cover connect, threads, chat, profiles, gateway and device UI. S
 
 - [Plugin implementation and setup](hermes-plugin/README.md)
 - [Product plan](docs/PLAN.md)
+- [Cyberpunk redesign plan](docs/design/cyberpunk-redesign.md)
+- [Cyberpunk implementation and verification](docs/reviews/2026-10-20-cyberpunk-redesign.md)
+- [Gateway integration coverage and limits](docs/design/gateway-integration-audit.md)
 - [Operator protocol](docs/protocol/operator.md)
 - [Mobile control](docs/protocol/mobile-control.md)
 - [Rooms](docs/protocol/rooms.md)

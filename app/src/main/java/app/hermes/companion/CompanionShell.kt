@@ -271,6 +271,7 @@ fun CompanionShell(
             .pointerInput(Unit) { detectTapGestures { focusManager.clearFocus() } },
     ) {
         var showProfileSheet by rememberSaveable { mutableStateOf(false) }
+        var showHostSheet by rememberSaveable { mutableStateOf(false) }
         var showModelSheet by rememberSaveable { mutableStateOf(false) }
         var showSettingsSheet by rememberSaveable { mutableStateOf(false) }
         var showComposerModels by remember(state.origin, state.activeProfileId, state.openSessionId) { mutableStateOf(false) }
@@ -318,13 +319,38 @@ fun CompanionShell(
             state = state,
             inChat = inChat,
             onCloseChat = onCloseChat,
-            onProfileTap = { changeConversation { showProfileSheet = true } },
             onOpenSettings = { showSettingsSheet = true },
             onSessionActions = { showSessionSheet = true },
             onNewRoom = { changeConversation(onNewRoom) }, onRefreshConversations = onRetrySessions,
+            onNewChat = { changeConversation(onNewThread) },
         )
+        if (!imeVisible) {
+            val contextModifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 12.dp)
+            val hostValue = state.hostName.ifBlank { state.origin.orEmpty().substringAfter("://") }
+            val agentValue = state.activeProfile?.displayName ?: state.activeProfileId ?: "Choose profile"
+            if (androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.5f) {
+                Column(contextModifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    app.hermes.companion.design.ContextControl("Host", hostValue,
+                        onClick = { showHostSheet = true }, modifier = Modifier.fillMaxWidth().testTag("context.host"), enabled = !state.loading)
+                    app.hermes.companion.design.ContextControl("Agent", agentValue,
+                        onClick = { showProfileSheet = true }, modifier = Modifier.fillMaxWidth().testTag("context.agent"),
+                        enabled = !state.loading && !state.sessionsLoading, accent = CompanionColor.Accent)
+                }
+            } else {
+                Row(contextModifier, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    app.hermes.companion.design.ContextControl("Host", hostValue,
+                        onClick = { showHostSheet = true }, modifier = Modifier.weight(1f).testTag("context.host"), enabled = !state.loading)
+                    app.hermes.companion.design.ContextControl("Agent", agentValue,
+                        onClick = { showProfileSheet = true }, modifier = Modifier.weight(1f).testTag("context.agent"),
+                        enabled = !state.loading && !state.sessionsLoading, accent = CompanionColor.Accent)
+                }
+            }
+        }
         Hairline()
         }
+        if (showHostSheet) HostSwitchSheet(state,
+            onSelect = { host -> showHostSheet = false; changeConversation { onSelectGateway(host) } },
+            onManage = { showHostSheet = false; onTab(MainTab.GATEWAY) }, onDismiss = { showHostSheet = false })
         if (showSessionSheet && !state.inRoom) {
             state.openSession?.takeUnless { app.hermes.companion.domain.DraftThread.isDraft(it) }?.let { session ->
                 app.hermes.companion.settings.SessionBottomSheet(
@@ -356,7 +382,7 @@ fun CompanionShell(
                 activeProfileId = state.activeProfileId,
                 onSelect = { id ->
                     showProfileSheet = false
-                    onSelectProfile(id)
+                    if (id != state.activeProfileId) changeConversation { onSelectProfile(id) }
                 },
                 onOpenAll = {
                     showProfileSheet = false
@@ -412,7 +438,10 @@ fun CompanionShell(
             )
         }
         state.pendingDeepLink?.let { req ->
-            DeepLinkStrip(req, onConfirmDeepLink, onDismissDeepLink)
+            DeepLinkStrip(req, {
+                if (WakeNavigationPolicy.requiresVoiceConfirmation(state, req)) changeConversation(onConfirmDeepLink)
+                else onConfirmDeepLink()
+            }, onDismissDeepLink)
             Hairline()
         }
         state.pendingPairLink?.let { req ->
@@ -615,7 +644,7 @@ fun CompanionShell(
                 MainTab.PROFILES -> ProfilesScreen(
                     profiles = state.profiles,
                     activeId = state.activeProfileId,
-                    onSelect = onSelectProfile,
+                    onSelect = { id -> if (id != state.activeProfileId) changeConversation { onSelectProfile(id) } },
                     switching = state.sessionsLoading,
                     hostName = state.hostName,
                     modifier = body,
@@ -623,6 +652,13 @@ fun CompanionShell(
                 MainTab.GATEWAY -> GatewayScreen(
                     status = state.status,
                     hud = state.hud,
+                    nativeChatConnected = state.gatewayHello != null,
+                    companionAvailability = state.companionAvailability,
+                    notifyGranted = state.notifyGranted,
+                    onEnableNotify = onEnableNotify,
+                    phoneStreamEnabled = state.notifStreamEnabled,
+                    onOpenChats = { onTab(MainTab.THREADS) },
+                    onOpenDevice = { onTab(MainTab.DEVICE) },
                     nativeVoiceStatus = state.nativeVoiceStatus,
                     hostMetrics = state.hostMetrics,
                     modelCatalog = state.modelCatalog,
@@ -637,7 +673,7 @@ fun CompanionShell(
                     onToggleStay = onToggleStay,
                     onSwitchModel = onSwitchModel,
                     onOpenModelPicker = { showModelSheet = true },
-                    onSelectGateway = onSelectGateway,
+                    onSelectGateway = { host -> changeConversation { onSelectGateway(host) } },
                     onAddGateway = onAddGateway,
                     onCheckUpdate = onCheckUpdate,
                     onApplyUpdate = onApplyUpdate,
@@ -845,11 +881,11 @@ private fun Header(
     state: CompanionState,
     inChat: Boolean,
     onCloseChat: () -> Unit,
-    onProfileTap: () -> Unit,
     onOpenSettings: () -> Unit = {},
     onSessionActions: () -> Unit = {},
     onNewRoom: () -> Unit = {},
     onRefreshConversations: () -> Unit = {},
+    onNewChat: () -> Unit = {},
 ) {
     var options by remember { mutableStateOf(false) }
     LaunchedEffect(inChat, state.tab) { options = false }
@@ -875,36 +911,31 @@ private fun Header(
                 app.hermes.companion.design.ControlIcon(app.hermes.companion.design.ControlGlyph.BACK)
             }
         }
-        val hostPrefix = if (inChat || state.hostName.isBlank()) "" else "${state.hostName} · "
         val title = when {
             inChat -> state.openRoom?.title
                 ?: state.openSession?.title ?: "chat"
             state.tab == MainTab.THREADS -> "Chats"
-            state.tab == MainTab.CONSOLE -> state.openAgent?.let { it.title.ifBlank { it.id } } ?: "Agents"
+            state.tab == MainTab.CONSOLE -> state.openAgent?.let { it.title.ifBlank { it.id } } ?: "Coding agents"
             state.tab == MainTab.REVIEW -> "Code review"
             state.tab == MainTab.REMINDERS -> "Schedules"
-            state.tab == MainTab.PROFILES -> "Profiles"
-            state.tab == MainTab.GATEWAY -> "Hosts"
+            state.tab == MainTab.PROFILES -> "Agent profiles"
+            state.tab == MainTab.GATEWAY -> "Gateway"
             else -> "Device"
         }
-        val meta = if (inChat) listOfNotNull(
-            active?.displayName?.takeIf { it.isNotBlank() },
-            state.hostName.takeIf { it.isNotBlank() },
-            "Draft".takeIf { state.openSession?.let(DraftThread::isDraft) == true },
-        ).joinToString(" · ") else listOfNotNull(state.hostName.takeIf { it.isNotBlank() }, active?.displayName?.takeIf { it.isNotBlank() }).joinToString(" · ")
         Column(verticalArrangement = Arrangement.Center, modifier = Modifier.weight(1f)
-            .heightIn(min = 48.dp).clickable(enabled = !inChat || !state.inRoom && app.hermes.companion.domain.DraftThread.isPersisted(state.openSessionId),
-                onClick = if (inChat) onSessionActions else onProfileTap)
+            .heightIn(min = 48.dp).then(if (inChat) Modifier.clickable(enabled = !state.inRoom && app.hermes.companion.domain.DraftThread.isPersisted(state.openSessionId),
+                onClick = onSessionActions) else Modifier)
             .testTag(if (inChat) "header.session.actions" else "header.profile")) {
+            if (!inChat) app.hermes.companion.design.SignalSignature(label = "HERMES / LINK")
             Text(
                 text = title + if (inChat && !state.inRoom) " ▾" else "",
                 style = if (inChat) CompanionType.Title else CompanionType.Display,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (meta.isNotBlank()) {
+            if (inChat && state.openSession?.let(DraftThread::isDraft) == true) {
                 Text(
-                    text = meta,
+                    text = "Draft · saved on first send",
                     style = CompanionType.Caption,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -913,6 +944,12 @@ private fun Header(
             }
         }
 
+        if (inChat || state.tab != MainTab.THREADS) {
+            androidx.compose.material3.IconButton(onClick = onNewChat, enabled = !state.loading && !state.creatingThread && state.activeProfileId != null,
+                modifier = Modifier.testTag("header.newchat").semantics { contentDescription = "New chat" }) {
+                app.hermes.companion.design.ControlIcon(app.hermes.companion.design.ControlGlyph.PLUS, CompanionColor.Signal)
+            }
+        }
         if (!inChat && state.tab == MainTab.THREADS) {
             Box {
                 androidx.compose.material3.IconButton(onClick = { options = true }, modifier = Modifier.testTag("threads.options")

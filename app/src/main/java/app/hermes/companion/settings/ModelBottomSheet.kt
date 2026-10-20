@@ -1,6 +1,9 @@
 package app.hermes.companion.settings
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -10,6 +13,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -33,6 +38,8 @@ fun ModelBottomSheet(
     var modelId by remember { mutableStateOf("") }
     var provider by remember { mutableStateOf("") }
     val current = currentModel.ifBlank { modelCatalog?.currentModel.orEmpty() }
+    val confirmedModel = modelCatalog?.currentModel.orEmpty()
+    val requestedModel = current.isNotBlank() && current != confirmedModel
     val catalog = modelCatalog?.models.orEmpty()
     val extra = profiles.mapNotNull { profile -> profile.model.trim().takeIf { it.isNotBlank() && catalog.none { row -> row.id == it } }
         ?.let { ModelOption(it, profile.id, "${profile.displayName} · $it") } }
@@ -44,9 +51,11 @@ fun ModelBottomSheet(
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
             SheetHeading("Choose model", onDismiss, closeModifier = Modifier.testTag("model.sheet.close"))
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Current model", style = CompanionType.Caption)
-                Text(current.ifBlank { "Host default" }, style = CompanionType.Body)
+            GroupSurface(padded = true) {
+                ProtocolStatus(if (requestedModel) "Requested model" else "Reported by host",
+                    current.ifBlank { "Model not reported" },
+                    tone = if (requestedModel || current.isBlank()) CompanionColor.TextDim else CompanionColor.Signal)
+                if (requestedModel) Text("The host catalog has not confirmed this selection.", style = CompanionType.Caption)
             }
             HairlineField(query, { query = it }, placeholder = "Search models or providers", modifier = Modifier.testTag("model.sheet.search"))
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
@@ -57,12 +66,11 @@ fun ModelBottomSheet(
                 models.forEach { (group, entries) ->
                     item { Text(group.ifBlank { "Provider not reported" }, style = CompanionType.Caption, modifier = Modifier.padding(vertical = 8.dp)) }
                     items(entries, key = { "${it.provider}/${it.id}" }) { model ->
-                        Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable { onSelectModel(model.id, model.provider) }
-                            .padding(vertical = 8.dp).testTag("model.sheet.item.${model.id}"),
-                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text(model.id, style = CompanionType.Body, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                            if (model.id == current && (modelCatalog?.currentProvider.isNullOrBlank() || model.provider == modelCatalog?.currentProvider)) Text("✓", color = CompanionColor.Signal)
-                        }
+                        val selected = !requestedModel && model.id == current &&
+                            (modelCatalog?.currentProvider.isNullOrBlank() || model.provider == modelCatalog?.currentProvider)
+                        ModelChoiceRow(model, selected = selected, enabled = !loading,
+                            modifier = Modifier.testTag("model.sheet.item.${model.id}"),
+                            onClick = { onSelectModel(model.id, model.provider) })
                     }
                 }
             }
@@ -73,6 +81,27 @@ fun ModelBottomSheet(
                 ActionButton("Apply model", { onSelectModel(modelId.trim(), provider.trim().ifBlank { "custom" }) }, enabled = modelId.isNotBlank(),
                     kind = ActionKind.PRIMARY, modifier = Modifier.testTag("model.sheet.custom.apply"))
             }
+        }
+    }
+}
+
+/** Both model choosers use the same readable, selectable control without altering selection ownership. */
+@Composable
+internal fun ModelChoiceRow(model: ModelOption, selected: Boolean, enabled: Boolean,
+    modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val shape = CutCornerShape(topEnd = 8.dp, bottomStart = 8.dp)
+    Row(modifier.fillMaxWidth().padding(vertical = 4.dp).clip(shape)
+        .background(if (selected) CompanionColor.SignalSubtle else CompanionColor.VoidElevated)
+        .border(1.dp, if (selected) CompanionColor.Signal else CompanionColor.CardBorder, shape)
+        .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
+        .heightIn(min = 64.dp).padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        RadioButton(selected = selected, onClick = null, enabled = enabled)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(model.id, style = CompanionType.Body, maxLines = 3, overflow = TextOverflow.Ellipsis,
+                color = if (enabled || selected) CompanionColor.Text else CompanionColor.TextMute)
+            if (selected) Text("Selected", style = CompanionType.Label, color = CompanionColor.Signal)
+            if (model.reasoning) Text("Reasoning", style = CompanionType.Caption)
         }
     }
 }

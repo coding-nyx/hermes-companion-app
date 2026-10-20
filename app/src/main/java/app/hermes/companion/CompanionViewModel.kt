@@ -24,7 +24,6 @@ import app.hermes.companion.domain.PairDeepLink
 import app.hermes.companion.domain.ProfileScope
 import app.hermes.companion.domain.SessionLists
 import app.hermes.companion.domain.ThreadSort
-import app.hermes.companion.domain.WakePing
 import app.hermes.companion.model.ChatAttachment
 import app.hermes.companion.model.ChatBlockKind
 import app.hermes.companion.model.ChatMessage
@@ -84,7 +83,7 @@ class CompanionViewModel(
         ).mirror(runtime.deviceNode.state.value),
     )
     val state: StateFlow<CompanionState> = _state
-    private var pendingWake: WakePing? = null
+    private val pendingWakeNavigation = PendingWakeNavigation()
     private var connectJob: Job? = null
     private var probeJob: Job? = null
     private var profileJob: Job? = null
@@ -172,9 +171,7 @@ class CompanionViewModel(
     }
 
     private val host = HostToolsController(clients, operatorCreds, _state, viewModelScope) { origin -> connect(origin) }
-    private val sync = SyncManager(clients, cache, sticky, operatorCreds, runtime, chat, _state, viewModelScope) { ping ->
-        if (ping.roomId.isNotBlank()) openRoomWake(ping.origin, ping.roomId) else openWake(ping.origin, ping.profile, ping.sessionId)
-    }
+    private val sync = SyncManager(clients, cache, sticky, operatorCreds, runtime, chat, _state, viewModelScope)
 
     init {
         viewModelScope.launch {
@@ -229,6 +226,7 @@ class CompanionViewModel(
     }
 
     fun resumeLocalDraft() {
+        pendingWakeNavigation.clear()
         cancelDictation(); readAloud.stop(); voiceStream.stopStream()
         if (_state.value.inRoom) rooms.closeRoom()
         chat.newThread()
@@ -269,44 +267,39 @@ class CompanionViewModel(
      * host switches operator host first; the wake is parked until that connect succeeds.
      */
     fun openWake(targetOrigin: String, profileId: String, sessionId: String) {
-        val active = _state.value.origin
+        pendingWakeNavigation.clear()
+        val snapshot = _state.value
+        val active = snapshot.origin
         val target = targetOrigin.trim().trimEnd('/').ifBlank { active.orEmpty() }
-        val ping = WakePing(type = "approval.request", sessionId = sessionId, profile = profileId, origin = target)
-        if (active.isNullOrBlank() || (target.isNotBlank() && !HostClientPool.key(target).equals(HostClientPool.key(active)))) {
-            pendingWake = ping
+        val request = DeepLinkRequest(profileId, sessionId, target)
+        if (WakeNavigationPolicy.requiresVoiceConfirmation(snapshot, request)) {
+            requestDeepLink(target, profileId, sessionId)
+            return
+        }
+        if (WakeNavigationPolicy.isCurrentConversation(snapshot, request)) {
+            _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = false) }
+            return
+        }
+        if (!WakeNavigationPolicy.sameHost(active, target)) {
+            pendingWakeNavigation.enqueue(request)
             if (target.isNotBlank()) connect(target)
             return
         }
-        val origin = active
-        viewModelScope.launch {
-            if (_state.value.activeProfileId != profileId) {
-                sticky.setProfile(origin, profileId)
-                val sessions = runCatching {
-                    cache.readSessions(origin, profileId) { chat.retainCreated(origin, profileId, client(origin).listSessions(origin, profileId, _state.value.showArchived)) }
-                }.getOrDefault(emptyList())
-                _state.update {
-                    it.copy(
-                        activeProfileId = profileId,
-                        sessions = SessionLists.normalize(sessions),
-                        tab = MainTab.THREADS,
-                    )
-                }
-                sync.startWatch(origin, profileId)
-                rooms.refreshRooms()
-            }
-            val session = _state.value.sessions.find { it.id == sessionId }
-                ?: SessionRef(
-                    id = sessionId,
-                    profileId = profileId,
-                    title = sessionId,
-                    updatedAtEpochMs = 0L,
-                    unread = true,
-                )
-            chat.openSession(session)
-        }
+        // Select the owner synchronously. The old suspended roster lookup could complete
+        // after a newer host/profile selection and write its sessions into that context.
+        // Existing managers checkpoint drafts and guard all subsequent history requests.
+        if (_state.value.activeProfileId != profileId) selectProfile(profileId)
+        val session = _state.value.sessions.find { it.id == sessionId && it.profileId == profileId }
+            ?: SessionRef(sessionId, profileId, sessionId, updatedAtEpochMs = 0L, unread = true)
+        openSession(session)
     }
 
-    /** Deep link from another app: park it until the user confirms. Own notifications call [openWake]. */
+    /** Trusted notification taps still respect an active voice conversation's ownership. */
+    fun openNotificationLink(origin: String, profileId: String, sessionId: String, roomId: String = "") {
+        if (roomId.isNotBlank()) openRoomWake(origin, roomId) else openWake(origin, profileId, sessionId)
+    }
+
+    /** Deep link from another app, or a voice-changing notification tap: wait for confirmation. */
     fun requestDeepLink(origin: String, profileId: String, sessionId: String, roomId: String = "") {
         _state.update { it.copy(pendingDeepLink = DeepLinkRequest(profileId, sessionId, origin, roomId)) }
     }
@@ -319,19 +312,34 @@ class CompanionViewModel(
 
     /** Room wake / deep link (A22.5): land on the room, switching host first when needed. */
     fun openRoomWake(targetOrigin: String, roomId: String) {
-        val active = _state.value.origin
+        pendingWakeNavigation.clear()
+        val snapshot = _state.value
+        val active = snapshot.origin
         val target = targetOrigin.trim().trimEnd('/').ifBlank { active.orEmpty() }
-        if (active.isNullOrBlank() || (target.isNotBlank() && !HostClientPool.key(target).equals(HostClientPool.key(active)))) {
-            pendingRoomWake = target to roomId
+        val request = DeepLinkRequest(snapshot.activeProfileId.orEmpty(), roomId, target, roomId)
+        if (WakeNavigationPolicy.requiresVoiceConfirmation(snapshot, request)) {
+            requestDeepLink(target, request.profileId, request.sessionId, roomId)
+            return
+        }
+        if (WakeNavigationPolicy.isCurrentConversation(snapshot, request)) {
+            _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = false) }
+            return
+        }
+        if (!WakeNavigationPolicy.sameHost(active, target)) {
+            pendingWakeNavigation.enqueue(request)
             if (target.isNotBlank()) connect(target)
             return
         }
-        chat.cancelTurn()
-        _state.update { it.copy(tab = MainTab.THREADS) }
+        cancelDictation(); readAloud.stop(); voiceStream.stopStream()
+        chat.cancelAll()
+        _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = false) }
         rooms.openRoomById(roomId)
     }
 
-    private var pendingRoomWake: Pair<String, String>? = null
+    private fun openPendingWake(origin: String) {
+        val request = pendingWakeNavigation.takeForHost(origin) ?: return
+        openNotificationLink(request.origin, request.profileId, request.sessionId, request.roomId)
+    }
 
     fun dismissDeepLink() {
         _state.update { it.copy(pendingDeepLink = null) }
@@ -357,6 +365,7 @@ class CompanionViewModel(
 
     /** Leave the active operator host: cancel sync/watch/fleet, clear session UI, stop stay-connected. */
     fun disconnect() {
+        pendingWakeNavigation.clear()
         connectJob?.cancel()
         connectJob = null
         chat.cancelAll()
@@ -465,6 +474,7 @@ class CompanionViewModel(
     }
 
     fun selectTab(tab: MainTab) {
+        pendingWakeNavigation.clear()
         cancelDictation()
         readAloud.stop()
         _state.update { it.copy(tab = tab, chatMinimized = true) }
@@ -710,6 +720,7 @@ class CompanionViewModel(
 
     // ---- chat: ChatSessionManager ----
     fun openSession(session: SessionRef) {
+        pendingWakeNavigation.clear()
         if (voiceStream.isActive && _state.value.openSessionId == session.id) { returnToVoiceConversation(); return }
         cancelDictation(); readAloud.stop(); voiceStream.stopStream()
         if (_state.value.inRoom) rooms.closeRoom()
@@ -717,6 +728,7 @@ class CompanionViewModel(
         chat.openSession(session)
     }
     fun closeChat() {
+        pendingWakeNavigation.clear()
         if (voiceStream.isActive) {
             cancelDictation()
             _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = true) }
@@ -731,6 +743,7 @@ class CompanionViewModel(
     // ---- Agent rooms (P21) ----
     fun refreshRooms() = rooms.refreshRooms()
     fun openRoom(room: RoomRef) {
+        pendingWakeNavigation.clear()
         _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = false) }
         voiceStream.stopStream()
         readAloud.stop()
@@ -769,7 +782,7 @@ class CompanionViewModel(
     fun unlinkPeer(name: String) = rooms.unlinkPeer(name)
     fun loadOlder() = chat.loadOlder()
     fun respondApproval(decision: String) = if (_state.value.inRoom) rooms.respondApproval(decision) else chat.respondApproval(decision)
-    fun newThread() { _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = false) }; cancelDictation(); readAloud.stop(); voiceStream.stopStream(); if (_state.value.inRoom) rooms.closeRoom(); chat.createThread() }
+    fun newThread() { pendingWakeNavigation.clear(); _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = false) }; cancelDictation(); readAloud.stop(); voiceStream.stopStream(); if (_state.value.inRoom) rooms.closeRoom(); chat.createThread() }
     fun requestDelete(session: SessionRef) = chat.requestDelete(session)
     fun retryMessage(id: String) { if (_state.value.inRoom) rooms.retryMessage(id) else chat.retryMessage(id) }
     fun renameSession(title: String) = chat.updateSession(title = title)
@@ -859,6 +872,7 @@ class CompanionViewModel(
 
     fun connect(originOverride: String? = null) {
         val origin = OriginPolicy.canonicalize(originOverride ?: _state.value.originInput)
+        pendingWakeNavigation.connectingTo(origin)
         if (origin.isBlank()) {
             _state.update { it.copy(loading = false, error = "origin required") }
             return
@@ -968,6 +982,7 @@ class CompanionViewModel(
                     },
                 )
                 _state.update {
+                    if (cached.isNotEmpty()) return@update it.finishConnectionRoster(origin, active.id, sessions)
                     val switched = it.origin != origin
                     it.copy(
                         loading = false,
@@ -985,8 +1000,9 @@ class CompanionViewModel(
                         hud = hud,
                     ).let { next -> if (switched) next.dropHostScoped() else next }
                 }
+                if (_state.value.origin != origin) return@launch
                 sync.startHud(origin)
-                sync.startWatch(origin, active.id)
+                sync.startWatch(origin, _state.value.activeProfileId ?: active.id)
                 deviceNode.bind(origin)
                 rooms.refreshRooms()
                 rooms.refreshPeers()
@@ -998,13 +1014,7 @@ class CompanionViewModel(
                 host.loadVoiceStatus()
                 host.loadSavedGateways()
                 StayConnectedService.refresh(runtime)
-                pendingRoomWake?.let { (_, roomId) ->
-                    pendingRoomWake = null
-                    rooms.openRoomById(roomId)
-                } ?: pendingWake?.let { wake ->
-                    pendingWake = null
-                    openWake(wake.origin, wake.profile, wake.sessionId)
-                } ?: Unit
+                openPendingWake(origin)
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 _state.update {
@@ -1023,6 +1033,7 @@ class CompanionViewModel(
     }
 
     fun selectProfile(profileId: String) {
+        pendingWakeNavigation.clear()
         val origin = _state.value.origin ?: return
         if (profileId == _state.value.activeProfileId) return
         profileJob?.cancel()

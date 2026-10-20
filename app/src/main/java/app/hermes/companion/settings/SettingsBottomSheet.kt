@@ -36,6 +36,7 @@ fun SettingsBottomSheet(
     var page by rememberSaveable(state.origin) { mutableStateOf("Settings") }
     var confirmDisconnect by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
+    var decorativeMotion by remember { mutableStateOf(CompanionAppearance.motionEnabled(context)) }
     ModalBottomSheet(onDismissRequest = { if (page == "Settings") onDismiss() else page = "Settings" }, sheetState = sheetState,
         containerColor = CompanionColor.Void, contentColor = CompanionColor.Text,
         modifier = Modifier.testTag("settings.sheet")) {
@@ -93,15 +94,20 @@ fun SettingsBottomSheet(
                         if (state.keepA11yAvailable) PreferenceToggle("Keep screen control ready", state.keepA11yOn, onToggleKeepA11y,
                             summary = "Re-enable accessibility if it drops out. This does not arm Hands.", modifier = Modifier.testTag("settings.keep_a11y"))
                     }
-                    GroupedSection("Notification topic", padded = true) {
-                        HairlineField(state.ntfyTopic, onNtfyTopicChange, placeholder = "Topic name", onDone = onSaveNtfy,
+                    GroupedSection("Notification topic URL", padded = true) {
+                        Text("Use the full URL configured on your Hermes relay. Save it for this exact host address; after upgrading, re-save any existing topic once. Delivery depends on the host publisher and background connection.", style = CompanionType.Caption)
+                        HairlineField(state.ntfyTopic, onNtfyTopicChange, placeholder = "https://ntfy.example/your-topic", onDone = onSaveNtfy,
                             modifier = Modifier.testTag("settings.ntfy.input"))
                         ActionButton("Save topic", onSaveNtfy, modifier = Modifier.testTag("settings.ntfy.save"), kind = ActionKind.PRIMARY)
                     }
                 }
                 "Appearance & readability" -> {
                     GroupedSection("Appearance") {
-                        PreferenceRow("Theme", "Follow device appearance")
+                        PreferenceRow("Theme", "Neon / ink · follows device appearance")
+                        PreferenceToggle("Decorative motion", decorativeMotion, {
+                            decorativeMotion = !decorativeMotion
+                            CompanionAppearance.setMotionEnabled(context, decorativeMotion)
+                        }, summary = "Optional signal effects. Off by default; Android Remove animations always overrides this.", modifier = Modifier.testTag("settings.motion"))
                         PreferenceRow("Text size", "Follow Android font size", onClick = {
                             context.startActivity(android.content.Intent(android.provider.Settings.ACTION_DISPLAY_SETTINGS))
                         })

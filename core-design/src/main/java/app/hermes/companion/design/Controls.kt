@@ -76,12 +76,13 @@ fun ActionButton(
     }
     val fg = if (!active) CompanionColor.TextMute else if (kind == ActionKind.PRIMARY) CompanionColor.Void else accent
     val bg = if (kind == ActionKind.PRIMARY && active) CompanionColor.Signal else Color.Transparent
-    val shape = RoundedCornerShape(CompanionSpace.RadiusSmall)
+    val shape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 7.dp, bottomStart = 7.dp)
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .clip(shape)
             .background(bg)
+            .border(1.dp, if (kind == ActionKind.PRIMARY && active) accent else CompanionColor.LineStrong, shape)
             .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
             .clickable(enabled = active, role = Role.Button, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 12.dp),

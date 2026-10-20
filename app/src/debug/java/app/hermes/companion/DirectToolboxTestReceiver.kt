@@ -150,6 +150,6 @@ class DirectToolboxTestReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "DirectToolboxTest"
-        const val ACTION = "app.hermes.companion.test.L0"
+        const val ACTION = BuildConfig.APPLICATION_ID + ".test.L0"
     }
 }

@@ -949,14 +949,13 @@ private fun RewindStrip(onCancel: () -> Unit) {
 @Composable
 private fun ApprovalStrip(prompt: ApprovalPrompt, onApproval: (String) -> Unit, busy: Boolean) {
     val kind = prompt.kind.uppercase()
-    val stripShape = RoundedCornerShape(12.dp)
-    val btnShape = RoundedCornerShape(8.dp)
+    val stripShape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 12.dp, bottomStart = 12.dp)
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Xs)
             .clip(stripShape)
-            .border(CompanionSpace.Hairline, CompanionColor.Warn.copy(alpha = 0.5f), stripShape)
+            .border(CompanionSpace.Hairline, CompanionColor.Warn, stripShape)
 
             .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md)
             .testTag("chat.approval"),
@@ -982,19 +981,12 @@ private fun ApprovalStrip(prompt: ApprovalPrompt, onApproval: (String) -> Unit, 
                     else -> choice.uppercase()
                 }
                 val tag = if (deny) "chat.approval.deny" else "chat.approval.${choice.lowercase()}"
-                val color = if (deny) CompanionColor.Danger else CompanionColor.Signal
-                val bg = if (deny) CompanionColor.Danger.copy(alpha = 0.15f) else CompanionColor.SignalDim
-                Text(
-                    text = label,
-                    style = CompanionType.Caption.copy(color = color, fontWeight = FontWeight.Bold),
-                    modifier = Modifier
-                        .testTag(if (deny) "chat.approval.deny" else if (label == "ALLOW") "chat.approval.allow" else tag)
-                        .clip(btnShape)
-
-                        .background(bg)
-                        .clickable(enabled = !busy) { onApproval(choice) }
-                        .heightIn(min = 48.dp)
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                app.hermes.companion.design.ActionButton(
+                    label = label,
+                    onClick = { onApproval(choice) },
+                    enabled = !busy,
+                    kind = if (deny) app.hermes.companion.design.ActionKind.DANGER else app.hermes.companion.design.ActionKind.GHOST,
+                    modifier = Modifier.testTag(if (deny) "chat.approval.deny" else if (label == "ALLOW") "chat.approval.allow" else tag),
                 )
             }
         }

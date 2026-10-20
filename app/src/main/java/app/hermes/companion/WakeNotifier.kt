@@ -75,7 +75,7 @@ object WakeNotifier {
         val hostName = app.hostName(ping.origin)
         val channel = NotificationPolicy.channelFor(ping.type)
         val group = NotificationPolicy.groupKey(ping.origin)
-        val id = NotificationPolicy.notificationId(ping.origin, ping.sessionId, ping.roomId)
+        val id = NotificationPolicy.notificationId(ping.origin, ping.sessionId, ping.roomId, ping.profile)
         val body = NotificationPolicy.body(ping.type, snippet, ping.roomId, ping.sessionId)
 
         val person = Person.Builder()
@@ -146,7 +146,7 @@ object WakeNotifier {
     /** Forget a thread's notification, so the group count stops including it. */
     fun clear(context: Context, ping: WakePing) {
         val group = NotificationPolicy.groupKey(ping.origin)
-        val id = NotificationPolicy.notificationId(ping.origin, ping.sessionId, ping.roomId)
+        val id = NotificationPolicy.notificationId(ping.origin, ping.sessionId, ping.roomId, ping.profile)
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         nm.cancel(id)
         val remaining = synchronized(live) {

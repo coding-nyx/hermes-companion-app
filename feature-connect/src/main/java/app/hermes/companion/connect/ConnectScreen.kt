@@ -129,10 +129,15 @@ fun ConnectScreen(
         Spacer(Modifier.height(CompanionSpace.Md))
         Text(text = "Connect to Hermes", style = CompanionType.Display)
         Spacer(Modifier.height(CompanionSpace.Xs))
-        Text(text = "Hermes Companion", style = CompanionType.Caption)
+        SignalSignature(label = "YOUR AGENT. YOUR HOST.")
         Spacer(Modifier.height(CompanionSpace.Md))
         Hairline(Modifier.width(96.dp))
         Spacer(Modifier.height(CompanionSpace.Xl))
+        GroupSurface(padded = true) {
+            ProtocolStatus("Native dashboard", "Chat first. Pair only for phone tools.")
+            Text("Connect to your Hermes dashboard (usually port 9119). The optional companion relay adds rooms, phone control and notification sharing.", style = CompanionType.Caption)
+        }
+        Spacer(Modifier.height(CompanionSpace.Lg))
         if (gateways.isNotEmpty()) {
             GatewayRail(
                 origin = origin,
@@ -221,7 +226,7 @@ fun ConnectScreen(
             kind = ActionKind.PRIMARY,
             enabled = origin.isNotBlank(),
             onClick = onConnect,
-            modifier = Modifier.testTag("connect.go"),
+            modifier = Modifier.fillMaxWidth().testTag("connect.go"),
         )
         if (!error.isNullOrBlank()) {
             Spacer(Modifier.height(CompanionSpace.Lg))

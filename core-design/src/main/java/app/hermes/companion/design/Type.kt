@@ -7,8 +7,8 @@ import androidx.compose.ui.unit.sp
 
 /** One sans family for the interface; monospace is reserved for code and exact machine values. */
 object CompanionType {
-    val Display get() = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium,
-        fontSize = 24.sp, lineHeight = 30.sp, letterSpacing = (-0.5).sp, color = CompanionColor.Text)
+    val Display get() = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold,
+        fontSize = 28.sp, lineHeight = 34.sp, letterSpacing = (-0.5).sp, color = CompanionColor.Text)
     val Title get() = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium,
         fontSize = 18.sp, lineHeight = 24.sp, color = CompanionColor.Text)
     val Body get() = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Normal,

@@ -37,7 +37,7 @@ fun BootScreen(modifier: Modifier = Modifier) {
         Spacer(Modifier.height(CompanionSpace.Md))
         Hairline(Modifier.width(96.dp))
         Spacer(Modifier.height(CompanionSpace.Md))
-        Text(text = "companion // void", style = CompanionType.Mono)
+        SignalSignature(label = "COMPANION / ESTABLISHING LINK")
     }
 }
 

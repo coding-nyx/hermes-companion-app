@@ -37,6 +37,10 @@ import androidx.compose.ui.unit.dp
 /** Blinking 7×13 signal block — same cursor the transcript uses while streaming. */
 @Composable
 fun SignalCursor(modifier: Modifier = Modifier, active: Boolean = true) {
+    if (!LocalCompanionMotion.current || !active) {
+        Box(modifier.width(7.dp).height(13.dp).background(CompanionColor.Signal))
+        return
+    }
     val transition = rememberInfiniteTransition(label = "cursor")
     val blink by transition.animateFloat(
         initialValue = 1f,
@@ -58,6 +62,10 @@ fun SignalCursor(modifier: Modifier = Modifier, active: Boolean = true) {
 /** Blinking signal dot — "something is live here" marker for rows and pills. */
 @Composable
 fun LiveDot(modifier: Modifier = Modifier, color: Color = CompanionColor.Signal, size: Dp = 6.dp) {
+    if (!LocalCompanionMotion.current) {
+        Box(modifier.size(size).background(color, CircleShape))
+        return
+    }
     val transition = rememberInfiniteTransition(label = "live")
     val blink by transition.animateFloat(
         initialValue = 1f,
@@ -78,6 +86,10 @@ fun LiveDot(modifier: Modifier = Modifier, color: Color = CompanionColor.Signal,
 /** Three-step ellipsis that walks `·  ` → `·· ` → `···` — waiting-on-agent cue. */
 @Composable
 fun WalkingEllipsis(color: Color = CompanionColor.Signal, modifier: Modifier = Modifier) {
+    if (!LocalCompanionMotion.current) {
+        Text("···", style = CompanionType.Caption.copy(color = color), modifier = modifier)
+        return
+    }
     val transition = rememberInfiniteTransition(label = "ellipsis")
     val step by transition.animateFloat(
         initialValue = 0f,
@@ -99,7 +111,7 @@ fun WalkingEllipsis(color: Color = CompanionColor.Signal, modifier: Modifier = M
 /** Hairline with a signal sliver that travels the void — in-flight fetch cue. */
 @Composable
 fun Scanline(modifier: Modifier = Modifier, active: Boolean = true) {
-    if (!active) {
+    if (!active || !LocalCompanionMotion.current) {
         Hairline(modifier)
         return
     }
@@ -226,8 +238,9 @@ fun FetchSkeleton(
     lines: Int = 5,
     padded: Boolean = true,
 ) {
+    val pulse = if (LocalCompanionMotion.current) {
     val transition = rememberInfiniteTransition(label = "skel")
-    val pulse by transition.animateFloat(
+    val animated by transition.animateFloat(
         initialValue = 0.28f,
         targetValue = 0.7f,
         animationSpec = infiniteRepeatable(
@@ -236,6 +249,8 @@ fun FetchSkeleton(
         ),
         label = "skel.pulse",
     )
+    animated
+    } else .6f
     val fracs = listOf(0.82f, 0.61f, 0.9f, 0.44f, 0.73f)
     Column(
         modifier = Modifier

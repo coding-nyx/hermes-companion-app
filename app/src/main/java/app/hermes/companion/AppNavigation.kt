@@ -36,7 +36,7 @@ import app.hermes.companion.model.DeviceArm
 import app.hermes.companion.model.HudState
 
 internal enum class NavigationDestination(val label: String, val tab: MainTab?) {
-    CHATS("Chats", MainTab.THREADS), AGENTS("Agents", MainTab.CONSOLE),
+    CHATS("Chats", MainTab.THREADS), GATEWAY("Gateway", MainTab.GATEWAY),
     DEVICE("Device", MainTab.DEVICE), MORE("More", null),
 }
 
@@ -58,7 +58,7 @@ internal fun AppNavigationBar(state: CompanionState, inChat: Boolean, onTab: (Ma
             Row(Modifier.weight(2f), verticalAlignment = Alignment.Bottom) {
                 NavigationDestination.entries.take(2).forEach { destination ->
                     NavigationItem(state, destination, selected, onTab, onMore,
-                        Modifier.weight(if (largeText && destination == selected) 2f else 1f),
+                        Modifier.weight(1f),
                         showLabel = !largeText || destination == selected)
                 }
             }
@@ -66,7 +66,7 @@ internal fun AppNavigationBar(state: CompanionState, inChat: Boolean, onTab: (Ma
             Row(Modifier.weight(2f), verticalAlignment = Alignment.Bottom) {
                 NavigationDestination.entries.drop(2).forEach { destination ->
                     NavigationItem(state, destination, selected, onTab, onMore,
-                        Modifier.weight(if (largeText && destination == selected) 2f else 1f),
+                        Modifier.weight(1f),
                         showLabel = !largeText || destination == selected)
                 }
             }
@@ -83,7 +83,7 @@ private fun NavigationItem(state: CompanionState, destination: NavigationDestina
     val status = when (destination) {
         NavigationDestination.CHATS -> if (state.visibleSessions.any { it.unread } || state.unreadRooms.isNotEmpty()) "Unread conversations" else null
         NavigationDestination.DEVICE -> if (state.arm != DeviceArm.DISARMED) "Hands armed" else null
-        NavigationDestination.MORE -> if (state.hud.gateway == HudState.OFF) "Check host status" else null
+        NavigationDestination.GATEWAY -> if (state.hud.gateway == HudState.OFF) "Check host status" else null
         else -> null
     }
     val itemModifier = modifier.heightIn(min = if (horizontal) 56.dp else 64.dp)
@@ -93,14 +93,15 @@ private fun NavigationItem(state: CompanionState, destination: NavigationDestina
         .semantics { contentDescription = destination.label; if (status != null) stateDescription = status }
     val content: @Composable () -> Unit = {
         Box(Modifier.size(if (horizontal) 40.dp else 46.dp, 28.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(androidx.compose.foundation.shape.CutCornerShape(topEnd = 7.dp, bottomStart = 7.dp))
+            .background(if (active) CompanionColor.SignalDim else Color.Transparent)
             , contentAlignment = Alignment.Center) {
             NavigationIcon(destination, color)
             if (status != null) Box(Modifier.align(Alignment.TopEnd).padding(3.dp).size(6.dp)
                 .background(if (destination == NavigationDestination.CHATS) CompanionColor.Signal else CompanionColor.Warn, RoundedCornerShape(3.dp)))
         }
         if (showLabel) Text(destination.label, style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp, letterSpacing = 0.sp, lineHeight = 18.sp), color = color,
-            maxLines = 1, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            maxLines = 2, softWrap = true, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }
     if (horizontal) Row(itemModifier, verticalAlignment = Alignment.CenterVertically,
@@ -116,7 +117,7 @@ private fun VoiceNavigationAction(active: Boolean, onClick: () -> Unit, modifier
         .combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onDictate, onLongClickLabel = "Dictate message").testTag("nav.voice")
         .semantics { contentDescription = if (active) "Open voice controls" else "Start voice conversation" }
     val icon: @Composable () -> Unit = {
-        Box(Modifier.size(54.dp).clip(CircleShape).background(CompanionColor.Signal), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(54.dp).clip(androidx.compose.foundation.shape.CutCornerShape(topEnd = 13.dp, bottomStart = 13.dp)).background(CompanionColor.Signal), contentAlignment = Alignment.Center) {
             VoiceControlIcon(VoiceControlGlyph.WAVE, CompanionColor.Void)
         }
     }
@@ -145,11 +146,13 @@ private fun NavigationIcon(destination: NavigationDestination, color: Color) {
                     drawLine(color, Offset(7f, 8f), Offset(17f, 8f), 1.8f, StrokeCap.Round)
                     drawLine(color, Offset(7f, 13f), Offset(14f, 13f), 1.8f, StrokeCap.Round)
                 }
-                NavigationDestination.AGENTS -> {
-                    drawRoundRect(color, Offset(2f, 4f), Size(20f, 16f), CornerRadius(3f), style = stroke)
-                    val prompt = Path().apply { moveTo(6f, 9f); lineTo(9f, 12f); lineTo(6f, 15f) }
-                    drawPath(prompt, color, style = stroke)
-                    drawLine(color, Offset(12f, 15f), Offset(17f, 15f), 1.8f, StrokeCap.Round)
+                NavigationDestination.GATEWAY -> {
+                    listOf(3f, 14f).forEach { y ->
+                        drawRoundRect(color, Offset(3f, y), Size(18f, 7f), CornerRadius(1.5f), style = stroke)
+                        drawCircle(color, 1f, Offset(7f, y + 3.5f))
+                        drawLine(color, Offset(12f, y + 3.5f), Offset(17f, y + 3.5f), 1.8f, StrokeCap.Round)
+                    }
+                    drawLine(color, Offset(12f, 10f), Offset(12f, 14f), 1.8f, StrokeCap.Round)
                 }
                 NavigationDestination.DEVICE -> {
                     drawRoundRect(color, Offset(6f, 2f), Size(12f, 20f), CornerRadius(3f), style = stroke)
@@ -165,8 +168,8 @@ internal data class MoreDestination(val tab: MainTab, val label: String, val des
 internal val moreDestinations = listOf(
     MoreDestination(MainTab.REVIEW, "Code review", "Changes, files and commits"),
     MoreDestination(MainTab.REMINDERS, "Schedules", "Scheduled jobs and reminders"),
-    MoreDestination(MainTab.GATEWAY, "Hosts", "Connections, health and models"),
-    MoreDestination(MainTab.PROFILES, "Profiles", "Choose a Hermes profile"),
+    MoreDestination(MainTab.CONSOLE, "Coding agents", "Agent terminals and coding sessions"),
+    MoreDestination(MainTab.PROFILES, "Agent profiles", "Choose your Hermes assistant"),
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

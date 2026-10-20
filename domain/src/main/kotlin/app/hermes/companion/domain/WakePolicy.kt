@@ -37,6 +37,41 @@ object WakePolicy {
 
     fun isRoom(type: String): Boolean = type in ROOM_TYPES
 
+    /** An external topic publisher cannot change the host of a trusted notification tap. */
+    fun parseForSubscription(raw: String, subscribedOrigin: String): WakePing? {
+        if (subscribedOrigin.isBlank()) return null
+        return parse(raw, subscribedOrigin)?.copy(origin = subscribedOrigin.trim().trimEnd('/'))
+    }
+
+    /** Notification ownership includes the reverse-proxy path, unlike fleet/display host keys. */
+    fun topicOwnerKey(origin: String): String? = runCatching {
+        val trimmed = origin.trim()
+        require(trimmed.isNotEmpty())
+        // Parse before removing trailing path slashes: "https://" must not become "http://https".
+        val uri = java.net.URI(if ("://" in trimmed) trimmed else "http://$trimmed").normalize()
+        val scheme = uri.scheme?.lowercase()
+        require(scheme in setOf("http", "https") && !uri.host.isNullOrBlank())
+        require(uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null)
+        val port = uri.port.takeUnless { it == -1 || scheme == "http" && it == 80 || scheme == "https" && it == 443 }
+        "$scheme://${uri.host.lowercase()}${port?.let { ":$it" }.orEmpty()}${uri.rawPath.orEmpty().trimEnd('/')}"
+    }.getOrNull()
+
+    /** Only explicitly saved exact-owner topics may subscribe; never guess a legacy path owner. */
+    fun subscriptionTargets(
+        storedTopics: Map<String, String>,
+        knownOrigins: List<String>,
+        activeOrigin: String?,
+    ): Map<String, String> {
+        val known = (knownOrigins + listOfNotNull(activeOrigin)).mapNotNull(::topicOwnerKey).toSet()
+        return buildMap {
+            for ((stored, topic) in storedTopics) {
+                if (topic.isBlank()) continue
+                val key = topicOwnerKey(stored) ?: continue
+                if (key in known) put(key, topic)
+            }
+        }
+    }
+
     /** Short human label for a wake notification title. */
     fun label(type: String): String = when (type) {
         "room.quiet" -> "room went quiet"
@@ -47,10 +82,14 @@ object WakePolicy {
     }
 
     fun sseUrl(topic: String): String? {
-        val t = topic.trim().trimEnd('/')
-        if (t.isBlank()) return null
-        if (!t.startsWith("http://") && !t.startsWith("https://")) return null
-        return if (t.endsWith("/sse")) t else "$t/sse"
+        val t = topic.trim()
+        val uri = runCatching { java.net.URI(t) }.getOrNull() ?: return null
+        if (uri.scheme?.lowercase() !in setOf("http", "https") || uri.host.isNullOrBlank()) return null
+        // Append to the path, not to a filter/auth query; keep existing percent-encoding intact.
+        val withoutFragment = t.substringBefore('#')
+        val address = withoutFragment.substringBefore('?').trimEnd('/')
+        val query = if ('?' in withoutFragment) "?" + withoutFragment.substringAfter('?') else ""
+        return (if (address.endsWith("/sse")) address else "$address/sse") + query
     }
 
     fun deepLink(sessionId: String, profile: String, origin: String = "", roomId: String = ""): String {

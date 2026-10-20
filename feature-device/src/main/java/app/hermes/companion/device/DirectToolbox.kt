@@ -14,6 +14,7 @@ import android.os.Build
 import android.provider.Settings
 import android.util.DisplayMetrics
 import android.view.WindowManager
+import app.hermes.companion.domain.DeviceLanePolicy
 import java.util.Locale
 
 /**
@@ -340,13 +341,12 @@ object DirectToolbox {
      * and which component is currently bound. Pure read; does not require NLS to be on.
      */
     fun nlsStatus(ctx: Context): Map<String, Any?> {
-        val pkg = ctx.packageName
         val enabled = Settings.Secure.getString(ctx.contentResolver, "enabled_notification_listeners").orEmpty()
-        val component = "$pkg/$pkg.device.CompanionNotificationListener"
-        val bound = enabled.split(":").any { it.equals(component, ignoreCase = true) }
+        val component = android.content.ComponentName(ctx, CompanionNotificationListener::class.java)
+        val bound = DeviceLanePolicy.componentEnabled(enabled, component.packageName, component.className)
         return mapOf(
             "nls_bound" to bound,
-            "listener_component" to component,
+            "listener_component" to component.flattenToString(),
             "enabled_listeners" to enabled,
         )
     }
