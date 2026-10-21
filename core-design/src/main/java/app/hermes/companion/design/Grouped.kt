@@ -33,7 +33,7 @@ fun GroupedSection(
 
 @Composable
 fun GroupSurface(modifier: Modifier = Modifier, padded: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
-    val shape = RoundedCornerShape(16.dp)
+    val shape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 12.dp, bottomStart = 12.dp)
     Column(modifier.fillMaxWidth().clip(shape).background(CompanionColor.VoidElevated)
         .border(1.dp, CompanionColor.CardBorder, shape)
         .then(if (padded) Modifier.padding(16.dp) else Modifier),
@@ -86,9 +86,9 @@ fun PreferenceToggle(title: String, on: Boolean, onToggle: () -> Unit, modifier:
 @Composable
 fun SheetHeading(title: String, onClose: () -> Unit, modifier: Modifier = Modifier, onBack: (() -> Unit)? = null, closeModifier: Modifier = Modifier) {
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (onBack != null) IconButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "Back" }) { ControlIcon(ControlGlyph.BACK) }
+        if (onBack != null) IconButton(onClick = onBack, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "Back" }) { ControlIcon(ControlGlyph.BACK) }
         Text(title, style = CompanionType.Display, modifier = Modifier.weight(1f))
-        IconButton(onClick = onClose, modifier = closeModifier.semantics { contentDescription = "Close" }) {
+        IconButton(onClick = onClose, modifier = closeModifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "Close" }) {
             androidx.compose.foundation.layout.Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
                 ControlIcon(ControlGlyph.CLOSE)
             }

@@ -102,4 +102,62 @@ class HostScopedStoresTest {
         sticky.lastGoodOrigin = "http://lab:9120"
         assertEquals("http://lab:9120", sticky.lastGoodOrigin)
     }
+
+    @Test
+    fun notificationTopicNeverFallsBackToAnotherHostsOrLegacyGlobalTopic() {
+        val sticky = StickyStore(RuntimeEnvironment.getApplication())
+        sticky.setNtfyTopic("https://configured.example", "https://ntfy.example/configured")
+        assertEquals("https://ntfy.example/configured", sticky.ntfyTopicFor("https://configured.example"))
+        assertNull(sticky.ntfyTopicFor("https://never-configured.example"))
+        sticky.ntfyTopic = "https://ntfy.example/legacy"
+        assertNull(sticky.ntfyTopicFor("https://never-configured.example"))
+        sticky.setNtfyTopic("https://configured.example", null)
+        assertNull(sticky.ntfyTopicFor("https://configured.example"))
+    }
+
+    @Test
+    fun notificationTopicsAreIsolatedBetweenProxyPathsOnTheSameAuthority() {
+        prefs("companion.sticky")
+        val sticky = StickyStore(RuntimeEnvironment.getApplication())
+        val first = "https://gateway.example/assistant-a"
+        val second = "https://gateway.example/assistant-b"
+        sticky.setNtfyTopic(first, "https://ntfy.example/a")
+        assertNull(sticky.ntfyTopicFor(second))
+        assertNull(sticky.ntfyTopicFor("https://gateway.example"))
+        sticky.setNtfyTopic(second, "https://ntfy.example/b")
+        assertEquals("https://ntfy.example/a", sticky.ntfyTopicFor("https://GATEWAY.example:443/assistant-a/"))
+        assertEquals("https://ntfy.example/b", sticky.ntfyTopicFor(second))
+        assertEquals(mapOf(first to "https://ntfy.example/a", second to "https://ntfy.example/b"), sticky.ntfyHosts())
+        sticky.setNtfyTopic(second, null)
+        assertNull(sticky.ntfyTopicFor(second))
+        assertEquals(mapOf(first to "https://ntfy.example/a"), sticky.ntfyHosts())
+    }
+
+    @Test
+    fun legacyAuthorityTopicsAreRetainedButNeverAdoptedWithoutAnExplicitSave() {
+        val p = prefs("companion.sticky")
+        p.edit().putString("ntfy_topic", "https://ntfy.example/global")
+            .putString("ntfy_topic.https://gateway.example", "https://ntfy.example/legacy").commit()
+        val sticky = StickyStore(RuntimeEnvironment.getApplication())
+        listOf("https://gateway.example", "https://gateway.example/a", "https://gateway.example/b").forEach {
+            assertNull(sticky.ntfyTopicFor(it))
+        }
+        assertTrue(sticky.ntfyHosts().isEmpty())
+        sticky.setNtfyTopic("https://gateway.example/a", "https://ntfy.example/confirmed")
+        assertNull(sticky.ntfyTopicFor("https://gateway.example/b"))
+        assertEquals(mapOf("https://gateway.example/a" to "https://ntfy.example/confirmed"), sticky.ntfyHosts())
+        assertEquals("https://ntfy.example/legacy", p.getString("ntfy_topic.https://gateway.example", null))
+        assertEquals("https://ntfy.example/global", sticky.ntfyTopic)
+    }
+
+    @Test
+    fun invalidNotificationOwnersCannotCreateSubscriptions() {
+        prefs("companion.sticky")
+        val sticky = StickyStore(RuntimeEnvironment.getApplication())
+        listOf("", "https://user:password@gateway.example/a", "https://gateway.example/a?token=secret").forEach {
+            sticky.setNtfyTopic(it, "https://ntfy.example/topic")
+            assertNull(sticky.ntfyTopicFor(it))
+        }
+        assertTrue(sticky.ntfyHosts().isEmpty())
+    }
 }

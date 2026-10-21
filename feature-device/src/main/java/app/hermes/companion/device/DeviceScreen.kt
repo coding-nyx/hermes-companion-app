@@ -34,6 +34,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -105,6 +109,8 @@ fun DeviceScreen(
     var labelDraft by rememberSaveable(deviceId, deviceLabel) { mutableStateOf(deviceLabel) }
     val dismissKeyboard = rememberDismissKeyboard()
     val armed = arm != DeviceArm.DISARMED
+    val permissionCount = listOf(a11yBound, overlayGranted, notifyGranted).count { it }
+    val streamStatus = notificationStreamStatus(notifStreamEnabled, nlsBound)
     Column(modifier.fillMaxSize().background(CompanionColor.Void).testTag("device.surface")
         .verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(32.dp)) {
         when (phase) {
@@ -133,16 +139,27 @@ fun DeviceScreen(
                 }
             }
             PairingPhase.PAIRED -> {
-                GroupedSection("Your phone") {
+                Text("Your phone. Your permissions.", style = CompanionType.Caption)
+                GroupSurface {
                     PreferenceRow(deviceLabel.ifBlank { "This Android phone" }, "Paired · ${deviceProfileId ?: "Current profile"}",
-                        value = if (laneOpen) "Connected" else "Connecting", selected = laneOpen,
+                        value = if (laneOpen) "Connected" else "Reconnecting", selected = laneOpen,
                         onClick = { detail = "This phone" }, modifier = Modifier.testTag("device.status"))
                 }
                 GroupedSection("Hands", padded = true) {
                     Text(if (armed) "Screen control is armed" else "Screen control is off", style = CompanionType.RowTitle,
-                        color = if (armed) CompanionColor.Warn else CompanionColor.Text, modifier = Modifier.testTag("device.arm"))
+                        color = if (armed) CompanionColor.Warn else CompanionColor.Text,
+                        modifier = Modifier.testTag("device.arm").semantics { stateDescription = if (armed) "Armed" else "Disarmed" })
                     Text(if (armed) "Hermes can view and control this phone. Press volume down twice to stop."
-                        else "Allow Hermes to tap, scroll and type when you choose.", style = CompanionType.Body, color = CompanionColor.TextDim)
+                        else "Permission alone never starts control. Arm Hands only when you want Hermes to tap, scroll or type.",
+                        style = CompanionType.Body, color = CompanionColor.TextDim)
+                    if (!armed) Text(
+                        when {
+                            !a11yBound -> "Next: allow accessibility for screen control."
+                            !notifyGranted -> "Next: allow notifications for the control service."
+                            !overlayGranted -> "Control access is ready. Allow the overlay to show the control indicator."
+                            else -> "Ready when you are. Hands stays off until you arm it."
+                        }, style = CompanionType.Caption, color = CompanionColor.Signal,
+                        modifier = Modifier.testTag("device.nextAction"))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         when {
                             armed -> Action("DISARM", "device.disarm", onDisarm)
@@ -150,24 +167,42 @@ fun DeviceScreen(
                             !notifyGranted -> Action("ENABLE NOTIFY", "device.notify.enable", onEnableNotify)
                             else -> Action("ARM", "device.arm.go", onArm)
                         }
-                        ActionButton("Details", { detail = "Hands" }, modifier = Modifier.testTag("device.hands.open"))
+                        ActionButton("Control details", { detail = "Hands" }, modifier = Modifier.testTag("device.hands.open"))
                     }
-                    if (!a11yBound) Text("Installed apps → Hermes Companion", style = CompanionType.Caption, modifier = Modifier.testTag("device.a11y.hint"))
+                    if (!a11yBound) Text("Android settings → Installed apps → Hermes Companion", style = CompanionType.Caption,
+                        modifier = Modifier.testTag("device.a11y.hint"))
+                    Text("Screen actions may require you to unlock. The background gateway connection is separate.",
+                        style = CompanionType.Caption, modifier = Modifier.testTag("device.locked.limit"))
                 }
-                GroupedSection("Privacy & access") {
+                GroupedSection("Phone → Hermes") {
+                    PreferenceRow("Notification stream", streamStatus.hint, value = streamStatus.label,
+                        selected = notifStreamEnabled && nlsBound, onClick = { detail = "Notification stream" },
+                        modifier = Modifier.testTag("device.stream.open").semantics { stateDescription = streamStatus.label })
+                    PreferenceRow("Destination", "${notifStreamOrigin ?: "Current host"}\n${notifStreamProfile ?: "Current profile"}",
+                        value = "Change", onClick = { detail = "Notification destination" },
+                        modifier = Modifier.testTag("device.stream.route"))
+                    if (notifStreamEnabled && !nlsBound) PreferenceRow("Allow notification access", "Sharing is enabled, but Android access is missing.",
+                        value = "Fix access", onClick = onEnableNls, modifier = Modifier.testTag("device.nls.enable"))
+                }
+                GroupedSection("Control permissions", trailing = {
+                    Text("$permissionCount / 3", style = CompanionType.Caption, color = CompanionColor.Signal,
+                        modifier = Modifier.testTag("device.permissions.count").semantics { contentDescription = "$permissionCount of 3 control permissions allowed" })
+                }) {
+                    PermissionAccessRow("Accessibility", "Screen access while Hands is armed", a11yBound, onEnableA11y, "device.permission.a11y")
+                    PermissionAccessRow("Control indicator", "Display over other apps", overlayGranted, onEnableOverlay, "device.permission.overlay")
+                    PermissionAccessRow("Service notifications", "Status, alerts and stop control", notifyGranted, onEnableNotify, "device.permission.notify")
+                    PreferenceRow("All access settings", "Notification access and locked-screen preferences", onClick = { detail = "Permissions" },
+                        modifier = Modifier.testTag("device.permissions.open"))
+                }
+                GroupedSection("Privacy & protection") {
                     PreferenceToggle("Keep awake during voice", awakeOnVoice, onToggleAwakeOnVoice,
                         summary = "Only during a voice conversation", modifier = Modifier.testTag("device.awake.voice"))
                     PreferenceToggle("Biometric app lock", biometricLock, onToggleBiometricLock,
                         summary = "Authenticate before opening Companion", modifier = Modifier.testTag("device.biometric.lock"))
-                    PreferenceRow("Permissions", "Android access and locked-screen preferences", onClick = { detail = "Permissions" },
-                        modifier = Modifier.testTag("device.permissions.open"))
-                }
-                GroupedSection("Sharing & protection") {
-                    PreferenceRow("Notification stream", if (notifStreamEnabled) "On · ${notifStreamProfile ?: "Current profile"}" else "Off",
-                        onClick = { detail = "Notification stream" }, modifier = Modifier.testTag("device.stream.open"))
-                    PreferenceRow("Protected apps", "${protectedCustom.size} custom rules", onClick = { detail = "Protected apps" },
+                    PreferenceRow("Protected apps", if (protectedCustom.isEmpty()) "No custom rules. Add apps you want Hands to avoid."
+                        else "${protectedCustom.size} custom rules · blocked before screen control", onClick = { detail = "Protected apps" },
                         modifier = Modifier.testTag("device.protected.open"))
-                    PreferenceRow("Activity audit", "Recent phone control outcome", onClick = { detail = "Activity audit" },
+                    PreferenceRow("Activity audit", "Review the latest phone control outcome", onClick = { detail = "Activity audit" },
                         modifier = Modifier.testTag("device.audit.open"))
                 }
             }
@@ -213,25 +248,25 @@ fun DeviceScreen(
                     "Permissions" -> {
                         GroupedSection("Phone control") {
                             PreferenceRow("Control connection", if (laneOpen) "Connected" else "Connecting", modifier = Modifier.testTag("device.lane"))
-                            PreferenceRow("Accessibility", if (a11yBound) "Allowed" else "Enable Hermes Companion in Installed apps",
-                                onClick = onEnableA11y, modifier = Modifier.testTag("device.a11y"))
-                            PreferenceRow("Display over other apps", if (overlayGranted) "Allowed" else "Required for the control indicator",
-                                onClick = onEnableOverlay, modifier = Modifier.testTag("device.overlay"))
-                            PreferenceRow("Notifications", if (notifyGranted) "Allowed" else "Grant notification permission",
-                                onClick = onEnableNotify, modifier = Modifier.testTag("device.notify"))
+                            PermissionAccessRow("Accessibility", "Enable Hermes Companion in Installed apps", a11yBound, onEnableA11y, "device.a11y")
+                            PermissionAccessRow("Display over other apps", "Show the control indicator", overlayGranted, onEnableOverlay, "device.overlay")
+                            PermissionAccessRow("Notifications", "Show service notifications", notifyGranted, onEnableNotify, "device.notify")
+                            PermissionAccessRow("Notification access", "Read allowed notifications for sharing", nlsBound, onEnableNls, "device.nls")
                         }
                         GroupedSection("Locked screen") {
-                            PreferenceToggle("Access while locked", lockedAccess, onToggleLockedAccess,
-                                summary = "Allow the configured locked-screen behavior", modifier = Modifier.testTag("device.locked.access"))
+                            PreferenceToggle("Request unlock on resume", lockedAccess, onToggleLockedAccess,
+                                summary = "Ask Android to dismiss the lock screen when Companion opens. Android may still require you to unlock. Does not bypass PIN or biometrics.",
+                                modifier = Modifier.testTag("device.locked.access"))
                         }
                         Text("Granting permission does not arm Hands.", style = CompanionType.Caption)
                     }
                     "Notification stream" -> {
+                        StatusStrip("${streamStatus.label}: ${streamStatus.hint}", tone = if (notifStreamEnabled && !nlsBound) CompanionColor.Warn else CompanionColor.TextDim,
+                            modifier = Modifier.testTag("device.stream.status"))
                         GroupedSection("Sharing") {
                             PreferenceToggle("Share notifications", notifStreamEnabled, onToggleNotifStream,
                                 summary = "Send allowed notifications to the selected host and profile", modifier = Modifier.testTag("device.stream"))
-                            PreferenceRow("Notification access", if (nlsBound) "Allowed" else "Enable Android notification access",
-                                onClick = onEnableNls, modifier = Modifier.testTag("device.nls"))
+                            PermissionAccessRow("Notification access", "Read allowed notifications for sharing", nlsBound, onEnableNls, "device.nls")
                             PreferenceRow("Destination", "${notifStreamOrigin ?: "Current host"} · ${notifStreamProfile ?: "Current profile"}",
                                 onClick = { detail = "Notification destination" }, modifier = Modifier.testTag("device.stream.sink"))
                         }
@@ -242,6 +277,8 @@ fun DeviceScreen(
                         }
                     }
                     "Notification destination" -> {
+                        Text("Allowed notification content is sent only to this host and profile. Changing the route does not arm phone control.", style = CompanionType.Body,
+                            color = CompanionColor.TextDim)
                         GroupedSection("Host") {
                             pairedHosts.forEach { host -> PreferenceRow(host, selected = host == notifStreamOrigin,
                                 value = if (host == notifStreamOrigin) "Selected" else null, onClick = { onPickStreamOrigin(host) }, modifier = Modifier.testTag("device.stream.origin")) }
@@ -250,6 +287,7 @@ fun DeviceScreen(
                         GroupedSection("Profile") {
                             profilesForStream.forEach { profile -> PreferenceRow(profile, selected = profile == notifStreamProfile,
                                 value = if (profile == notifStreamProfile) "Selected" else null, onClick = { onPickStreamProfile(profile) }, modifier = Modifier.testTag("device.stream.profile")) }
+                            if (profilesForStream.isEmpty()) PreferenceRow("Current profile", notifStreamProfile ?: "Connect a host to choose a profile")
                         }
                     }
                     "Protected apps" -> GroupedSection("App rules", padded = true) {
@@ -266,7 +304,7 @@ fun DeviceScreen(
     if (confirmRevoke) androidx.compose.material3.AlertDialog(onDismissRequest = { confirmRevoke = false },
         title = { Text("Remove this phone’s pairing?") },
         text = { Text("Host tools will lose access until this phone pairs again.") },
-        confirmButton = { androidx.compose.material3.TextButton(onClick = { confirmRevoke = false; detail = null; onRevoke() }) { Text("Remove pairing", color = CompanionColor.Danger) } },
+        confirmButton = { androidx.compose.material3.TextButton(modifier = Modifier.testTag("device.revoke.confirm"), onClick = { confirmRevoke = false; detail = null; onRevoke() }) { Text("Remove pairing", color = CompanionColor.Danger) } },
         dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmRevoke = false }) { Text("Cancel") } })
 }
 
@@ -321,7 +359,8 @@ private fun ProtectedPackages(
                     style = CompanionType.Caption.copy(color = CompanionColor.Danger),
                     modifier = Modifier
                         .testTag("device.protected.remove")
-                        .heightIn(min = 48.dp).clickable { onRemove(pkg) }
+                        .heightIn(min = 48.dp).clickable(role = Role.Button) { onRemove(pkg) }
+                        .semantics { contentDescription = "Remove protection for $pkg" }
                         .padding(horizontal = CompanionSpace.Sm),
                 )
             }
@@ -371,7 +410,7 @@ private fun ProtectedPackages(
 @Composable
 private fun Action(label: String, tag: String, onClick: () -> Unit) {
     val title = when (label) {
-        "ENABLE A11Y" -> "Enable screen control"
+        "ENABLE A11Y" -> "Allow accessibility"
         "ENABLE NOTIFY" -> "Allow notifications"
         "ENABLE OVERLAY" -> "Enable overlay"
         "ENABLE NLS" -> "Allow notification access"
@@ -388,12 +427,18 @@ private fun Action(label: String, tag: String, onClick: () -> Unit) {
         })
 }
 
+internal data class NotificationStreamStatus(val label: String, val hint: String)
+
+/** Enabled is not equivalent to working: the Android listener must also be available. */
+internal fun notificationStreamStatus(enabled: Boolean, accessGranted: Boolean): NotificationStreamStatus = when {
+    !enabled -> NotificationStreamStatus("Off", "Notifications are not being shared.")
+    !accessGranted -> NotificationStreamStatus("Needs access", "Allow Android notification access to start sharing.")
+    else -> NotificationStreamStatus("Enabled", "Allowed notifications are routed to the destination below.")
+}
+
 @Composable
-private fun PermissionLine(label: String, value: String, tag: String, granted: Boolean) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(label, style = CompanionType.Label, modifier = Modifier.weight(1f))
-        Text(value, style = CompanionType.Caption, color = if (granted) CompanionColor.Signal else CompanionColor.TextDim,
-            modifier = Modifier.testTag(tag))
-    }
+private fun PermissionAccessRow(label: String, purpose: String, granted: Boolean, onClick: () -> Unit, tag: String) {
+    val status = if (granted) "Allowed" else "Not allowed"
+    PreferenceRow(label, purpose, value = status, selected = granted, onClick = onClick,
+        modifier = Modifier.testTag(tag).semantics { stateDescription = status })
 }

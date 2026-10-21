@@ -303,8 +303,34 @@ class DeviceLanePolicyTest {
     }
 
     @Test
-    fun a11yEnabledParsesComponent() {
-        assertTrue(DeviceLanePolicy.a11yEnabled("app.hermes.companion/.device.CompanionAccessibilityService"))
-        assertFalse(DeviceLanePolicy.a11yEnabled(""))
+    fun componentReadinessAcceptsExactFullAndShortNames() {
+        val owner = "app.hermes.companion"
+        val service = "$owner.device.CompanionAccessibilityService"
+        assertTrue(DeviceLanePolicy.componentEnabled("$owner/$service", owner, service))
+        assertTrue(DeviceLanePolicy.componentEnabled("other/.Service:$owner/.device.CompanionAccessibilityService", owner, service))
+        assertFalse(DeviceLanePolicy.componentEnabled("", owner, service))
+        assertFalse(DeviceLanePolicy.componentEnabled(null, owner, service))
+    }
+
+    @Test
+    fun originalAccessibilityGrantDoesNotMarkPreviewReady() {
+        val owner = "app.hermes.companion"
+        val preview = "$owner.preview"
+        val service = "$owner.device.CompanionAccessibilityService"
+        assertFalse(DeviceLanePolicy.componentEnabled("$owner/$service", preview, service))
+        assertTrue(DeviceLanePolicy.componentEnabled("$preview/$service", preview, service))
+        assertFalse(DeviceLanePolicy.componentEnabled("$preview/.device.CompanionAccessibilityService", preview, service))
+        assertFalse(DeviceLanePolicy.componentEnabled("$preview/$service", owner, service))
+    }
+
+    @Test
+    fun componentReadinessRejectsSuffixMatchesAndMalformedEntries() {
+        val owner = "app.hermes.companion"
+        val service = "$owner.device.CompanionAccessibilityService"
+        listOf(service, "$owner/$service.fake", "other/$service", "$owner/$service/extra", "$owner/").forEach {
+            assertFalse(it, DeviceLanePolicy.componentEnabled(it, owner, service))
+        }
+        assertFalse(DeviceLanePolicy.componentEnabled("$owner/$service", "", service))
+        assertFalse(DeviceLanePolicy.componentEnabled("$owner/$service", owner, ""))
     }
 }

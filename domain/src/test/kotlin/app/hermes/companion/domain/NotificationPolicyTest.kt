@@ -114,6 +114,26 @@ class NotificationPolicyTest {
     }
 
     @Test
+    fun sessionsWithTheSameIdInDifferentProfilesDoNotReplaceEachOther() {
+        assertNotEquals(
+            NotificationPolicy.notificationId("h", "sess-1", "", "coder"),
+            NotificationPolicy.notificationId("h", "sess-1", "", "assistant"),
+        )
+        assertNotEquals(
+            NotificationPolicy.notificationId("h", "same-id", "", "coder"),
+            NotificationPolicy.notificationId("h", "", "same-id", "coder"),
+        )
+    }
+
+    @Test
+    fun roomIdentityDoesNotChangeWithTheSpeakingProfile() {
+        assertEquals(
+            NotificationPolicy.notificationId("h", "backing-1", "room-1", "coder"),
+            NotificationPolicy.notificationId("h", "backing-2", "room-1", "assistant"),
+        )
+    }
+
+    @Test
     fun groupsPerHostSoAFleetCollapses() {
         assertEquals("http://lab:9120", NotificationPolicy.groupKey("http://lab:9120"))
         assertEquals("hermes", NotificationPolicy.groupKey("  "))

@@ -1,6 +1,10 @@
 package app.hermes.companion.settings
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -10,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -43,28 +48,39 @@ fun ComposerModelBottomSheet(
         (provider == null || it.provider == provider) &&
             (query.isBlank() || listOf(it.id, it.name, it.provider).any { value -> value.contains(query.trim(), true) })
     }.groupBy { it.provider }.toSortedMap()
-    val current = models.find { it.id == settings?.model && it.provider == settings.provider }
     val enabled = !panel.loading && !panel.busy && panel.pending.isEmpty() && panel.confirmationKey == null && settings != null
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = CompanionColor.VoidElevated, contentColor = CompanionColor.Text) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp)
             .testTag("composer.models"), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             SheetHeading("Model & reasoning", onDismiss, closeModifier = Modifier.testTag("composer.models.done"))
-            Text("For this conversation", style = MaterialTheme.typography.bodySmall, color = CompanionColor.TextDim)
-            if (panel.loading || panel.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            Text(settings?.model ?: "Reading model from Hermes…", style = MaterialTheme.typography.titleMedium)
-            settings?.provider?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = CompanionColor.TextDim) }
-            panel.error?.let { Text(it, color = CompanionColor.Danger) }
-            panel.notice?.takeIf(String::isNotBlank)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            if (panel.pending.isNotEmpty()) Text("Checking the earlier change. Refresh checks its outcome without sending it again.")
-            if (panel.confirmationKey != null && panel.confirmationValue != null) {
-                Button(onClick = { onSet(panel.confirmationKey, panel.confirmationValue, true) }, enabled = !panel.busy) {
-                    Text("Confirm model change")
+            GroupSurface(padded = true) {
+                Text("This conversation", style = CompanionType.Label, color = CompanionColor.Accent)
+                Text(panel.session.title.ifBlank { "Untitled conversation" }, style = CompanionType.Body)
+                ProtocolStatus(if (settings == null) "Model status" else "Last confirmed by Hermes",
+                    settings?.model ?: if (panel.loading) "Reading model…" else "Model unavailable",
+                    tone = if (settings != null) CompanionColor.Signal else CompanionColor.TextDim)
+                settings?.provider?.takeIf(String::isNotBlank)?.let {
+                    Text("Provider: $it", style = CompanionType.Caption)
                 }
             }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                TextButton(onClick = { section = ComposerSettingsSection.MODEL }, modifier = Modifier.testTag("composer.tab.model")) { Text(if (section == ComposerSettingsSection.MODEL) "✓ Model" else "Model") }
-                TextButton(onClick = { section = ComposerSettingsSection.REASONING }, modifier = Modifier.testTag("composer.tab.reasoning")) { Text(if (section == ComposerSettingsSection.REASONING) "✓ Reasoning" else "Reasoning") }
+            if (panel.loading || panel.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            panel.error?.let { StatusStrip(it, tone = CompanionColor.Danger) }
+            panel.notice?.takeIf(String::isNotBlank)?.let { Text(it, style = CompanionType.Body) }
+            if (panel.pending.isNotEmpty()) StatusStrip(
+                "Checking the earlier change. Refresh checks its outcome without sending it again.", tone = CompanionColor.Warn)
+            if ("config.model" in panel.unsupported) StatusStrip(
+                "This host does not support changing the conversation model.", tone = CompanionColor.TextDim)
+            if (panel.confirmationKey != null && panel.confirmationValue != null) {
+                ActionButton("Confirm model change", { onSet(panel.confirmationKey, panel.confirmationValue, true) },
+                    enabled = !panel.busy, kind = ActionKind.PRIMARY)
+            }
+            FlowRow(Modifier.selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ComposerSectionTab("Model", section == ComposerSettingsSection.MODEL,
+                    Modifier.testTag("composer.tab.model")) { section = ComposerSettingsSection.MODEL }
+                ComposerSectionTab("Reasoning", section == ComposerSettingsSection.REASONING,
+                    Modifier.testTag("composer.tab.reasoning")) { section = ComposerSettingsSection.REASONING }
             }
             if (section == ComposerSettingsSection.MODEL) {
             Text("Model", style = MaterialTheme.typography.titleSmall)
@@ -72,9 +88,8 @@ fun ComposerModelBottomSheet(
                 keyboardType = androidx.compose.ui.text.input.KeyboardType.Text,
                 modifier = Modifier.fillMaxWidth().testTag("composer.models.search"))
             Box {
-                OutlinedButton(onClick = { providersOpen = true }, modifier = Modifier.testTag("composer.models.providers")) {
-                    Text((provider ?: "All providers") + " ▾")
-                }
+                ActionButton((provider ?: "All providers") + " ▾", { providersOpen = true },
+                    modifier = Modifier.testTag("composer.models.providers"))
                 DropdownMenu(providersOpen, { providersOpen = false }, modifier = Modifier.heightIn(max = 280.dp)) {
                     DropdownMenuItem(text = { Text("All providers") }, onClick = { provider = null; providersOpen = false })
                     providers.forEach { option -> DropdownMenuItem(text = { Text(option) },
@@ -90,23 +105,29 @@ fun ComposerModelBottomSheet(
                     }
                     items(entries, key = { "${it.provider}/${it.id}" }) { model ->
                         val selected = model.id == settings?.model && model.provider == settings.provider
-                        ListItem(
-                            headlineContent = { Text(model.id, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-                            supportingContent = if (model.reasoning) ({ Text("Reasoning") }) else null,
-                            trailingContent = if (selected) ({ Text("✓", color = CompanionColor.Signal) }) else null,
-                            colors = ListItemDefaults.colors(containerColor = CompanionColor.VoidElevated),
-                            modifier = Modifier.testTag("composer.models.item.${model.provider}/${model.id}")
-                                .semantics { this.selected = selected }
-                                .heightIn(min = 48.dp).clickable(enabled = enabled && !selected && "config.model" !in panel.unsupported, role = Role.RadioButton) {
-                                    onSet("model", "${model.id} --provider ${model.provider} --session", false)
-                                },
-                        )
+                        ModelChoiceRow(model, selected = selected,
+                            enabled = enabled && "config.model" !in panel.unsupported,
+                            modifier = Modifier.testTag("composer.models.item.${model.provider}/${model.id}"),
+                            onClick = {
+                                if (!selected) onSet("model", "${model.id} --provider ${model.provider} --session", false)
+                            })
                     }
                 }
             }
             } else GroupedSection("Reasoning", padded = true) { ReasoningControls(panel, onSet) }
-            TextButton(onClick = onRefresh, enabled = !panel.busy, modifier = Modifier.testTag("composer.models.refresh")) { Text("Refresh from Hermes") }
+            ActionButton("Refresh from Hermes", onRefresh, enabled = !panel.busy, modifier = Modifier.testTag("composer.models.refresh"))
             Spacer(Modifier.height(12.dp))
         }
+    }
+}
+
+@Composable
+private fun ComposerSectionTab(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val shape = CutCornerShape(topEnd = 7.dp, bottomStart = 7.dp)
+    Box(modifier.clip(shape).background(if (selected) CompanionColor.SignalSubtle else CompanionColor.VoidElevated)
+        .border(1.dp, if (selected) CompanionColor.Signal else CompanionColor.LineStrong, shape)
+        .selectable(selected = selected, role = Role.Tab, onClick = onClick)
+        .heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 12.dp), contentAlignment = Alignment.Center) {
+        Text(label, style = CompanionType.Label, color = if (selected) CompanionColor.Signal else CompanionColor.TextDim)
     }
 }

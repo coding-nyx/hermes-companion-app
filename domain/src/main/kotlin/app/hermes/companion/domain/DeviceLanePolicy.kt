@@ -286,8 +286,21 @@ object DeviceLanePolicy {
     fun ok(commandId: String, resultJson: String = "{}"): DeviceResult =
         DeviceResult(commandId = commandId, ok = true, resultJson = resultJson)
 
-    fun a11yEnabled(enabledList: String?, suffix: String = "CompanionAccessibilityService"): Boolean =
-        enabledList.orEmpty().contains(suffix)
+    /** Android grants belong to the exact package/class, not a service-name suffix.
+     * A preview application ID may differ from its unchanged Kotlin class namespace. */
+    fun componentEnabled(enabledList: String?, packageName: String, className: String): Boolean {
+        if (packageName.isBlank() || className.isBlank()) return false
+        val expectedClass = if (className.startsWith('.')) packageName + className else className
+        return enabledList.orEmpty().split(':').any { entry ->
+            val component = entry.trim()
+            val separator = component.indexOf('/')
+            if (separator <= 0 || component.indexOf('/', separator + 1) >= 0) return@any false
+            val owner = component.substring(0, separator)
+            val name = component.substring(separator + 1)
+            val qualified = if (name.startsWith('.')) owner + name else name
+            owner == packageName && qualified == expectedClass
+        }
+    }
 
     private val REF_ACTIONS = setOf("device.click", "device.type", "device.swipe", "device.scroll")
 

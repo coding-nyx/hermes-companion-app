@@ -15,7 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.TextButton
@@ -34,7 +34,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -85,7 +84,6 @@ fun MarkdownComposer(
     tagPrefix: String = "chat",
 ) {
     var field by remember { mutableStateOf(TextFieldValue(value)) }
-    var focused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(value) {
@@ -96,8 +94,9 @@ fun MarkdownComposer(
         field = TextFieldValue(out.text, TextRange(out.selectionStart, out.selectionEnd))
         onValueChange(out.text)
     }
-    Column(modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(CompanionColor.VoidSurface)
-        .border(1.dp, CompanionColor.CardBorder, RoundedCornerShape(18.dp)).padding(4.dp)) {
+    val shape = CutCornerShape(topEnd = 12.dp, bottomStart = 12.dp)
+    Column(modifier.fillMaxWidth().clip(shape).background(CompanionColor.VoidSurface)
+        .border(1.dp, CompanionColor.LineStrong, shape).padding(4.dp)) {
         if (!compactLayout) FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(0.dp),
             verticalArrangement = Arrangement.spacedBy(0.dp)) {
             FormatChip("B", "$tagPrefix.fmt.bold") { format(MarkdownWrap::bold) }
@@ -108,16 +107,21 @@ fun MarkdownComposer(
                 modifier = Modifier.size(48.dp).testTag("chat.expand").semantics { contentDescription = "Expand draft" }) {
                 ComposerActionIcon(ComposerIcon.EXPAND, CompanionColor.TextDim)
             }
-            if (focused && onOpenModelSettings != null) {
-                IconButton(onClick = { focusManager.clearFocus(); keyboard?.hide(); onOpenModelSettings() },
-                    enabled = modelSettingsEnabled, modifier = Modifier.size(48.dp).testTag("chat.model.settings")
-                        .semantics { contentDescription = "Model settings" }) {
-                    ComposerActionIcon(ComposerIcon.SETTINGS, CompanionColor.TextDim)
+            if (onOpenModelSettings != null) {
+                TextButton(onClick = { focusManager.clearFocus(); keyboard?.hide(); onOpenModelSettings() },
+                    enabled = modelSettingsEnabled, modifier = Modifier.heightIn(min = 48.dp).testTag("chat.model.settings")
+                        .semantics { contentDescription = "Model settings for this conversation" }) {
+                    ComposerActionIcon(ComposerIcon.SETTINGS, if (modelSettingsEnabled) CompanionColor.Signal else CompanionColor.TextMute)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Model", style = CompanionType.Label)
                 }
-                IconButton(onClick = { focusManager.clearFocus(); keyboard?.hide(); onOpenReasoningSettings?.invoke() },
-                    enabled = modelSettingsEnabled, modifier = Modifier.size(48.dp).testTag("chat.reasoning.settings")
-                        .semantics { contentDescription = "Reasoning settings" }) {
-                    ComposerActionIcon(ComposerIcon.REASONING, CompanionColor.TextDim)
+                if (onOpenReasoningSettings != null) TextButton(
+                    onClick = { focusManager.clearFocus(); keyboard?.hide(); onOpenReasoningSettings() },
+                    enabled = modelSettingsEnabled, modifier = Modifier.heightIn(min = 48.dp).testTag("chat.reasoning.settings")
+                        .semantics { contentDescription = "Reasoning settings for this conversation" }) {
+                    ComposerActionIcon(ComposerIcon.REASONING, if (modelSettingsEnabled) CompanionColor.Accent else CompanionColor.TextMute)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Reasoning", style = CompanionType.Label)
                 }
             }
         }
@@ -136,15 +140,15 @@ fun MarkdownComposer(
             }
             leadingControls?.invoke()
             Column {
-            if (compactLayout && focused && onOpenModelSettings != null) {
+            if (compactLayout && onOpenModelSettings != null) {
                 IconButton(onClick = { focusManager.clearFocus(); keyboard?.hide(); onOpenModelSettings() },
                     enabled = modelSettingsEnabled, modifier = Modifier.size(48.dp).testTag("chat.model.settings")
-                        .semantics { contentDescription = "Model settings" }) {
+                        .semantics { contentDescription = "Model settings for this conversation" }) {
                     ComposerActionIcon(ComposerIcon.SETTINGS, CompanionColor.TextDim)
                 }
                 IconButton(onClick = { focusManager.clearFocus(); keyboard?.hide(); onOpenReasoningSettings?.invoke() },
                     enabled = modelSettingsEnabled, modifier = Modifier.size(48.dp).testTag("chat.reasoning.settings")
-                        .semantics { contentDescription = "Reasoning settings" }) {
+                        .semantics { contentDescription = "Reasoning settings for this conversation" }) {
                     ComposerActionIcon(ComposerIcon.REASONING, CompanionColor.TextDim)
                 }
             }
@@ -159,7 +163,6 @@ fun MarkdownComposer(
                 .weight(1f)
                 .heightIn(min = if (expanded) 240.dp else 102.dp, max = if (expanded) 480.dp else 156.dp)
                 .padding(horizontal = 12.dp, vertical = 8.dp)
-                .onFocusChanged { focused = it.isFocused }
                 // Hardware keyboards: Shift/Ctrl+Enter sends, plain Enter stays a newline.
                 .onPreviewKeyEvent { ev ->
                     val enter = ev.key == Key.Enter || ev.key == Key.NumPadEnter

@@ -97,6 +97,7 @@ class NavigationDeviceTest {
         compose.onNodeWithTag("nav.more").assertIsSelected()
         assertEquals(listOf("REVIEW"), actions)
         screenshot(i, "review.png")
+        compose.onNodeWithTag("nav.more").performClick()
         compose.onNodeWithTag("nav.console").performClick()
         compose.onNodeWithTag("agents.screen").assertIsDisplayed()
         screenshot(i, "agents.png")
@@ -120,7 +121,7 @@ class NavigationDeviceTest {
         compose.onNodeWithText("New agent room").assertIsDisplayed()
         screenshot(i, "navigation-device-chat-options.png")
         i.runOnMainSync { screen = screen.copy(openSessionId = session.id, openSessionRef = session, chatMinimized = false) }
-        compose.onNodeWithTag("chat.model.settings").assertDoesNotExist()
+        compose.onNodeWithTag("chat.model.settings").assertIsDisplayed()
         compose.onNodeWithTag("chat.draft").performClick()
         compose.onNodeWithTag("chat.model.settings").assertIsDisplayed().performClick()
         // Hiding Samsung IME and attaching the modal can briefly detach both window roots.

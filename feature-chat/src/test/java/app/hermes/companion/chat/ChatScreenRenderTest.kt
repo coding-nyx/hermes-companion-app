@@ -9,6 +9,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.*
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.performClick
@@ -217,15 +219,34 @@ class ChatScreenRenderTest {
         assertTrue(actions == listOf("stop"))
     }
 
-    @Test fun modelSettingsAppearOnFocusAndKeepAllFormattingAvailable() {
+    @Test fun modelSettingsAreVisibleWithoutFocusAndKeepAllFormattingAvailable() {
         var opened = 0
         mount(emptyList(), streaming = false, draft = "Keep **this** draft", onModels = { opened++ })
-        rule.onNodeWithTag("chat.model.settings").assertDoesNotExist()
-        rule.onNodeWithTag("chat.draft").performClick()
-        rule.mainClock.advanceTimeBy(200)
-        rule.onNodeWithTag("chat.model.settings").assertIsDisplayed().performClick()
+        rule.onNodeWithText("Model").assertIsDisplayed()
+        rule.onNodeWithText("Reasoning").assertIsDisplayed()
+        rule.onNodeWithTag("chat.model.settings").assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
         for (tag in listOf("bold", "italic", "code", "list")) rule.onNodeWithTag("chat.fmt.$tag").assertIsDisplayed()
         assertTrue(opened == 1)
+    }
+
+    @Test fun compactModelControlsStayBesideTheFieldAtDoubleText() {
+        var opened = 0
+        rule.setContent {
+            CompanionTheme {
+                CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(2f, 2f)) {
+                    Box(Modifier.size(720.dp, 128.dp)) {
+                        MarkdownComposer("Preserve **this** draft", {}, compactLayout = true,
+                            onOpenModelSettings = { opened++ }, onOpenReasoningSettings = { opened += 10 })
+                    }
+                }
+            }
+        }
+        rule.onNodeWithTag("chat.model.settings").assertIsDisplayed().assertWidthIsAtLeast(48.dp)
+            .assertHeightIsAtLeast(48.dp).performClick()
+        rule.onNodeWithTag("chat.reasoning.settings").assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        assertTrue(opened == 11)
+        rule.onNodeWithTag("chat.fmt.bold").assertIsDisplayed()
+        rule.onNodeWithTag("chat.draft").assertIsDisplayed()
     }
 
     @Test

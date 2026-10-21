@@ -3,7 +3,7 @@ package app.hermes.companion.design
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.Shapes
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -15,7 +15,7 @@ private fun companionScheme() = (if (CompanionColor.dark) darkColorScheme() else
     primaryContainer = CompanionColor.SignalDim, onPrimaryContainer = CompanionColor.Text,
     secondary = CompanionColor.Signal, onSecondary = CompanionColor.Void,
     secondaryContainer = CompanionColor.SignalDim, onSecondaryContainer = CompanionColor.Text,
-    tertiary = CompanionColor.Signal, onTertiary = CompanionColor.Void,
+    tertiary = CompanionColor.Accent, onTertiary = CompanionColor.Void,
     background = CompanionColor.Void, onBackground = CompanionColor.Text,
     surface = CompanionColor.Void, onSurface = CompanionColor.Text,
     surfaceVariant = CompanionColor.VoidElevated, onSurfaceVariant = CompanionColor.TextDim,
@@ -43,11 +43,12 @@ fun CompanionTheme(content: @Composable () -> Unit) {
     androidx.compose.ui.platform.LocalConfiguration.current
     CompositionLocalProvider(
         LocalCompanionColors provides CompanionColor,
+        LocalCompanionMotion provides rememberCompanionMotion(),
         androidx.compose.material3.LocalContentColor provides CompanionColor.Text,
     ) {
         MaterialTheme(colorScheme = companionScheme(), typography = companionTypography(),
-            shapes = Shapes(extraSmall = RoundedCornerShape(4.dp), small = RoundedCornerShape(8.dp),
-                medium = RoundedCornerShape(16.dp), large = RoundedCornerShape(20.dp), extraLarge = RoundedCornerShape(24.dp)),
+            shapes = Shapes(extraSmall = CutCornerShape(4.dp), small = CutCornerShape(6.dp),
+                medium = CutCornerShape(10.dp), large = CutCornerShape(14.dp), extraLarge = CutCornerShape(18.dp)),
             content = content)
     }
 }

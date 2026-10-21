@@ -115,6 +115,81 @@ class ThreadsScreenRenderTest {
         rule.onNodeWithTag("threads.new").performClick()
         assertEquals(1, created)
     }
+    @Test fun emptySearchOffersOneTapRecoveryWithoutCreatingAChat() {
+        var created = 0
+        rule.setContent { CompanionTheme { ThreadsScreen(sessions = rows, onNew = { created++ }, nowMs = now) } }
+        rule.onNodeWithTag("threads.filter").performTextInput("no matching phrase")
+        rule.onNodeWithTag("threads.nomatch").assertIsDisplayed()
+        rule.onNodeWithTag("threads.filter.clear").performClick()
+        rule.onNodeWithTag("threads.count").assertTextEquals("3")
+        assertEquals(0, created)
+    }
+
+    @Test fun telegramFilterIsVisibleAndCanBeClearedFromEmptyResults() {
+        rule.setContent { CompanionTheme { ThreadsScreen(sessions = rows.filter { it.source.isBlank() }, nowMs = now) } }
+        rule.onNodeWithTag("threads.filter.menu").performClick()
+        rule.onNodeWithTag("threads.filter.telegram").performClick()
+        rule.onNodeWithTag("threads.filter.menu").assertTextContains("Telegram only ▾")
+        rule.onNodeWithTag("threads.nomatch").assertIsDisplayed()
+        rule.onNodeWithTag("fetch.retry").performClick()
+        rule.onNodeWithTag("threads.count").assertTextEquals("2")
+    }
+
+    @Test fun conversationActionsAreDiscoverableAndNeverDeleteOnOpen() {
+        var opened = 0
+        var requested: SessionRef? = null
+        var confirmed = 0
+        val session = rows.first()
+        rule.setContent { CompanionTheme {
+            ThreadsScreen(sessions = listOf(session), onOpen = { opened++ },
+                onDeleteRequest = { requested = it }, onConfirmDelete = { confirmed++ }, nowMs = now)
+        } }
+        rule.onNodeWithTag("threads.actions.${session.id}").performClick()
+        assertEquals(0, opened)
+        assertEquals(null, requested)
+        rule.onNodeWithTag("threads.delete.request.${session.id}").performClick()
+        assertEquals(session, requested)
+        assertEquals(0, confirmed)
+    }
+
+    @Test fun unreadConversationHasTextStatusNotOnlyAColorStripe() {
+        rule.setContent { CompanionTheme { ThreadsScreen(sessions = listOf(rows.first().copy(unread = true)), nowMs = now) } }
+        rule.onNodeWithTag("threads.unread.old", useUnmergedTree = true).assertIsDisplayed().assertTextEquals("Unread")
+        capture("chat-list-unread-state")
+    }
+
+    @Test fun refreshFailureKeepsConversationsAndOffersRetry() {
+        var retries = 0
+        rule.setContent { CompanionTheme { ThreadsScreen(sessions = rows, error = "Gateway disconnected", onRetry = { retries++ }, nowMs = now) } }
+        rule.onNodeWithTag("threads.refresh.error").assertIsDisplayed()
+        rule.onNodeWithText("Retry").performClick()
+        assertEquals(1, retries)
+        rule.onNodeWithTag("threads.new").assertIsDisplayed()
+    }
+
+    @Test fun largeTextKeepsConversationActionsAndCreationReachable() {
+        rule.setContent {
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density.density, 2f)) {
+                CompanionTheme { ThreadsScreen(sessions = listOf(rows.first().copy(title = "Review notification routing for the research assistant", unread = true)), nowMs = now) }
+            }
+        }
+        rule.onNodeWithTag("threads.rail").performScrollToNode(hasTestTag("threads.row.old"))
+        rule.onNodeWithTag("threads.actions.old").assertIsDisplayed()
+        rule.onNodeWithTag("threads.new").assertIsDisplayed()
+        capture("chat-list-large-text")
+    }
+
+    @Test
+    @Config(sdk = [31], qualifiers = "w360dp-h720dp-night-xhdpi")
+    fun darkConversationListRendersPersistentCreationAndUnreadState() {
+        rule.setContent { CompanionTheme { ThreadsScreen(sessions = SessionLists.sort(rows.map { it.copy(unread = it.id == "fresh") }),
+            activeProfileId = "research", onRefresh = {}, nowMs = now) } }
+        rule.onNodeWithTag("threads.new").assertIsDisplayed()
+        rule.onNodeWithTag("threads.unread.fresh", useUnmergedTree = true).assertIsDisplayed()
+        capture("chat-list-dark")
+    }
+
     @get:Rule
     val rule = createAndroidComposeRule<ComponentActivity>()
 

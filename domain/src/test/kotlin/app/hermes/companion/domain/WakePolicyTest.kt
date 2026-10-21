@@ -35,6 +35,57 @@ class WakePolicyTest {
     }
 
     @Test
+    fun subscriptionRoutingCannotBeOverriddenByAnExternalPublisher() {
+        val raw = """{"type":"approval.request","session_id":"s","profile":"coder","origin":"https://unrelated.example"}"""
+        val ping = WakePolicy.parseForSubscription(raw, "https://known.example/hermes")!!
+        assertEquals("https://known.example/hermes", ping.origin)
+        assertEquals("coder", ping.profile)
+        assertNull(WakePolicy.parseForSubscription(raw, ""))
+    }
+
+    @Test
+    fun authorityOnlyTopicsCannotBeReboundToAnActiveOrSavedProxyPath() {
+        val topics = mapOf("https://known.example" to "https://ntfy.example/topic")
+        assertTrue(WakePolicy.subscriptionTargets(topics, listOf("https://known.example/hermes"), null).isEmpty())
+        val multiple = listOf("https://known.example/one", "https://known.example/two")
+        assertTrue(WakePolicy.subscriptionTargets(topics, multiple, "https://known.example/two").isEmpty())
+        assertTrue(WakePolicy.subscriptionTargets(topics, emptyList(), null).isEmpty())
+    }
+
+    @Test
+    fun exactTopicsKeepIndependentProxyOwnersAcrossActiveSwitches() {
+        val first = "https://known.example/one"
+        val second = "https://known.example/two"
+        val topics = mapOf(first to "https://ntfy.example/one", second to "https://ntfy.example/two")
+        assertEquals(topics, WakePolicy.subscriptionTargets(topics, listOf(first, second), second))
+        assertEquals(
+            mapOf(first to "https://ntfy.example/one"),
+            WakePolicy.subscriptionTargets(mapOf(first to "https://ntfy.example/one"), listOf(first), second),
+        )
+        assertTrue(WakePolicy.subscriptionTargets(mapOf(first to "https://ntfy.example/one"), emptyList(), second).isEmpty())
+    }
+
+    @Test
+    fun exactTopicOwnersNormalizeOnlyEquivalentOriginForms() {
+        assertEquals("https://known.example/Assistant", WakePolicy.topicOwnerKey("HTTPS://KNOWN.example:443/Assistant/"))
+        assertEquals("http://[fd7a::1]:9120/proxy", WakePolicy.topicOwnerKey("http://[FD7A::1]:9120/proxy"))
+        assertEquals("http://host:9120/proxy", WakePolicy.topicOwnerKey("host:9120/proxy"))
+        assertEquals(
+            mapOf("https://known.example/one" to "https://ntfy.example/one"),
+            WakePolicy.subscriptionTargets(mapOf("https://known.example/one" to "https://ntfy.example/one"),
+                emptyList(), "https://KNOWN.example:443/one/"),
+        )
+    }
+
+    @Test
+    fun exactTopicOwnersRejectCredentialsQueriesAndInvalidOrigins() {
+        listOf("", "https://", "file:///proxy", "https://user:password@host/proxy",
+            "https://host/proxy?token=secret", "https://host/proxy#fragment").forEach {
+            assertNull(it, WakePolicy.topicOwnerKey(it))
+        }
+    }
+
+    @Test
     fun ignoresTranscriptAndUnknownType() {
         assertNull(WakePolicy.parse("""{"type":"chat.delta","session_id":"s","profile":"coder","body":"secret"}"""))
         val ping = WakePolicy.parse(
@@ -58,6 +109,22 @@ class WakePolicyTest {
             hosted,
         )
         assertEquals(DeepLink("sess-1", "coder", "http://100.88.4.63:9120"), WakePolicy.parseDeepLink(hosted))
+    }
+
+    @Test
+    fun topicUrlPreservesQueriesAndEncodingWithoutAppendingSseToTheQuery() {
+        assertEquals(
+            "https://ntfy.local/team%2Ftopic/sse?priority=high",
+            WakePolicy.sseUrl("https://ntfy.local/team%2Ftopic?priority=high#unused"),
+        )
+        assertEquals(
+            "https://ntfy.local/topic/sse?since=latest",
+            WakePolicy.sseUrl("https://ntfy.local/topic/sse?since=latest"),
+        )
+        assertEquals("http://ntfy.local/topic/sse", WakePolicy.sseUrl("http://ntfy.local/topic/"))
+        assertNull(WakePolicy.sseUrl("https://"))
+        assertNull(WakePolicy.sseUrl("https://bad host/topic"))
+        assertNull(WakePolicy.sseUrl("file:///topic"))
     }
 
     @Test

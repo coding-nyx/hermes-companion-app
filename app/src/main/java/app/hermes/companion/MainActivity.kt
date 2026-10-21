@@ -112,7 +112,9 @@ class MainActivity : FragmentActivity() {
                                 contentResolver,
                                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
                             )
-                            vm.setA11yBound(DeviceLanePolicy.a11yEnabled(enabled))
+                            vm.setA11yBound(DeviceLanePolicy.componentEnabled(
+                                enabled, packageName, CompanionAccessibilityService::class.java.name,
+                            ))
                             vm.setOverlayGranted(LiveOverlay.allowed(this@MainActivity))
                             vm.setNotifyGranted(notifyAllowed())
 
@@ -152,8 +154,7 @@ class MainActivity : FragmentActivity() {
                     }
                     WakePolicy.parseDeepLink(rawUri)?.let { link ->
                         if (trusted(intent, app)) {
-                            if (link.roomId.isNotBlank()) vm.openRoomWake(link.origin, link.roomId)
-                            else vm.openWake(link.origin, link.profile, link.sessionId)
+                            vm.openNotificationLink(link.origin, link.profile, link.sessionId, link.roomId)
                         } else vm.requestDeepLink(link.origin, link.profile, link.sessionId, link.roomId)
                         // Consume so a config change does not replay the request.
                         intent.data = null

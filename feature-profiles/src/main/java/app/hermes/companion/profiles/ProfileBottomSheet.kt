@@ -36,7 +36,7 @@ import app.hermes.companion.design.Hairline
 import app.hermes.companion.design.ProfileGlyph
 import app.hermes.companion.model.ProfileRef
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ProfileBottomSheet(
     profiles: List<ProfileRef>,
@@ -49,7 +49,7 @@ fun ProfileBottomSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        shape = androidx.compose.foundation.shape.CutCornerShape(topStart = 16.dp, topEnd = 16.dp),
         containerColor = CompanionColor.VoidElevated,
         contentColor = CompanionColor.Text,
         dragHandle = {
@@ -75,17 +75,14 @@ fun ProfileBottomSheet(
                 .navigationBarsPadding()
                 .padding(bottom = CompanionSpace.Lg),
         ) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalArrangement = Arrangement.spacedBy(CompanionSpace.Xs),
             ) {
-                Text(
-                    text = "Profiles",
-                    style = CompanionType.Display,
-                )
+                app.hermes.companion.design.SheetHeading("Agent profiles", onDismiss,
+                    closeModifier = Modifier.testTag("nav.profile.sheet.close"))
                 ActionText(
                     text = "All profiles",
                     style = CompanionType.Caption.copy(color = CompanionColor.Signal),
@@ -99,52 +96,18 @@ fun ProfileBottomSheet(
                 )
             }
             Hairline()
+            Text("Choose the agent for this host. Each agent keeps its own conversations.",
+                style = CompanionType.Caption,
+                modifier = Modifier.padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm))
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = CompanionSpace.Sm),
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
+                verticalArrangement = Arrangement.spacedBy(CompanionSpace.Sm),
             ) {
                 items(profiles, key = { it.id }) { profile ->
-                    val isSelected = profile.id == activeProfileId
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("nav.profile.sheet.${profile.id}")
-                            .heightIn(min = 48.dp).clickable {
-                                onSelect(profile.id)
-                                onDismiss()
-                            }
-                            .padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Md),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(CompanionSpace.Md),
-                    ) {
-                        ProfileGlyph(
-                            code = profile.glyph,
-                            selected = isSelected,
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = profile.displayName,
-                                style = CompanionType.Body.copy(
-                                    color = if (isSelected) CompanionColor.Signal else CompanionColor.Text,
-                                ),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(listOfNotNull(profile.model.substringAfterLast("/").takeIf { it.isNotBlank() },
-                                "${profile.sessionCount} conversations").joinToString(" · "), style = CompanionType.Caption)
-
-                        }
-                        if (isSelected) {
-                            Text(
-                                text = "✓",
-                                style = CompanionType.Caption.copy(color = CompanionColor.Signal),
-                                modifier = Modifier
-
-                                    .padding(horizontal = CompanionSpace.Sm, vertical = 2.dp),
-                            )
-                        }
-                    }
+                    ProfileChoice(profile = profile, selected = profile.id == activeProfileId,
+                        onSelect = { onSelect(profile.id); onDismiss() },
+                        modifier = Modifier.testTag("nav.profile.sheet.${profile.id}"))
                 }
             }
         }

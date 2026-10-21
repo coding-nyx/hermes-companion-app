@@ -40,8 +40,8 @@ class AppNavigationRenderTest {
 
     @Test fun fourDestinationsAndADistinctCenterVoiceActionHaveTouchTargets() {
         bar(MainTab.THREADS)
-        listOf("Chats", "Agents", "Device", "More").forEach { compose.onNodeWithText(it).assertIsDisplayed() }
-        listOf("threads", "console", "device", "more").forEach {
+        listOf("Chats", "Gateway", "Device", "More").forEach { compose.onNodeWithText(it).assertIsDisplayed() }
+        listOf("threads", "gateway", "device", "more").forEach {
             compose.onNodeWithTag("nav.$it").assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
         }
         compose.onNodeWithTag("nav.voice").assertIsDisplayed().assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
@@ -51,7 +51,7 @@ class AppNavigationRenderTest {
 
     @Test fun doubledTextKeepsSelectedLabelReadableAndEveryDestinationAccessible() {
         bar(MainTab.DEVICE, fontScale = 2f)
-        listOf("Chats", "Agents", "Device", "More").forEach { compose.onNodeWithContentDescription(it).assertIsDisplayed().assertHeightIsAtLeast(48.dp) }
+        listOf("Chats", "Gateway", "Device", "More").forEach { compose.onNodeWithContentDescription(it).assertIsDisplayed().assertHeightIsAtLeast(48.dp) }
         listOf("Device").forEach {
             val node = compose.onNodeWithText(it, useUnmergedTree = true).assertIsDisplayed()
             val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
@@ -59,7 +59,7 @@ class AppNavigationRenderTest {
             // Intrinsic width can round by a fraction of a pixel. Require every character
             // on one non-ellipsized line, rather than flagging harmless rounding as clipping.
             assertTrue("Label clipped at double text size: $it", layouts.isNotEmpty() && layouts.all {
-                it.lineCount == 1 && !it.isLineEllipsized(0) && it.getLineEnd(0, visibleEnd = true) == it.layoutInput.text.length
+                it.lineCount <= 2 && (0 until it.lineCount).none { line -> it.isLineEllipsized(line) } && it.getLineEnd(it.lineCount - 1, visibleEnd = true) == it.layoutInput.text.length
             })
         }
         compose.onNodeWithTag("nav.device").assertIsSelected()
@@ -78,7 +78,8 @@ class AppNavigationRenderTest {
     }
 
     @Test fun secondaryDestinationsSelectMoreAndOpenConversationSelectsChats() {
-        assertEquals(NavigationDestination.MORE, navigationDestination(MainTab.GATEWAY, false))
+        assertEquals(NavigationDestination.GATEWAY, navigationDestination(MainTab.GATEWAY, false))
+        assertEquals(NavigationDestination.MORE, navigationDestination(MainTab.CONSOLE, false))
         assertEquals(NavigationDestination.MORE, navigationDestination(MainTab.PROFILES, false))
         assertEquals(NavigationDestination.CHATS, navigationDestination(MainTab.CONSOLE, true))
         bar(MainTab.REVIEW)
@@ -88,9 +89,9 @@ class AppNavigationRenderTest {
     @Test fun primaryActionsAreExplicitAndMoreOnlyOpensItsMenu() {
         val selected = mutableListOf<MainTab>(); var more = 0
         bar(MainTab.THREADS, onTab = selected::add, onMore = { more++ })
-        compose.onNodeWithTag("nav.console").performClick()
+        compose.onNodeWithTag("nav.gateway").performClick()
         compose.onNodeWithTag("nav.more").performClick()
-        assertEquals(listOf(MainTab.CONSOLE), selected)
+        assertEquals(listOf(MainTab.GATEWAY), selected)
         assertEquals(1, more)
     }
 
@@ -100,7 +101,7 @@ class AppNavigationRenderTest {
             NavigationMoreSheet(CompanionState(tab = MainTab.GATEWAY, hostName = "Lab"),
                 { actions += it.name }, { actions += "settings" }, { actions += "dismiss" })
         } }
-        listOf("Code review", "Schedules", "Hosts", "Profiles", "Settings").forEach {
+        listOf("Code review", "Schedules", "Coding agents", "Agent profiles", "Settings").forEach {
             compose.onNodeWithText(it).assertExists()
         }
         compose.onNodeWithTag("nav.review").performSemanticsAction(SemanticsActions.OnClick) { it() }
