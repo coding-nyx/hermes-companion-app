@@ -30,6 +30,10 @@ internal class DeviceSocket(private val http: OkHttpClient) {
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
     val commands: SharedFlow<DeviceCommand> = _commands.asSharedFlow()
+    private val rejected = java.util.concurrent.ConcurrentHashMap<String, String>()
+    fun consumeRejection(id: String): String? = rejected.remove(id)
+    private val acknowledged = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    fun consumeAcknowledgment(id: String): Boolean = acknowledged.remove(id)
 
     @Volatile
     var deviceId: String = ""
@@ -37,6 +41,9 @@ internal class DeviceSocket(private val http: OkHttpClient) {
 
     @Volatile
     private var ws: WebSocket? = null
+
+    @Volatile var passiveNotificationStream: Boolean = false
+        private set
 
     val isOpen: Boolean get() = opened.get() && ws != null
 
@@ -62,6 +69,11 @@ internal class DeviceSocket(private val http: OkHttpClient) {
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     fail(DashboardException("device_ws_failed", t.message ?: "device websocket failed"))
+                }
+
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    webSocket.close(code, reason)
+                    fail(DashboardException("device_ws_$code", reason.ifBlank { "device websocket closing" }))
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
@@ -124,9 +136,25 @@ internal class DeviceSocket(private val http: OkHttpClient) {
         val type = obj.str("type")
         when (type) {
             "mobile.controller.hello" -> {
+                passiveNotificationStream = (obj["server_features"] as? kotlinx.serialization.json.JsonArray)?.any { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull == "passive_notification_stream_v1" } == true && (obj["server_features"] as? kotlinx.serialization.json.JsonArray)?.any { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull == "notification_delivery_ack_v1" } == true
                 deviceId = obj.str("device_id")
                 opened.set(true)
                 if (!helloDone.isCompleted) helloDone.complete(deviceId)
+            }
+            "mobile.controller.event.ack" -> {
+                if (opened.get() && obj["accepted"]?.toString() == "true") {
+                    val id = obj.str("delivery_id")
+                    if (id.length in 1..64) {
+                        if (acknowledged.size >= 256) acknowledged.firstOrNull()?.let { acknowledged.remove(it) }
+                        acknowledged.add(id)
+                    }
+                } else if (opened.get() && obj["accepted"]?.toString() == "false") {
+                    val id = obj.str("delivery_id")
+                    if (id.length in 1..64) {
+                        if (rejected.size >= 256) rejected.keys.firstOrNull()?.let { rejected.remove(it) }
+                        rejected[id] = obj.str("code").take(64)
+                    }
+                }
             }
             "mobile.controller.command" -> {
                 if (!opened.get()) {
@@ -155,6 +183,7 @@ internal class DeviceSocket(private val http: OkHttpClient) {
 
     private fun fail(error: DashboardException) {
         opened.set(false)
+        passiveNotificationStream = false
         if (!helloDone.isCompleted) helloDone.completeExceptionally(error)
         if (!gone.isCompleted) gone.complete(Unit)
     }

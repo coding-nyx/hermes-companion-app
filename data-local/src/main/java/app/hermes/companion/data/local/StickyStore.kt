@@ -85,26 +85,46 @@ class StickyStore(context: Context) {
 
     /** Phone-wide: stream shade notifications to a chosen gateway+profile (A13.2). */
     var notifStreamEnabled: Boolean
-        get() = prefs.getBoolean(KEY_NOTIF_STREAM, false)
-        set(value) { prefs.edit().putBoolean(KEY_NOTIF_STREAM, value).apply() }
+        get() = prefs.getBoolean("notif_stream_consent_v2", false) && prefs.getBoolean(KEY_NOTIF_STREAM, false)
+        set(value) { prefs.edit().putBoolean("notif_stream_consent_v2", true).putBoolean(KEY_NOTIF_STREAM, value).apply() }
 
-    /** Target origin for the stream; blank → fall back to [lastGoodOrigin] / [origin]. */
+    var notifStreamRetentionMinutes: Int
+        get() = prefs.getInt("notif_stream_retention_v2", 15).takeIf { it in setOf(2, 15, 60) } ?: 15
+        set(value) { prefs.edit().putInt("notif_stream_retention_v2", value).apply() }
+
+    var notifStreamConsentVersion: Long
+        get() = prefs.getLong("notif_stream_version_v2", 0L)
+        set(value) { prefs.edit().putLong("notif_stream_version_v2", value).commit() }
+
+    var notifStreamApps: Set<String>
+        get() = prefs.getStringSet("notif_stream_apps_v2", emptySet()).orEmpty().toSet()
+        set(value) { prefs.edit().putStringSet("notif_stream_apps_v2", value.toSet()).apply() }
+
+    var notifStreamContent: String
+        get() = prefs.getString("notif_stream_content_v2", "metadata").takeIf { it in setOf("metadata", "title", "full") } ?: "metadata"
+        set(value) { prefs.edit().putString("notif_stream_content_v2", value).apply() }
+
+    var notifStreamCalls: Boolean
+        get() = prefs.getBoolean("notif_stream_calls_v2", true)
+        set(value) { prefs.edit().putBoolean("notif_stream_calls_v2", value).apply() }
+
+    /** Explicit target only. Legacy choices are retained, but new consent is required. */
     var notifStreamOrigin: String?
         get() = prefs.getString(KEY_NOTIF_STREAM_ORIGIN, null)?.takeIf { it.isNotBlank() }
         set(value) { prefs.edit().putString(KEY_NOTIF_STREAM_ORIGIN, value?.trim()?.ifBlank { null }).apply() }
 
     fun notifStreamProfileFor(origin: String): String? =
-        prefs.getString(KEY_NOTIF_STREAM_PROFILE + "." + HostKeys.of(origin), null) ?: profileFor(origin)
+        WakePolicy.topicOwnerKey(origin)?.let { prefs.getString("notif_stream_profile_v2." + it, null) }
 
     fun setNotifStreamProfile(origin: String, id: String?) {
         prefs.edit()
-            .putString(KEY_NOTIF_STREAM_PROFILE + "." + HostKeys.of(origin), id?.trim()?.ifBlank { null })
+            .putString("notif_stream_profile_v2." + (WakePolicy.topicOwnerKey(origin) ?: return), id?.trim()?.ifBlank { null })
             .apply()
     }
 
-    /** Resolved stream sink: configured origin or sticky last-good / origin. */
+    /** No fallback to the active chat or last-good host. */
     fun notifStreamTargetOrigin(): String? =
-        notifStreamOrigin ?: lastGoodOrigin ?: origin
+        notifStreamOrigin
 
     /** Thread rail order (A18.9): `CREATED` (default) / `ACTIVE` / `TITLE`. Phone-wide; parsed leniently by the domain. */
     var threadSort: String?

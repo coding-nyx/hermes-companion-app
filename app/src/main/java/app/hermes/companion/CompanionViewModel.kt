@@ -258,6 +258,7 @@ class CompanionViewModel(
 
     fun toggleStayConnected() {
         val next = !_state.value.stayConnected
+        if (next) StayConnectedService.backgroundTimedOut = false
         sticky.stayConnected = next
         _state.update { it.copy(stayConnected = next) }
     }
@@ -664,8 +665,13 @@ class CompanionViewModel(
     }
 
     fun setNotifStreamOrigin(origin: String) {
-        deviceNode.setNotifStreamTarget(origin, _state.value.notifStreamProfile)
+        deviceNode.setNotifStreamTarget(origin, null)
     }
+
+    fun setNotifStreamApp(pkg: String, selected: Boolean) = deviceNode.setNotifStreamApp(pkg, selected)
+    fun setNotifStreamContent(mode: String) = deviceNode.setNotifStreamContent(mode)
+    fun setNotifStreamRetention(minutes: Int) = deviceNode.setNotifStreamRetention(minutes)
+    fun toggleNotifStreamCalls() = deviceNode.toggleNotifStreamCalls()
 
     fun setNotifStreamProfile(profileId: String) {
         deviceNode.setNotifStreamTarget(_state.value.notifStreamOrigin, profileId)

@@ -15,6 +15,8 @@ import socket
 import struct
 import threading
 import traceback
+import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -46,6 +48,8 @@ except ImportError:  # script/tests on sys.path
     from pairing import PairingError, PairingStore, default_store_path
     from terminal_pty import PtySession, execute_quick_command
     from tickets import ALLOWLIST, PROTOCOL, TICKET_PREFIX, TicketError, TicketStore, parse_subprotocols
+
+SERVER_FEATURES = ["passive_notification_stream_v1", "notification_delivery_ack_v1"]
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -241,6 +245,10 @@ class RelayState:
         # Per-device armed / foreground hints from phone status frames.
         self.live_meta: dict[str, dict] = {}
         self.lock = threading.Lock()
+        self.lane_write_lock = threading.Lock()
+        self.notif_deliveries: dict[tuple[str, str, str], tuple[float, str]] = {}
+        self.notif_delivery_ttl = 65 * 60.0  # exceeds the phone maximum 60-minute retry retention
+        self.notif_delivery_cap = 4096
         self.seq = 0
         self.pending: dict[str, threading.Event] = {}
         self.results: dict[str, dict] = {}
@@ -330,8 +338,9 @@ class RelayState:
             "device_id": device_id,
         }
         try:
-            wfile.write(_ws_text(json.dumps(frame)))
-            wfile.flush()
+            with self.lane_write_lock:
+                wfile.write(_ws_text(json.dumps(frame)))
+                wfile.flush()
         except OSError as exc:
             with self.lock:
                 self.pending.pop(command_id, None)
@@ -386,9 +395,36 @@ class RelayState:
             pass
 
 
-    def push_notification(self, device_id: str, event: dict) -> None:
+    def push_notification(self, device_id: str, event: dict) -> str:
         if not device_id or not isinstance(event, dict):
-            return
+            return "invalid_event"
+        notification = event.get("notification")
+        notification = notification if isinstance(notification, dict) else {}
+        # An explicitly versioned phone consent contract. Malformed values never fall
+        # through to legacy wake behavior (bool is deliberately not truthiness).
+        if "passive" in notification and type(notification["passive"]) is not bool:
+            return "invalid_event"
+        passive = notification.get("passive") is True
+        delivery_key = None
+        fingerprint = None
+        if passive:
+            try:
+                delivery_id = str(uuid.UUID(notification.get("delivery_id", "")))
+            except (ValueError, TypeError, AttributeError):
+                return "invalid_event"
+            delivery_key = (device_id, str(event.get("profile") or ""), delivery_id)
+            mode = notification.get("content_mode", "metadata")
+            if mode not in ("metadata", "title", "full"):
+                return "invalid_event"
+            notification = dict(notification)
+            notification["content_mode"] = mode
+            if mode != "full":
+                notification["text"] = ""
+            if mode == "metadata":
+                notification["title"] = ""
+            notification["delivery_id"] = delivery_id
+            event = dict(event, notification=notification, content_trust="untrusted")
+            fingerprint = hashlib.sha256(json.dumps(event, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         # Per-app policy decides both whether this reaches the ring and whether it wakes
         # anyone. `off` drops it here rather than after the fact, so a muted app never
         # shows up in mobile_notifications either.
@@ -405,11 +441,24 @@ class RelayState:
             phone_off = tuple(getattr(device, "extra_protected", ()) or ())
             mode = notif_policy.effective_mode(package, profile=profile, phone_off=phone_off)
             if not notif_policy.should_ring(mode):
-                return
+                return "policy_blocked"
         except Exception:
             mode = None
         with self.lock:
+            if delivery_key is not None:
+                now = time.monotonic()
+                self.notif_deliveries = {k: v for k, v in self.notif_deliveries.items() if v[0] > now}
+                prior = self.notif_deliveries.get(delivery_key)
+                if prior is not None:
+                    return "duplicate" if prior[1] == fingerprint else "delivery_id_conflict"
+                if len(self.notif_deliveries) >= self.notif_delivery_cap:
+                    return "dedupe_capacity"
+                self.notif_deliveries[delivery_key] = (now + self.notif_delivery_ttl, fingerprint)
             ring = self.notif_rings.setdefault(device_id, [])
+            # Retries of an identical passive event do not grow the ring or cause effects.
+            # Updates with changed text/category/timestamp remain separate events.
+            if passive and event in ring:
+                return "duplicate"
             ring.append(event)
             overflow = len(ring) - self.notif_ring_cap
             if overflow > 0:
@@ -425,10 +474,11 @@ class RelayState:
             except ImportError:
                 from agent_wake import maybe_wake_for_notification
             # `silent` means ring-only: the agent can read it, but nothing is woken.
-            if mode is None or mode == "respond":
+            if not passive and (mode is None or mode == "respond"):
                 maybe_wake_for_notification(event)
         except Exception:
             pass
+        return "accepted"
 
     def list_notifications(
         self,
@@ -478,7 +528,7 @@ class RelayState:
                 self.injected_notif_keys = recent | {key}
             return True
 
-    def on_frame(self, raw: str, device_id: str | None = None) -> None:
+    def on_frame(self, raw: str, device_id: str | None = None) -> dict | None:
         if not raw:
             return
         try:
@@ -488,7 +538,7 @@ class RelayState:
         if not isinstance(payload, dict):
             return
         kind = payload.get("type")
-        lane_id = str(payload.get("device_id") or device_id or "")
+        lane_id = str(device_id or payload.get("device_id") or "")
         if kind == "mobile.controller.status":
             if lane_id:
                 self._apply_live_meta(lane_id, payload)
@@ -496,22 +546,40 @@ class RelayState:
         if kind == "mobile.controller.event":
             if lane_id and str(payload.get("event") or "") == "notification":
                 notif = payload.get("notification") if isinstance(payload.get("notification"), dict) else {}
+                try:
+                    ts_ms = int(payload.get("ts_ms") or 0)
+                except (ValueError, TypeError, OverflowError):
+                    return
                 row = {
                     "device_id": lane_id,
                     "profile": str(payload.get("profile") or ""),
-                    "ts_ms": int(payload.get("ts_ms") or 0),
+                    "ts_ms": ts_ms,
                     "event": "notification",
                     "notification": {
-                        "key": str(notif.get("key") or ""),
-                        "package": str(notif.get("package") or ""),
+                        "key": str(notif.get("key") or "")[:128],
+                        "package": str(notif.get("package") or "")[:256],
                         "title": str(notif.get("title") or "")[:240],
                         "text": str(notif.get("text") or "")[:480],
-                        "category": str(notif.get("category") or ""),
+                        "category": str(notif.get("category") or "")[:64],
                         "ongoing": bool(notif.get("ongoing")),
                         "clearable": bool(notif.get("clearable", True)),
                     },
                 }
-                self.push_notification(lane_id, row)
+                if "passive" in notif:
+                    row["notification"]["passive"] = notif["passive"]
+                    row["notification"]["content_mode"] = notif.get("content_mode", "metadata")
+                    row["notification"]["delivery_id"] = notif.get("delivery_id", "")
+                result = self.push_notification(lane_id, row)
+                if notif.get("passive") is True:
+                    try:
+                        delivery_id = str(uuid.UUID(notif.get("delivery_id", "")))
+                    except (ValueError, TypeError, AttributeError):
+                        return
+                    ack = {"type": "mobile.controller.event.ack", "delivery_id": delivery_id,
+                           "accepted": result in ("accepted", "duplicate")}
+                    if not ack["accepted"]:
+                        ack["code"] = result
+                    return ack
             return
         if kind != "mobile.controller.result":
             return
@@ -629,6 +697,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 "drift": "proxy",
                 "warnings": [],
             }
+        payload["server_features"] = list(SERVER_FEATURES)
         payload["upstream_url"] = f"http://{host}:{port}"
         ctl_mode = self.state.room_controller.mode()
         if standalone_enabled():
@@ -1457,6 +1526,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
             "type": "mobile.controller.hello",
             "device_id": issued.device_id,
             "capabilities": issued.capabilities,
+            "server_features": list(SERVER_FEATURES),
         }
         self.wfile.write(_ws_text(json.dumps(hello)))
         self.wfile.flush()
@@ -1467,7 +1537,11 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 raw = _ws_recv(self.rfile, self.wfile)
                 if raw is None:
                     break
-                self.state.on_frame(raw, device_id=issued.device_id)
+                ack = self.state.on_frame(raw, device_id=issued.device_id)
+                if isinstance(ack, dict) and ack.get("type") == "mobile.controller.event.ack":
+                    with self.state.lane_write_lock:
+                        self.wfile.write(_ws_text(json.dumps(ack)))
+                        self.wfile.flush()
         finally:
             with self.state.lock:
                 if self.state.lanes.get(issued.device_id) is self.wfile:

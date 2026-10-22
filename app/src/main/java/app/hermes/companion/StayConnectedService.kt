@@ -33,6 +33,7 @@ class StayConnectedService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (backgroundTimedOut) { stopSelf(); return START_NOT_STICKY }
         if (intent?.action == ACTION_REFRESH) {
             if (keepJob?.isActive == true) startForeground(ID, notice())
             return START_STICKY
@@ -48,6 +49,15 @@ class StayConnectedService : Service() {
         return START_STICKY
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        // Android 15 dataSync budget is finite. Stop promptly, never restart around it.
+        backgroundTimedOut = true
+        keepJob?.cancel()
+        (application as? CompanionApp)?.deviceNode?.pauseForBackgroundLimit()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     override fun onDestroy() {
         keepJob?.cancel()
         keepJob = null
@@ -56,7 +66,7 @@ class StayConnectedService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         val app = application as? CompanionApp
-        if (app != null && (app.sticky.stayConnected || app.sticky.notifStreamEnabled)) {
+        if (!backgroundTimedOut && app != null && (app.sticky.stayConnected || app.sticky.notifStreamEnabled)) {
             val stay = Intent(applicationContext, StayConnectedService::class.java)
             runCatching { androidx.core.content.ContextCompat.startForegroundService(applicationContext, stay) }
         } else {
@@ -131,13 +141,14 @@ class StayConnectedService : Service() {
     }
 
     companion object {
+        @Volatile internal var backgroundTimedOut = false
         const val ACTION_STOP = "app.hermes.companion.STAY_STOP"
         const val ACTION_REFRESH = "app.hermes.companion.STAY_REFRESH"
 
         /** Re-post the notification with the current active host; no-op if the service is not running. */
         fun refresh(context: android.content.Context) {
             val app = context.applicationContext as CompanionApp
-            if (!app.sticky.stayConnected && !app.sticky.notifStreamEnabled) return
+            if (backgroundTimedOut || (!app.sticky.stayConnected && !app.sticky.notifStreamEnabled)) return
             runCatching { context.startService(Intent(context, StayConnectedService::class.java).setAction(ACTION_REFRESH)) }
         }
 

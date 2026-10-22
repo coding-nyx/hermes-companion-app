@@ -480,6 +480,9 @@ class DashboardClient internal constructor(
     }
 
     fun deviceLaneOpen(): Boolean = deviceWs?.isOpen == true
+    fun consumeNotificationRejection(id: String): String? = deviceWs?.consumeRejection(id)
+    fun consumeNotificationAcknowledgment(id: String): Boolean = deviceWs?.consumeAcknowledgment(id) == true
+    fun passiveNotificationStreamSupported(): Boolean = deviceWs?.let { it.isOpen && it.passiveNotificationStream } == true
 
     fun deviceCommands(): Flow<DeviceCommand> = callbackFlow {
         val socket = deviceWs
