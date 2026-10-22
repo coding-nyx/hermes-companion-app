@@ -1,9 +1,9 @@
 package app.hermes.companion.device
 
 import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.Flow
 
 /** One shade notification the phone may forward to the stream target. */
 data class NotifStreamEvent(
@@ -15,6 +15,9 @@ data class NotifStreamEvent(
     val ongoing: Boolean,
     val clearable: Boolean,
     val postTimeMs: Long,
+    val consentVersion: Long = -1L,
+    val capturedAtMs: Long = System.currentTimeMillis(),
+    val contentMode: String = "metadata",
 )
 
 /**
@@ -23,11 +26,16 @@ data class NotifStreamEvent(
  * Config is pushed from the app module (StickyStore) so feature-device stays free of data-local.
  */
 object NotifStreamBus {
-    private val _events = MutableSharedFlow<NotifStreamEvent>(
-        extraBufferCapacity = 64,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
-    val events: SharedFlow<NotifStreamEvent> = _events.asSharedFlow()
+    val droppedBeforeQueue = java.util.concurrent.atomic.AtomicLong(0)
+    private val _events = Channel<NotifStreamEvent>(capacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST,
+        onUndeliveredElement = { droppedBeforeQueue.incrementAndGet() })
+    val events: Flow<NotifStreamEvent> = _events.receiveAsFlow()
+
+    @Volatile var allowedApps: Set<String> = emptySet()
+    @Volatile var contentMode: String = "metadata"
+    @Volatile var includeCalls: Boolean = true
+    @Volatile var consentVersion: Long = 0
+        private set
 
     @Volatile
     var listenerBound: Boolean = false
@@ -49,7 +57,7 @@ object NotifStreamBus {
      * the platform key. Bounded and insertion-ordered: the oldest entry is dropped past
      * [KEY_CAP] so a chatty phone cannot grow this without limit.
      *
-     * Only notifications that actually reached the stream are registered here, which means a
+     * Only notifications eligible for the current stream are registered here, which means a
      * protected or denylisted app's notification is not addressable by any of the notification
      * action tools either.
      */
@@ -74,10 +82,15 @@ object NotifStreamBus {
     }
 
     fun emit(event: NotifStreamEvent) {
-        _events.tryEmit(event)
+        _events.trySend(event)
     }
 
-    fun configure(enabled: Boolean, protectedPackages: Set<String>, selfPackageName: String) {
+    fun configure(enabled: Boolean, protectedPackages: Set<String>, selfPackageName: String, apps: Set<String> = emptySet(), content: String = "metadata", calls: Boolean = true, version: Long = consentVersion + 1) {
+        consentVersion = version
+        synchronized(keyMap) { keyMap.clear() }
+        allowedApps = apps.toSet()
+        contentMode = content
+        includeCalls = calls
         streamEnabled = enabled
         extraProtected = protectedPackages
         selfPackage = selfPackageName

@@ -127,6 +127,8 @@ Detach: `mobile.controller.detach` on the authenticated socket. Socket close wit
 
 Capability `device.notifications` is optional: include it on register only while the phone has the Notification Listener bound and live stream armed. Ticket may omit it when the stream is off.
 
+New receivers advertise `server_features: ["passive_notification_stream_v1", "notification_delivery_ack_v1"]` in the authenticated `mobile.controller.hello` and the informational `/companion/health` response. The phone must see the feature on the selected authenticated lane before sending the new consented stream. Absence means pause and request a receiver update, not downgrade to legacy wake behavior.
+
 Phone → Hermes event frame (not a command result):
 
 ```json
@@ -138,17 +140,36 @@ Phone → Hermes event frame (not a command result):
   "ts_ms": 1757160000000,
   "notification": {
     "key": "sha256-or-sbn-key",
-    "package": "com.telegram.messenger",
+    "package": "com.example.mail",
     "title": "…",
     "text": "…",
     "category": "msg",
     "ongoing": false,
-    "clearable": true
+    "clearable": true,
+    "passive": true,
+    "delivery_id": "c1807e6d-4cb3-484e-986c-761597027a52",
+    "content_mode": "full"
   }
 }
 ```
 
-Filter is denylist-only: built-in protected packages ∪ custom denylist ∪ Companion's own package/channels. Never auto-inject into chat/Telegram; the agent reads via `mobile_notifications` and may explicitly call `mobile_notifications_inject`.
+New phone filtering is explicit app allowlist plus protected packages and self/Telegram echo exclusions. New installs and incompatible legacy consent start disabled. Enabling or retargeting requires the phone UI consent flow; remote `device.notifications.stream.set` may disable only, not enable or change the destination. The phone pins an explicit gateway and profile; changing chats must not change this route. Pending events must not cross routing/consent boundaries.
+
+`notification.passive` is a strict JSON boolean. `true` means ring-only: the relay never schedules an agent wake, Telegram nudge, automatic inject, or phone action. Host `respond` policy cannot override this; host `off` can still drop the event. Invalid explicit passive values are rejected, not treated as legacy active. Missing passive retains old-client behavior only.
+
+For passive events, `content_mode` is `metadata` (default), `title`, or `full`. Metadata carries no title/body; title carries no body. The relay strips excess content defensively, marks ring rows `content_trust: "untrusted"`, rejects invalid modes and deduplicates identical retransmissions within its bounded ring. All notification content is untrusted third-party data, never an instruction or permission grant. The agent may explicitly read it with `mobile_notifications`; sharing/injection and actions still require their own authorization. Redacted or missing text must not be invented.
+
+`category: "call"` and `"missed_call"` are Android notification categories only. They do not establish guaranteed phone call state, grant call-log/audio access, or bypass Android lock/privacy restrictions. Calls are observed only when a selected app posts an exposed notification.
+
+Delivery is acknowledged on the same authenticated device lane only after ring acceptance:
+
+```json
+{"type":"mobile.controller.event.ack","delivery_id":"c1807e6d-4cb3-484e-986c-761597027a52","accepted":true}
+```
+
+Passive events require a UUID `delivery_id`. Retry the same UUID, timestamp and payload until acknowledgement, within the phone's bounded consent-scoped retention window (2, 15 or 60 minutes, default 15; at most 128 queued events); a socket write alone is not acceptance. A duplicate accepted event is acknowledged again without inserting another ring row. Deduplication is scoped by device+profile+UUID, retained for 65 minutes on the running relay, and bounded at 4,096 unexpired IDs. Saturation rejects new IDs rather than evicting unexpired dedupe records. Relay restart loses its in-memory ring and dedupe cache: this is at-least-once/best-effort delivery, not durable exactly-once messaging.
+
+A negative acknowledgement has `accepted:false` and `code`: `policy_blocked`, `invalid_event`, `delivery_id_conflict`, or `dedupe_capacity`. Only capacity is potentially transient; do not retry a policy/malformed/conflicting event indefinitely. Invalid/missing UUIDs cannot be acknowledged and are dropped. Clients must require **both** advertised features, must not downgrade, and must discard expired events or events invalidated by consent, app removal or destination changes.
 
 Status meta (reuse `mobile.controller.status`):
 

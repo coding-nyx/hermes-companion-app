@@ -480,6 +480,10 @@ def maybe_wake_for_notification(event: dict, *, now: Callable[[], float] | None 
     if not profile:
         return False
     notif = event.get("notification") if isinstance(event.get("notification"), dict) else {}
+    # Passive stream consent cannot be overridden by host policy or direct callers.
+    # Malformed explicit flags fail closed too; only explicit False is legacy-active.
+    if "passive" in notif and notif["passive"] is not False:
+        return False
     package = str(notif.get("package") or event.get("package") or "")
     title = str(notif.get("title") or event.get("title") or "")
     text = str(notif.get("text") or event.get("text") or "")

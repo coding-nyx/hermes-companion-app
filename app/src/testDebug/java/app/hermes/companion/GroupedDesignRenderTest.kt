@@ -42,7 +42,7 @@ class GroupedDesignRenderTest {
             else DeviceScreen(PairingPhase.PAIRED, "", "fixture", deviceLabel = "Samsung Galaxy S22", deviceProfileId = "developer", error = null,
                 laneOpen = true, a11yBound = true, overlayGranted = true, notifyGranted = true,
                 protectedCustom = listOf("com.example.bank"), nlsBound = true,
-                notifStreamEnabled = state.notifStreamEnabled, pairedHosts = listOf("https://fixture.invalid", "https://other.invalid"),
+                notifStreamApps = setOf("com.example.mail"), notifStreamEnabled = state.notifStreamEnabled, pairedHosts = listOf("https://fixture.invalid", "https://other.invalid"),
                 notifStreamOrigin = "https://fixture.invalid", notifStreamProfile = "developer", profilesForStream = listOf("developer", "researcher"),
                 onPair = {}, onCancel = {}, onRevoke = { actions += "revoke" }, onArm = { actions += "arm" },
                 onToggleNotifStream = { actions += "stream"; state = state.copy(notifStreamEnabled = !state.notifStreamEnabled) })
@@ -78,6 +78,7 @@ class GroupedDesignRenderTest {
         mount(font = 2f)
         rule.onNodeWithTag("device.stream.open").performScrollTo().performClick()
         rule.onNodeWithTag("device.stream").performScrollTo().performClick()
+        rule.onNodeWithText("Start sharing").performClick()
         Assert.assertEquals(listOf("stream"), actions)
         Assert.assertTrue(state.notifStreamEnabled)
         capture("notifications-large")

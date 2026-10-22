@@ -80,6 +80,11 @@ fun DeviceScreen(
     notifStreamEnabled: Boolean = false,
     notifStreamOrigin: String? = null,
     notifStreamProfile: String? = null,
+    notifStreamApps: Set<String> = emptySet(),
+    notifStreamContent: String = "metadata",
+    notifStreamCalls: Boolean = true,
+    notifStreamDelivery: String = "Off",
+    notifStreamRetentionMinutes: Int = 15,
     pairedHosts: List<String> = emptyList(),
     profilesForStream: List<String> = emptyList(),
     onPair: () -> Unit,
@@ -97,6 +102,10 @@ fun DeviceScreen(
     onToggleLockedAccess: () -> Unit = {},
     onToggleBiometricLock: () -> Unit = {},
     onToggleNotifStream: () -> Unit = {},
+    onSetStreamApp: (String, Boolean) -> Unit = { _, _ -> },
+    onSetStreamContent: (String) -> Unit = {},
+    onToggleStreamCalls: () -> Unit = {},
+    onSetStreamRetention: (Int) -> Unit = {},
     onPickStreamOrigin: (String) -> Unit = {},
     onPickStreamProfile: (String) -> Unit = {},
     onAddProtected: (String) -> Unit = {},
@@ -106,6 +115,8 @@ fun DeviceScreen(
 ) {
     var detail by rememberSaveable(deviceId, deviceProfileId) { mutableStateOf<String?>(null) }
     var confirmRevoke by rememberSaveable { mutableStateOf(false) }
+    var confirmStream by rememberSaveable { mutableStateOf(false) }
+    val streamReady = nlsBound && notifStreamApps.isNotEmpty() && !notifStreamOrigin.isNullOrBlank() && !notifStreamProfile.isNullOrBlank()
     var labelDraft by rememberSaveable(deviceId, deviceLabel) { mutableStateOf(deviceLabel) }
     val dismissKeyboard = rememberDismissKeyboard()
     val armed = arm != DeviceArm.DISARMED
@@ -178,7 +189,7 @@ fun DeviceScreen(
                     PreferenceRow("Notification stream", streamStatus.hint, value = streamStatus.label,
                         selected = notifStreamEnabled && nlsBound, onClick = { detail = "Notification stream" },
                         modifier = Modifier.testTag("device.stream.open").semantics { stateDescription = streamStatus.label })
-                    PreferenceRow("Destination", "${notifStreamOrigin ?: "Current host"}\n${notifStreamProfile ?: "Current profile"}",
+                    PreferenceRow("Destination", "${notifStreamOrigin ?: "Choose a gateway"}\n${notifStreamProfile ?: "Choose a profile"}",
                         value = "Change", onClick = { detail = "Notification destination" },
                         modifier = Modifier.testTag("device.stream.route"))
                     if (notifStreamEnabled && !nlsBound) PreferenceRow("Allow notification access", "Sharing is enabled, but Android access is missing.",
@@ -216,7 +227,7 @@ fun DeviceScreen(
             Column(Modifier.fillMaxWidth().verticalScroll(remember(detail) { androidx.compose.foundation.ScrollState(0) }).padding(horizontal = 24.dp).padding(bottom = 24.dp)
                 .testTag("device.details"), verticalArrangement = Arrangement.spacedBy(32.dp)) {
                 SheetHeading(detail!!, onClose = { detail = null }, closeModifier = Modifier.testTag("device.details.close"),
-                    onBack = if (detail == "Notification destination") ({ detail = "Notification stream" }) else null)
+                    onBack = if (detail == "Notification destination" || detail == "Observed apps") ({ detail = "Notification stream" }) else null)
                 when (detail) {
                     "This phone" -> {
                         GroupedSection("Identity", padded = true) {
@@ -264,30 +275,55 @@ fun DeviceScreen(
                         StatusStrip("${streamStatus.label}: ${streamStatus.hint}", tone = if (notifStreamEnabled && !nlsBound) CompanionColor.Warn else CompanionColor.TextDim,
                             modifier = Modifier.testTag("device.stream.status"))
                         GroupedSection("Sharing") {
-                            PreferenceToggle("Share notifications", notifStreamEnabled, onToggleNotifStream,
-                                summary = "Send allowed notifications to the selected host and profile", modifier = Modifier.testTag("device.stream"))
+                            PreferenceRow("Delivery (this app session)", notifStreamDelivery, modifier = Modifier.testTag("device.stream.delivery"))
+                            PreferenceToggle("Share notifications", notifStreamEnabled,
+                                { if (notifStreamEnabled) onToggleNotifStream() else confirmStream = true },
+                                enabled = notifStreamEnabled || streamReady,
+                                summary = when { !nlsBound -> "Allow notification access before starting sharing"; streamReady -> "Forward selected apps to your chosen gateway and profile"; else -> "Choose apps, a gateway and a profile first" },
+                                modifier = Modifier.testTag("device.stream"))
+                            PreferenceRow("Observed apps", "${notifStreamApps.size} selected · tap to select or remove", onClick = { detail = "Observed apps" }, modifier = Modifier.testTag("device.stream.apps.open"))
                             PermissionAccessRow("Notification access", "Read allowed notifications for sharing", nlsBound, onEnableNls, "device.nls")
-                            PreferenceRow("Destination", "${notifStreamOrigin ?: "Current host"} · ${notifStreamProfile ?: "Current profile"}",
+                            PreferenceRow("Destination", "${notifStreamOrigin ?: "Choose a gateway"} · ${notifStreamProfile ?: "Choose a profile"}",
                                 onClick = { detail = "Notification destination" }, modifier = Modifier.testTag("device.stream.sink"))
                         }
+                        GroupedSection("What to share") {
+                            listOf("metadata" to "App and event only", "title" to "Include title", "full" to "Include title and message").forEach { (mode, label) ->
+                                PreferenceRow(label, selected = notifStreamContent == mode,
+                                    value = if (notifStreamContent == mode) "Selected" else null,
+                                    onClick = { onSetStreamContent(mode) }, modifier = Modifier.testTag("device.stream.content.$mode"))
+                            }
+                            PreferenceToggle("Call notifications", notifStreamCalls, onToggleStreamCalls,
+                                summary = "Include call-category notifications from selected apps. Not a complete call-state feed; no call audio or call-log access.", modifier = Modifier.testTag("device.stream.calls"))
+                        }
+                        GroupedSection("Offline retention") {
+                            listOf(2, 15, 60).forEach { minutes ->
+                                PreferenceRow("$minutes minutes", selected = notifStreamRetentionMinutes == minutes,
+                                    value = if (notifStreamRetentionMinutes == minutes) "Selected" else null,
+                                    onClick = { onSetStreamRetention(minutes) }, modifier = Modifier.testTag("device.stream.retention.$minutes"))
+                            }
+                        }
                         GroupedSection("Privacy", padded = true) {
+                            Text("Offline events are encrypted on this phone, with at most 128 queued. Events expire after the selected retention. If full, the oldest is evicted and counted. Changing settings pauses sharing until you confirm again.", style = CompanionType.Body)
+                            Text("Only new notification events are shared, not a snapshot of your notification history. Call notifications are not guaranteed call-state events.", style = CompanionType.Caption)
+                            Text("Titles and messages may contain private information. App and event only is the safest setting. Android can redact or withhold sensitive notifications.", style = CompanionType.Body)
                             Text("Companion service channels and Telegram clients are always excluded.", style = CompanionType.Body, modifier = Modifier.testTag("device.stream.mute"))
-                            Text("Allowed content is visible to the chosen host. Injection into a conversation always requires an explicit decision.",
+                            Text("The gateway inbox is passive: an agent must read it explicitly. Sharing never starts autonomous actions or forwards to Telegram. Allowed content is visible to the chosen host.",
                                 style = CompanionType.Caption, modifier = Modifier.testTag("device.stream.warn"))
                         }
                     }
+                    "Observed apps" -> NotificationAppPicker(notifStreamApps, onSetStreamApp)
                     "Notification destination" -> {
                         Text("Allowed notification content is sent only to this host and profile. Changing the route does not arm phone control.", style = CompanionType.Body,
                             color = CompanionColor.TextDim)
                         GroupedSection("Host") {
                             pairedHosts.forEach { host -> PreferenceRow(host, selected = host == notifStreamOrigin,
                                 value = if (host == notifStreamOrigin) "Selected" else null, onClick = { onPickStreamOrigin(host) }, modifier = Modifier.testTag("device.stream.origin")) }
-                            if (pairedHosts.isEmpty()) PreferenceRow("Current host", notifStreamOrigin ?: "Select a paired host to change the destination")
+                            if (pairedHosts.isEmpty()) PreferenceRow("No paired gateway", notifStreamOrigin ?: "Select a paired host to change the destination")
                         }
                         GroupedSection("Profile") {
                             profilesForStream.forEach { profile -> PreferenceRow(profile, selected = profile == notifStreamProfile,
                                 value = if (profile == notifStreamProfile) "Selected" else null, onClick = { onPickStreamProfile(profile) }, modifier = Modifier.testTag("device.stream.profile")) }
-                            if (profilesForStream.isEmpty()) PreferenceRow("Current profile", notifStreamProfile ?: "Connect a host to choose a profile")
+                            if (profilesForStream.isEmpty()) PreferenceRow("No profiles available", "Select and connect to this gateway as your active host to load its profiles. No current-host profile is used as a fallback.")
                         }
                     }
                     "Protected apps" -> GroupedSection("App rules", padded = true) {
@@ -301,6 +337,17 @@ fun DeviceScreen(
             }
         }
     }
+    if (confirmStream) androidx.compose.material3.AlertDialog(onDismissRequest = { confirmStream = false },
+        title = { Text("Start notification sharing?") },
+        text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Gateway: ${notifStreamOrigin.orEmpty()}\nProfile: ${notifStreamProfile.orEmpty()}")
+            Text("${notifStreamApps.size} selected ${if (notifStreamApps.size == 1) "app" else "apps"}: ${notifStreamApps.sorted().joinToString()}")
+            Text("Content: ${when (notifStreamContent) { "full" -> "titles and message text"; "title" -> "titles"; else -> "app and event metadata only" }}. Call notifications: ${if (notifStreamCalls) "included" else "excluded"}.")
+            Text("Offline queue: encrypted, at most 128 events, retained for $notifStreamRetentionMinutes minutes. Oldest events are evicted when full.")
+            Text("The selected gateway can read and retain this data. Sharing does not arm phone control. You can stop sharing or remove an app at any time.")
+        } },
+        confirmButton = { androidx.compose.material3.TextButton(enabled = streamReady, modifier = Modifier.testTag("device.stream.confirm"), onClick = { confirmStream = false; onToggleNotifStream() }) { Text("Start sharing") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmStream = false }) { Text("Cancel") } })
     if (confirmRevoke) androidx.compose.material3.AlertDialog(onDismissRequest = { confirmRevoke = false },
         title = { Text("Remove this phone’s pairing?") },
         text = { Text("Host tools will lose access until this phone pairs again.") },

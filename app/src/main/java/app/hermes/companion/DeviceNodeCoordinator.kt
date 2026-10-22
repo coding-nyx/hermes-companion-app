@@ -6,6 +6,7 @@ import android.content.Intent
 import android.util.Base64
 import androidx.core.content.ContextCompat
 import app.hermes.companion.data.local.DeviceCredStore
+import app.hermes.companion.data.local.NotificationOutboxStore
 import app.hermes.companion.data.local.StickyStore
 import app.hermes.companion.data.remote.DashboardClient
 import app.hermes.companion.data.remote.DashboardException
@@ -22,6 +23,10 @@ import app.hermes.companion.device.SystemToolbox
 import app.hermes.companion.device.NotifStreamEvent
 import app.hermes.companion.device.StopStreamReceiver
 import app.hermes.companion.device.TelephonyToolbox
+import app.hermes.companion.domain.NotificationDeliveryPolicy
+import app.hermes.companion.domain.NotificationCapturePolicy
+import app.hermes.companion.domain.NotificationStreamPolicy
+import app.hermes.companion.domain.WakePolicy
 import app.hermes.companion.domain.CompactTree
 import app.hermes.companion.domain.DeviceArming
 import app.hermes.companion.domain.DeviceAudit
@@ -72,6 +77,11 @@ data class DeviceNodeState(
     val pairedHosts: List<String> = emptyList(),
     val openLanes: Set<String> = emptySet(),
     val notifStreamEnabled: Boolean = false,
+    val notifStreamApps: Set<String> = emptySet(),
+    val notifStreamContent: String = "metadata",
+    val notifStreamRetentionMinutes: Int = 15,
+    val notifStreamCalls: Boolean = true,
+    val notifStreamDelivery: String = "Off",
     val notifStreamOrigin: String? = null,
     val notifStreamProfile: String? = null,
     val nlsBound: Boolean = false,
@@ -98,6 +108,10 @@ class DeviceNodeCoordinator(
             protectedCustom = sticky.protectedPackages.sorted(),
             pairedHosts = deviceCreds.loadAll().map { it.origin },
             notifStreamEnabled = sticky.notifStreamEnabled,
+            notifStreamApps = sticky.notifStreamApps,
+            notifStreamContent = sticky.notifStreamContent,
+            notifStreamRetentionMinutes = sticky.notifStreamRetentionMinutes,
+            notifStreamCalls = sticky.notifStreamCalls,
             notifStreamOrigin = sticky.notifStreamTargetOrigin(),
             notifStreamProfile = sticky.notifStreamTargetOrigin()?.let { sticky.notifStreamProfileFor(it) },
             nlsBound = NotifStreamBus.listenerBound,
@@ -125,14 +139,65 @@ class DeviceNodeCoordinator(
     private var lastNodes: List<SnapshotNode> = emptyList()
     private val rateHits = mutableListOf<Long>()
     private var auditRows: List<DeviceAuditRow> = emptyList()
-    private val pendingNotifs = ArrayDeque<NotifStreamEvent>()
-    private val pendingNotifCap = 32
+    private data class PendingNotification(val event: NotifStreamEvent, val origin: String, val profile: String, val deviceId: String, val credentialHash: String, val deliveryId: String = java.util.UUID.randomUUID().toString(), var lastAttemptMs: Long = 0L, var persisted: Boolean = false)
+    private val outbox = NotificationOutboxStore(app)
+    private data class OutboxSnapshot(val version: Long, val json: String?, val ids: Set<String>)
+    private val outboxWrites = kotlinx.coroutines.channels.Channel<OutboxSnapshot>(kotlinx.coroutines.channels.Channel.CONFLATED)
+    private var lastStreamError = ""
+    private var deliveredCount = 0
+    private var droppedCount = 0
+    private var expiredCount = 0
+    private var overflowCount = 0
+    private var rejectedCount = 0
+    private val pendingNotifs = ArrayDeque<PendingNotification>()
+    private val pendingNotifCap = 128
+    private fun streamTtlMs() = sticky.notifStreamRetentionMinutes * 60_000L
     private var lastNotifAtMs: Long? = null
 
     init {
         // Volume chord, notification tap (DisarmReceiver) and HandsService teardown all land here.
         HandsBridge.onDisarm = { disarm() }
-        syncNotifBusConfig()
+        syncNotifBusConfig(invalidate = false)
+        scope.launch(Dispatchers.IO) {
+            for (snapshot in outboxWrites) {
+                try {
+                    if (snapshot.json == null) outbox.clear() else outbox.write(snapshot.json)
+                    withContext(Dispatchers.Main.immediate) {
+                        if (snapshot.version == sticky.notifStreamConsentVersion) {
+                            pendingNotifs.filter { it.deliveryId in snapshot.ids }.forEach { it.persisted = true }
+                            val target = sticky.notifStreamTargetOrigin()
+                            val profile = target?.let { sticky.notifStreamProfileFor(it) }
+                            val cred = target?.let { deviceCreds.load(it) }
+                            if (target != null && profile != null && cred != null) flushPending(target, cred.deviceId, profile)
+                        }
+                    }
+                } catch (_: Exception) {
+                    withContext(Dispatchers.Main.immediate) {
+                        if (snapshot.version == sticky.notifStreamConsentVersion) {
+                            setNotifStreamEnabled(false)
+                            _state.update { it.copy(notifStreamDelivery = "Paused: encrypted queue storage unavailable") }
+                        }
+                    }
+                }
+            }
+        }
+        scope.launch {
+            while (isActive) {
+                delay(5_000)
+                val captureOverflow = NotifStreamBus.droppedBeforeQueue.getAndSet(0).toInt()
+                droppedCount += captureOverflow; overflowCount += captureOverflow
+                val before = pendingNotifs.size
+                pendingNotifs.removeAll { !sticky.notifStreamEnabled || !NotificationCapturePolicy.fresh(it.event.capturedAtMs, System.currentTimeMillis(), streamTtlMs()) }
+                if (before != pendingNotifs.size) { droppedCount += before - pendingNotifs.size; expiredCount += before - pendingNotifs.size; persistOutbox() }
+                _state.update { it.copy(nlsBound = NotifStreamBus.listenerBound) }
+                if (!sticky.notifStreamEnabled) continue
+                val target = sticky.notifStreamTargetOrigin() ?: continue
+                val profile = sticky.notifStreamProfileFor(target) ?: continue
+                val cred = deviceCreds.load(target) ?: continue
+                if (sticky.notifStreamEnabled) startLane(target)
+                flushPending(target, cred.deviceId, profile)
+            }
+        }
         StopStreamReceiver.onStopStream = { setNotifStreamEnabled(false) }
         // Open lanes at process start, not on UI bind.
         //
@@ -147,8 +212,10 @@ class DeviceNodeCoordinator(
         // host on every transient process start. Safe with respect to arming: a fresh process is
         // DISARMED, and the idle timer and kill-switch notification only exist once armed, so this
         // cannot leave a UI-less lane sitting armed.
-        if (sticky.stayConnected || sticky.notifStreamEnabled) startAllLanes()
+        if (sticky.stayConnected) startAllLanes()
+        else if (sticky.notifStreamEnabled) sticky.notifStreamTargetOrigin()?.let { startLane(it) }
         scope.launch {
+            restoreOutbox()
             NotifStreamBus.events.collect { ev ->
                 forwardNotif(ev)
             }
@@ -173,7 +240,7 @@ class DeviceNodeCoordinator(
     /** Bounce open lanes so register re-sends metadata / custom denylist. */
     private fun refreshLaneRegistrations() {
         val open = _state.value.openLanes.toList()
-        val byKey = deviceCreds.loadAll().associateBy { HostClientPool.key(it.origin) }
+        val byKey = deviceCreds.loadAll().associateBy { deviceLaneKey(it.origin) }
         for (key in open) {
             val cred = byKey[key] ?: continue
             stopLane(cred.origin)
@@ -191,16 +258,18 @@ class DeviceNodeCoordinator(
         _state.update {
             it.withCred(deviceCreds.load(origin), origin).copy(
                 pairedHosts = deviceCreds.loadAll().map { c -> c.origin },
-                laneOpen = HostClientPool.key(origin) in it.openLanes,
+                laneOpen = deviceLaneKey(origin) in it.openLanes,
             )
         }
         startAllLanes()
         if (_state.value.arm != DeviceArm.DISARMED) syncHands(armed = true)
     }
 
-    /** Operator gone with nothing armed: drop every lane. Arm state is untouched. */
+    /** Chat UI lifetime must not stop the explicitly consented background notification lane. */
     fun unbind() {
-        lanes.keys.toList().forEach { stopLane(it) }
+        val streamTarget = if (sticky.notifStreamEnabled) sticky.notifStreamTargetOrigin() else null
+        lanes.keys.toList().filter { it != streamTarget?.let(::deviceLaneKey) }.forEach { stopLane(it) }
+        if (streamTarget != null) startLane(streamTarget)
         origin = null
     }
 
@@ -274,6 +343,7 @@ class DeviceNodeCoordinator(
             return
         }
         val next = (sticky.protectedPackages + pkg).toSortedSet()
+        setNotifStreamEnabled(false, deferLaneRefresh = true)
         sticky.protectedPackages = next
         _state.update { it.copy(protectedCustom = next.toList(), protectedError = null) }
         syncNotifBusConfig()
@@ -282,8 +352,10 @@ class DeviceNodeCoordinator(
 
     fun removeProtectedPackage(pkg: String) {
         val next = (sticky.protectedPackages - pkg).toSortedSet()
+        setNotifStreamEnabled(false, deferLaneRefresh = true)
         sticky.protectedPackages = next
         _state.update { it.copy(protectedCustom = next.toList(), protectedError = null) }
+        syncNotifBusConfig()
         refreshLaneRegistrations()
     }
 
@@ -295,6 +367,12 @@ class DeviceNodeCoordinator(
      *   it now. Command handlers pass true so their reply is not lost with the bounced lane.
      */
     fun setNotifStreamEnabled(enabled: Boolean, deferLaneRefresh: Boolean = false) {
+        val target = sticky.notifStreamTargetOrigin()
+        if (enabled && (target == null || sticky.notifStreamProfileFor(target).isNullOrBlank() || sticky.notifStreamApps.isEmpty() || deviceCreds.load(target) == null)) {
+            _errors.tryEmit("Choose apps, a paired gateway and a profile before sharing.")
+            return
+        }
+        if (enabled) StayConnectedService.backgroundTimedOut = false // explicit phone UI consent
         sticky.notifStreamEnabled = enabled
         syncNotifBusConfig()
         val origin = sticky.notifStreamTargetOrigin()
@@ -312,11 +390,21 @@ class DeviceNodeCoordinator(
         StayConnectedService.refresh(app)
     }
 
+    fun pauseForBackgroundLimit() {
+        droppedCount += pendingNotifs.size
+        sticky.notifStreamEnabled = false
+        syncNotifBusConfig()
+        _state.update { it.copy(notifStreamEnabled = false,
+            notifStreamDelivery = "Paused: Android background-service time limit reached. Open the app and confirm sharing again.") }
+    }
+
     fun setNotifStreamTarget(origin: String?, profileId: String?, deferLaneRefresh: Boolean = false) {
+        // Any route edit pauses collection and discards old-route events; resume needs UI consent.
+        setNotifStreamEnabled(false, deferLaneRefresh = true)
         val cleanOrigin = origin?.trim()?.takeIf { it.isNotBlank() }
         sticky.notifStreamOrigin = cleanOrigin
         val target = sticky.notifStreamTargetOrigin()
-        if (target != null && !profileId.isNullOrBlank()) {
+        if (target != null) {
             sticky.setNotifStreamProfile(target, profileId)
         }
         _state.update {
@@ -332,17 +420,59 @@ class DeviceNodeCoordinator(
     }
 
 
-    private fun syncNotifBusConfig() {
+    fun setNotifStreamApp(pkg: String, selected: Boolean) {
+        if (!Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+").matches(pkg)) return
+        setNotifStreamEnabled(false, deferLaneRefresh = true)
+        sticky.notifStreamApps = if (selected) sticky.notifStreamApps + pkg else sticky.notifStreamApps - pkg
+        refreshStreamChoices()
+    }
+
+    fun setNotifStreamContent(mode: String) {
+        if (mode !in setOf("metadata", "title", "full")) return
+        setNotifStreamEnabled(false, deferLaneRefresh = true)
+        sticky.notifStreamContent = mode
+        refreshStreamChoices()
+    }
+
+    fun setNotifStreamRetention(minutes: Int) {
+        if (minutes !in setOf(2, 15, 60)) return
+        setNotifStreamEnabled(false, deferLaneRefresh = true)
+        sticky.notifStreamRetentionMinutes = minutes
+        refreshStreamChoices()
+    }
+
+    fun toggleNotifStreamCalls() {
+        setNotifStreamEnabled(false, deferLaneRefresh = true)
+        sticky.notifStreamCalls = !sticky.notifStreamCalls
+        refreshStreamChoices()
+    }
+
+    private fun refreshStreamChoices() {
+        syncNotifBusConfig()
+        _state.update { it.copy(notifStreamApps = sticky.notifStreamApps, notifStreamContent = sticky.notifStreamContent, notifStreamRetentionMinutes = sticky.notifStreamRetentionMinutes, notifStreamCalls = sticky.notifStreamCalls) }
+        refreshLaneRegistrations()
+    }
+
+    private fun syncNotifBusConfig(invalidate: Boolean = true) {
+        if (invalidate) {
+            sticky.notifStreamConsentVersion = sticky.notifStreamConsentVersion + 1
+            pendingNotifs.clear()
+            outboxWrites.trySend(OutboxSnapshot(sticky.notifStreamConsentVersion, null, emptySet()))
+        }
         NotifStreamBus.configure(
             enabled = sticky.notifStreamEnabled,
             protectedPackages = sticky.protectedPackages,
             selfPackageName = app.packageName,
+            apps = sticky.notifStreamApps,
+            content = sticky.notifStreamContent,
+            calls = sticky.notifStreamCalls,
+            version = sticky.notifStreamConsentVersion,
         )
     }
 
     /** Keep an FGS alive while stream is on even if stay-connected is off. */
     private fun syncStayForStream() {
-        val need = sticky.notifStreamEnabled || sticky.stayConnected
+        val need = (sticky.notifStreamEnabled || sticky.stayConnected) && !StayConnectedService.backgroundTimedOut
         val intent = Intent(app, StayConnectedService::class.java)
         if (need) {
             runCatching { ContextCompat.startForegroundService(app, intent) }
@@ -361,63 +491,131 @@ class DeviceNodeCoordinator(
         return base
     }
 
+    private fun streamEventAllowed(ev: NotifStreamEvent): Boolean =
+        sticky.notifStreamEnabled &&
+            ev.consentVersion == NotifStreamBus.consentVersion &&
+            NotificationCapturePolicy.fresh(ev.capturedAtMs, System.currentTimeMillis(), streamTtlMs()) &&
+            NotificationCapturePolicy.selected(ev.packageName, sticky.notifStreamApps, ev.category, sticky.notifStreamCalls) &&
+            NotificationStreamPolicy.shouldForward(ev.packageName, sticky.protectedPackages, app.packageName)
+
     private fun forwardNotif(ev: NotifStreamEvent) {
-        if (!sticky.notifStreamEnabled) return
-        lastNotifAtMs = System.currentTimeMillis()
-        _state.update {
-            it.copy(notifLastAgeMs = 0L, nlsBound = NotifStreamBus.listenerBound)
-        }
-        val target = sticky.notifStreamTargetOrigin() ?: run {
-            bufferNotif(ev)
-            return
-        }
-        val cred = deviceCreds.load(target) ?: run {
-            bufferNotif(ev)
-            return
-        }
-        val profile = sticky.notifStreamProfileFor(target) ?: cred.profileId
-        val client = clients.existing(target)
-        if (client == null || !client.deviceLaneOpen()) {
-            bufferNotif(ev)
-            return
-        }
-        val notifJson = buildNotifJson(ev)
-        val ok = client.sendDeviceEvent(
-            event = "notification",
-            deviceId = cred.deviceId,
-            profile = profile,
-            tsMs = ev.postTimeMs,
-            notificationJson = notifJson,
-        )
-        if (!ok) bufferNotif(ev)
-        else flushPending(target, cred.deviceId, profile)
+        if (!streamEventAllowed(ev)) return
+        val target = sticky.notifStreamTargetOrigin() ?: return
+        val profile = sticky.notifStreamProfileFor(target) ?: return
+        val cred = deviceCreds.load(target) ?: return
+        val now = System.currentTimeMillis()
+        lastNotifAtMs = now
+        while (pendingNotifs.size >= pendingNotifCap) { pendingNotifs.removeFirst(); droppedCount++; overflowCount++ }
+        pendingNotifs.addLast(PendingNotification(ev, target, profile, cred.deviceId, credentialHash(cred)))
+        if (!persistOutbox()) return
+        flushPending(target, cred.deviceId, profile)
     }
 
-    private fun bufferNotif(ev: NotifStreamEvent) {
-        while (pendingNotifs.size >= pendingNotifCap) pendingNotifs.removeFirst()
-        pendingNotifs.addLast(ev)
+    private fun credentialHash(cred: DeviceCred): String = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(cred.credential.toByteArray()).joinToString("") { "%02x".format(it) }
+
+    private fun persistOutbox(): Boolean {
+        val rows = org.json.JSONArray()
+        pendingNotifs.forEach { q ->
+            rows.put(org.json.JSONObject().put("origin", q.origin).put("profile", q.profile).put("device", q.deviceId)
+                .put("credential_hash", q.credentialHash).put("delivery_id", q.deliveryId)
+                .put("event", org.json.JSONObject(buildNotifJson(q)).put("post_time", q.event.postTimeMs)
+                    .put("captured_at", q.event.capturedAtMs).put("version", q.event.consentVersion)))
+        }
+        // Conflation keeps only the latest complete snapshot. Single IO consumer preserves
+        // ordering; new events are not transmitted until that snapshot is durable.
+        return outboxWrites.trySend(OutboxSnapshot(sticky.notifStreamConsentVersion,
+            if (pendingNotifs.isEmpty()) null else rows.toString(), pendingNotifs.map { it.deliveryId }.toSet())).isSuccess
+    }
+
+    private suspend fun restoreOutbox() {
+        try {
+            if (!sticky.notifStreamEnabled) { persistOutbox(); return }
+            val generation = sticky.notifStreamConsentVersion
+            val raw = withContext(Dispatchers.IO) { outbox.read() }
+            if (generation != sticky.notifStreamConsentVersion || !sticky.notifStreamEnabled) return
+            val rows = org.json.JSONArray(raw ?: "[]")
+            for (i in 0 until minOf(rows.length(), pendingNotifCap)) {
+                val q = rows.getJSONObject(i); val e = q.getJSONObject("event")
+                val ev = NotifStreamEvent(e.getString("key"), e.getString("package"), e.getString("title"), e.getString("text"),
+                    e.getString("category"), e.getBoolean("ongoing"), e.getBoolean("clearable"), e.getLong("post_time"),
+                    e.getLong("version"), e.getLong("captured_at"), e.getString("content_mode"))
+                if (NotificationCapturePolicy.fresh(ev.capturedAtMs, System.currentTimeMillis(), streamTtlMs()) && ev.consentVersion == sticky.notifStreamConsentVersion)
+                    pendingNotifs.addLast(PendingNotification(ev, q.getString("origin"), q.getString("profile"), q.getString("device"), q.getString("credential_hash"), q.getString("delivery_id"), persisted = true))
+            }
+            persistOutbox()
+        } catch (_: Exception) {
+            pendingNotifs.clear(); persistOutbox()
+            _state.update { it.copy(notifStreamDelivery = "Old encrypted queue could not be restored") }
+        }
     }
 
     private fun flushPending(origin: String, deviceId: String, profile: String) {
-        val client = clients.existing(origin) ?: return
-        while (pendingNotifs.isNotEmpty() && client.deviceLaneOpen()) {
-            val ev = pendingNotifs.removeFirst()
-            val ok = client.sendDeviceEvent(
-                event = "notification",
-                deviceId = deviceId,
-                profile = profile,
-                tsMs = ev.postTimeMs,
-                notificationJson = buildNotifJson(ev),
-            )
-            if (!ok) {
-                pendingNotifs.addFirst(ev)
-                break
-            }
+        if (!sticky.notifStreamEnabled) return
+        if (DirectToolbox.nlsStatus(app)["nls_bound"] != true) {
+            // A temporary service disconnect is not revocation. The secure setting is.
+            droppedCount += pendingNotifs.size
+            setNotifStreamEnabled(false)
+            _state.update { it.copy(notifStreamDelivery = "Paused: notification access was revoked; queue discarded") }
+            return
         }
+        val target = sticky.notifStreamTargetOrigin() ?: return
+        if (WakePolicy.topicOwnerKey(origin) != WakePolicy.topicOwnerKey(target) || sticky.notifStreamProfileFor(target) != profile) return
+        val client = clients.existing(origin)
+        val cred = deviceCreds.load(origin)
+        val before = pendingNotifs.size
+        pendingNotifs.removeAll { q ->
+            val invalid = !streamEventAllowed(q.event) || cred == null || !NotificationDeliveryPolicy.sameScope(q.origin, q.profile, q.deviceId, q.credentialHash,
+                    origin, profile, deviceId, credentialHash(cred))
+            if (invalid) {
+                droppedCount++
+                if (!NotificationCapturePolicy.fresh(q.event.capturedAtMs, System.currentTimeMillis(), streamTtlMs())) expiredCount++
+            }
+            invalid
+        }
+        if (pendingNotifs.size != before) persistOutbox()
+        if (client == null || !client.deviceLaneOpen()) {
+            _state.update { it.copy(notifStreamDelivery = "Offline · ${pendingNotifs.size} queued · $droppedCount expired/dropped") }
+            return
+        }
+        if (!client.passiveNotificationStreamSupported()) {
+            droppedCount += pendingNotifs.size
+            setNotifStreamEnabled(false)
+            _state.update { it.copy(notifStreamDelivery = "Paused: update the gateway extension for private streaming · $droppedCount discarded") }
+            return
+        }
+        val now = System.currentTimeMillis()
+        val countBeforeAck = pendingNotifs.size
+        val iterator = pendingNotifs.iterator()
+        while (iterator.hasNext()) {
+            val queued = iterator.next()
+            val action = NotificationDeliveryPolicy.next(queued.persisted, client.consumeNotificationAcknowledgment(queued.deliveryId), queued.lastAttemptMs, now)
+            if (action == NotificationDeliveryPolicy.Action.WAIT_FOR_STORAGE) continue
+            if (action == NotificationDeliveryPolicy.Action.ACKNOWLEDGED) {
+                iterator.remove(); deliveredCount++; continue
+            }
+            val rejection = client.consumeNotificationRejection(queued.deliveryId)
+            if (rejection != null) {
+                lastStreamError = when (rejection) {
+                    "policy_blocked" -> "gateway policy blocked an event"
+                    "dedupe_capacity" -> "gateway inbox busy"
+                    else -> "gateway rejected an event"
+                }
+                if (rejection != "dedupe_capacity") { iterator.remove(); droppedCount++; rejectedCount++; continue }
+            }
+            if (action == NotificationDeliveryPolicy.Action.WAIT_FOR_RETRY) continue
+            queued.lastAttemptMs = now
+            if (!client.sendDeviceEvent("notification", deviceId, profile, queued.event.postTimeMs, buildNotifJson(queued))) break
+        }
+        if (pendingNotifs.size != countBeforeAck) persistOutbox()
+        _state.update { it.copy(notifLastAgeMs = lastNotifAtMs?.let { now - it }, nlsBound = NotifStreamBus.listenerBound,
+            notifStreamDelivery = "$deliveredCount acknowledged · ${pendingNotifs.size} queued · $droppedCount discarded ($expiredCount expired, $overflowCount overflow, $rejectedCount rejected)" + if (lastStreamError.isBlank()) "" else " · Last issue: $lastStreamError") }
     }
 
-    private fun buildNotifJson(ev: NotifStreamEvent): String =
-        """{"key":${jsonQuote(ev.key)},"package":${jsonQuote(ev.packageName)},"title":${jsonQuote(ev.title)},"text":${jsonQuote(ev.text)},"category":${jsonQuote(ev.category)},"ongoing":${ev.ongoing},"clearable":${ev.clearable}}"""
+    private fun buildNotifJson(q: PendingNotification): String {
+        val ev = q.event
+        return """{"delivery_id":${jsonQuote(q.deliveryId)},"key":${jsonQuote(ev.key)},"package":${jsonQuote(ev.packageName)},"title":${jsonQuote(ev.title)},"text":${jsonQuote(ev.text)},"category":${jsonQuote(ev.category)},"ongoing":${ev.ongoing},"clearable":${ev.clearable},"passive":true,"content_mode":${jsonQuote(ev.contentMode)}}"""
+    }
 
     private fun pushStreamStatus() {
         val target = sticky.notifStreamTargetOrigin() ?: return
@@ -678,7 +876,7 @@ class DeviceNodeCoordinator(
     // ---- device lane ------------------------------------------------------------------------
 
     private fun startLane(laneOrigin: String) {
-        val key = HostClientPool.key(laneOrigin)
+        val key = deviceLaneKey(laneOrigin)
         if (key.isBlank()) return
         val cred = deviceCreds.load(laneOrigin) ?: return
         if (lanes[key]?.isActive == true) return
@@ -705,9 +903,9 @@ class DeviceNodeCoordinator(
                         wakeTopic = sticky.ntfyTopicFor(laneOrigin).orEmpty(),
                     )
                     // After lane is up, push stream status + flush buffered notifs for this target.
-                    if (HostClientPool.key(laneOrigin) == HostClientPool.key(sticky.notifStreamTargetOrigin().orEmpty())) {
+                    if (WakePolicy.topicOwnerKey(laneOrigin) == WakePolicy.topicOwnerKey(sticky.notifStreamTargetOrigin().orEmpty())) {
                         pushStreamStatus()
-                        flushPending(laneOrigin, cred.deviceId, sticky.notifStreamProfileFor(laneOrigin) ?: cred.profileId)
+                        sticky.notifStreamProfileFor(laneOrigin)?.let { flushPending(laneOrigin, cred.deviceId, it) }
                     }
                     if (_state.value.deviceLabel.isBlank()) {
                         _state.update { it.copy(deviceLabel = label) }
@@ -752,7 +950,7 @@ class DeviceNodeCoordinator(
             val lanesNow = if (open) it.openLanes + key else it.openLanes - key
             it.copy(
                 openLanes = lanesNow,
-                laneOpen = origin?.let { o -> HostClientPool.key(o) in lanesNow } ?: false,
+                laneOpen = origin?.let { o -> deviceLaneKey(o) in lanesNow } ?: false,
             )
         }
         // The kill-switch notification names live lanes; keep it current while armed.
@@ -761,7 +959,7 @@ class DeviceNodeCoordinator(
     }
 
     private fun stopLane(laneOrigin: String) {
-        val key = HostClientPool.key(laneOrigin)
+        val key = deviceLaneKey(laneOrigin)
         lanes.remove(key)?.cancel()
         clients.existing(laneOrigin)?.closeDeviceLane()
         lastRefs = emptySet()
@@ -1475,7 +1673,7 @@ class DeviceNodeCoordinator(
                     return DeviceLanePolicy.fail(
                         command.commandId,
                         "missing_args",
-                        "pass enabled=true|false and/or origin=… and/or profile=…",
+                        "pass enabled=false to stop sharing; enable and routing require the phone UI",
                     )
                 }
                 // Validate before touching anything: a rejected call must not have moved the target.
@@ -1486,14 +1684,10 @@ class DeviceNodeCoordinator(
                         "enabled must be one of true/false",
                     )
                 }
-                // Setting the target first means setNotifStreamEnabled(…) later sees the
-                // new target when it reconfigures the bus.
-                if (originRaw != null || profileRaw != null) {
-                    setNotifStreamTarget(originRaw, profileRaw, deferLaneRefresh = true)
+                if (enabledParsed == true || originRaw != null || profileRaw != null) {
+                    return DeviceLanePolicy.fail(command.commandId, "phone_consent_required", "Choose apps and destination and enable sharing in the phone UI.")
                 }
-                if (enabledParsed != null) {
-                    setNotifStreamEnabled(enabledParsed, deferLaneRefresh = true)
-                }
+                setNotifStreamEnabled(false, deferLaneRefresh = true)
                 val target = sticky.notifStreamTargetOrigin()
                 val profile = target?.let { sticky.notifStreamProfileFor(it) }
                 DeviceLanePolicy.ok(
@@ -1589,7 +1783,7 @@ class DeviceNodeCoordinator(
 /** Pairing phase derives from the stored credential, but only for the origin it was issued by. */
 private fun DeviceNodeState.withCred(cred: DeviceCred?, origin: String?): DeviceNodeState {
     val mismatch = cred != null && cred.origin.isNotBlank() && !origin.isNullOrBlank() &&
-        HostClientPool.key(cred.origin) != HostClientPool.key(origin)
+        deviceLaneKey(cred.origin) != deviceLaneKey(origin)
     if (cred == null || mismatch) {
         return copy(pairingPhase = PairingPhase.IDLE, pairingCode = "", deviceId = null, deviceProfileId = null)
     }
@@ -1600,3 +1794,6 @@ private fun DeviceNodeState.withCred(cred: DeviceCred?, origin: String?): Device
         deviceProfileId = cred.profileId,
     )
 }
+
+/** Preserve proxy prefixes when identifying a paired device lane. */
+internal fun deviceLaneKey(origin: String): String = WakePolicy.topicOwnerKey(origin).orEmpty()
