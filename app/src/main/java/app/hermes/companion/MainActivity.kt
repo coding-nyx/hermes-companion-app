@@ -362,6 +362,10 @@ class MainActivity : FragmentActivity() {
                         startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                     },
                     onToggleNotifStream = vm::toggleNotifStream,
+                    onSetStreamApp = vm::setNotifStreamApp,
+                    onSetStreamContent = vm::setNotifStreamContent,
+                    onToggleStreamCalls = vm::toggleNotifStreamCalls,
+                    onSetStreamRetention = vm::setNotifStreamRetention,
                     onPickStreamOrigin = vm::setNotifStreamOrigin,
                     onPickStreamProfile = vm::setNotifStreamProfile,
                     onEnableNotify = {

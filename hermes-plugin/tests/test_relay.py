@@ -231,6 +231,7 @@ class RelayTests(unittest.TestCase):
             with urllib.request.urlopen(f"http://{host}:{port}/companion/health", timeout=5) as resp:
                 payload = json.loads(resp.read().decode())
             self.assertEqual(payload["relay"], "ok")
+            self.assertIn("passive_notification_stream_v1", payload["server_features"])
             self.assertIn(payload["mode"], ("standalone", "proxy"))
             self.assertIn(payload["upstream"], ("reachable", "refused", "unused"))
         finally:

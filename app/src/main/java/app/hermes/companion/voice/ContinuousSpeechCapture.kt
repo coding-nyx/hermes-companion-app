@@ -65,6 +65,9 @@ class ContinuousSpeechCapture(private val pacingMs: Int = 900) : CallSpeechCaptu
                     }
                 }
             } catch (e: CancellationException) { throw e }
+            catch (e: SecurityException) {
+                withContext(Dispatchers.Main.immediate) { onError("Microphone permission was denied or revoked") }
+            }
             catch (e: Exception) { withContext(Dispatchers.Main.immediate) { onError(e.message ?: "Microphone unavailable") } }
             finally {
                 samples.fill(0); detector.reset()
