@@ -16,6 +16,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 
 class CompanionApp : Application() {
+    internal var conversationState: MutableStateFlow<CompanionState>? = null
+    internal var conversationChat: ChatSessionManager? = null
+    internal var voiceController: app.hermes.companion.voice.VoiceSessionController? = null
+    val voiceJournal by lazy { app.hermes.companion.data.local.VoiceJournal.encrypted(this) }
+    val nativeBotOperations by lazy { app.hermes.companion.data.local.NativeBotOperationStore.encrypted(this) }
     /** One DashboardClient per host (A8.5): token, cookies and sockets never cross hosts. */
     val clients: HostClientPool = HostClientPool { DashboardClient() }
     fun clientFor(origin: String): DashboardClient = clients.forOrigin(origin)

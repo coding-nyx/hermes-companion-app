@@ -64,11 +64,15 @@ fun DeviceScreen(
     error: String?,
     laneOpen: Boolean = false,
     a11yBound: Boolean = false,
+    a11yListed: Boolean? = null,
+    a11yOffRequested: Boolean = false,
     overlayGranted: Boolean = false,
     notifyGranted: Boolean = false,
     foregroundApp: String = "",
     lastAudit: String = "",
     arm: DeviceArm = DeviceArm.DISARMED,
+    armPending: Boolean = false,
+    automaticA11y: Boolean = false,
     awakeOnVoice: Boolean = false,
     lockedAccess: Boolean = false,
     biometricLock: Boolean = false,
@@ -90,6 +94,7 @@ fun DeviceScreen(
     onArm: () -> Unit = {},
     onDisarm: () -> Unit = {},
     onEnableA11y: () -> Unit = {},
+    onDisableA11y: () -> Unit = {},
     onEnableOverlay: () -> Unit = {},
     onEnableNotify: () -> Unit = {},
     onEnableNls: () -> Unit = {},
@@ -103,6 +108,10 @@ fun DeviceScreen(
     onRemoveProtected: (String) -> Unit = {},
     onRenameDevice: (String) -> Unit = {},
     modifier: Modifier = Modifier,
+    relayHealth: app.hermes.companion.model.CompanionHealth? = null,
+    connectionModeBusy: Boolean = false,
+    connectionModeError: String? = null,
+    onConnectionMode: (String) -> Unit = {},
 ) {
     var detail by rememberSaveable(deviceId, deviceProfileId) { mutableStateOf<String?>(null) }
     var confirmRevoke by rememberSaveable { mutableStateOf(false) }
@@ -112,7 +121,26 @@ fun DeviceScreen(
     val permissionCount = listOf(a11yBound, overlayGranted, notifyGranted).count { it }
     val streamStatus = notificationStreamStatus(notifStreamEnabled, nlsBound)
     Column(modifier.fillMaxSize().background(CompanionColor.Void).testTag("device.surface")
-        .verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(32.dp)) {
+        .verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        ConnectionModePreference(relayHealth?.mode.orEmpty(), relayHealth?.connectionSettings == true,
+            phase == PairingPhase.PAIRED, connectionModeBusy, connectionModeError, onConnectionMode)
+        GroupedSection("Hermes accessibility service", padded = true) {
+            val actual = when {
+                a11yBound -> "Connected"
+                a11yListed == true -> "Listed in Android Settings · not connected"
+                a11yListed == false -> "Off"
+                else -> "State unavailable · check Android Settings"
+            }
+            Text(actual, style = CompanionType.RowTitle, modifier = Modifier.testTag("device.a11y.actual"))
+            if (a11yOffRequested && (a11yBound || a11yListed != false)) {
+                Text("OFF requested. Waiting for Android; if this persists, switch Hermes off in Accessibility settings.", style = CompanionType.Caption)
+            }
+            Text("Screen access and Hands are separate. Arm Hands to allow control; turn it off at any time.", style = CompanionType.Caption)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Action("TURN ON", "device.a11y.on", onEnableA11y)
+                Action("TURN OFF", "device.a11y.off", onDisableA11y)
+            }
+        }
         when (phase) {
             PairingPhase.IDLE -> {
                 Text("Connect your phone", style = CompanionType.Display)
@@ -146,9 +174,11 @@ fun DeviceScreen(
                         onClick = { detail = "This phone" }, modifier = Modifier.testTag("device.status"))
                 }
                 GroupedSection("Hands", padded = true) {
-                    Text(if (armed) "Screen control is armed" else "Screen control is off", style = CompanionType.RowTitle,
+                    Text(if (armPending) "Connecting screen control…" else if (armed) "Screen control is armed" else "Screen control is off", style = CompanionType.RowTitle,
                         color = if (armed) CompanionColor.Warn else CompanionColor.Text,
-                        modifier = Modifier.testTag("device.arm").semantics { stateDescription = if (armed) "Armed" else "Disarmed" })
+                        modifier = Modifier.testTag("device.arm").semantics {
+                            stateDescription = if (armPending) "Connecting" else if (armed) "Armed" else "Disarmed"
+                        })
                     Text(if (armed) "Hermes can view and control this phone. Press volume down twice to stop."
                         else "Permission alone never starts control. Arm Hands only when you want Hermes to tap, scroll or type.",
                         style = CompanionType.Body, color = CompanionColor.TextDim)
@@ -162,8 +192,10 @@ fun DeviceScreen(
                         modifier = Modifier.testTag("device.nextAction"))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         when {
+                            armPending -> Action("CANCEL ARM", "device.disarm", onDisarm)
                             armed -> Action("DISARM", "device.disarm", onDisarm)
-                            !a11yBound -> Action("ENABLE A11Y", "device.a11y.enable", onEnableA11y)
+                            a11yOffRequested -> Action("TURN ON SERVICE", "device.a11y.enable", onEnableA11y)
+                            !a11yBound && !automaticA11y -> Action("ENABLE A11Y", "device.a11y.enable", onEnableA11y)
                             !notifyGranted -> Action("ENABLE NOTIFY", "device.notify.enable", onEnableNotify)
                             else -> Action("ARM", "device.arm.go", onArm)
                         }
@@ -214,7 +246,7 @@ fun DeviceScreen(
             sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true),
             containerColor = CompanionColor.Void, contentColor = CompanionColor.Text) {
             Column(Modifier.fillMaxWidth().verticalScroll(remember(detail) { androidx.compose.foundation.ScrollState(0) }).padding(horizontal = 24.dp).padding(bottom = 24.dp)
-                .testTag("device.details"), verticalArrangement = Arrangement.spacedBy(32.dp)) {
+                .testTag("device.details"), verticalArrangement = Arrangement.spacedBy(20.dp)) {
                 SheetHeading(detail!!, onClose = { detail = null }, closeModifier = Modifier.testTag("device.details.close"),
                     onBack = if (detail == "Notification destination") ({ detail = "Notification stream" }) else null)
                 when (detail) {

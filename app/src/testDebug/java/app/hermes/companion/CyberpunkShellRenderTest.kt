@@ -43,7 +43,6 @@ class CyberpunkShellRenderTest {
     @Test fun contextSwitchersAreExplicitAndTouchSized() {
         mount()
         rule.onNodeWithTag("context.host").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
-        rule.onNodeWithTag("context.agent").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         rule.onNodeWithTag("threads.new").assertIsDisplayed()
         capture("chats-dark")
         rule.onNodeWithTag("context.host").performClick()
@@ -52,7 +51,7 @@ class CyberpunkShellRenderTest {
     }
     @Test fun gatewayIsDirectAndHonestAboutOptionalRelay() {
         mount(state(MainTab.GATEWAY).copy(companionAvailability = CompanionAvailability.UNAVAILABLE))
-        rule.onNodeWithTag("nav.gateway").assertIsSelected()
+        rule.onNodeWithTag("nav.more").assertIsSelected()
         rule.onNodeWithText("Unavailable on this connection").assertIsDisplayed()
         rule.onNodeWithTag("gateway.open.chats").assertIsDisplayed()
         rule.onNodeWithTag("gateway.open.permissions").assertIsDisplayed()
@@ -61,6 +60,7 @@ class CyberpunkShellRenderTest {
     @Test fun startingNewChatIsAvailableOutsideChatList() {
         var created = 0
         mount(state(MainTab.DEVICE), onNew = { created++ })
+        rule.onNodeWithTag("header.options").performClick()
         rule.onNodeWithTag("header.newchat").assertIsDisplayed().performClick()
         assertEquals(1, created)
         capture("device-dark")
@@ -69,6 +69,7 @@ class CyberpunkShellRenderTest {
         var changed = 0
         mount(state().copy(voiceStreamState = VoiceStreamState.MUTED, voiceMicrophoneMuted = true,
             openSessionId = "one", voiceSessionTitle = "Ship the next release"), onProfile = { changed++ })
+        rule.onNodeWithTag("header.options").performClick()
         rule.onNodeWithTag("context.agent").performClick()
         rule.onNodeWithText("End voice to switch conversations?").assertDoesNotExist()
         assertEquals(0, changed)
@@ -76,13 +77,13 @@ class CyberpunkShellRenderTest {
     @Test fun largeTypeKeepsContextAndGlobalActionsReachable() {
         mount(scale = 2f)
         rule.onNodeWithTag("context.host").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
-        rule.onNodeWithTag("context.agent").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         rule.onNodeWithTag("nav.voice").assertIsDisplayed().assertWidthIsAtLeast(48.dp)
         rule.onNodeWithTag("threads.new").assertIsDisplayed()
         capture("chats-large-text")
     }
     @Test fun agentQuickSwitcherIdentifiesCurrentSelection() {
         mount()
+        rule.onNodeWithTag("header.options").performClick()
         rule.onNodeWithTag("context.agent").performClick()
         rule.onNodeWithTag("nav.profile.sheet.developer").assertIsSelected().assertHeightIsAtLeast(48.dp)
         rule.onNodeWithTag("nav.profile.sheet.research").assertIsNotSelected().assertHeightIsAtLeast(48.dp)
@@ -92,6 +93,7 @@ class CyberpunkShellRenderTest {
     }
     @Test fun agentQuickSwitcherKeepsChoicesReachableAtDoubleText() {
         mount(scale = 2f)
+        rule.onNodeWithTag("header.options").performClick()
         rule.onNodeWithTag("context.agent").performClick()
         rule.onNodeWithTag("nav.profile.sheet.research").performScrollTo().assertIsDisplayed()
         capture("agent-switcher-large-text")

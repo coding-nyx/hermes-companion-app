@@ -25,6 +25,10 @@ fun SettingsBottomSheet(
     onOpenModelPicker: () -> Unit,
     onTab: (MainTab) -> Unit,
     onSpeechBackend: (app.hermes.companion.model.SpeechBackend) -> Unit = {},
+    onRefreshVoiceSettings: () -> Unit = {},
+    onSaveVoiceSettings: (Map<String, String>) -> Unit = {},
+    onVoicePacing: (Int) -> Unit = {},
+    onLoadVoiceOptions: (String) -> Unit = {},
     onToggleStay: () -> Unit,
     onToggleKeepA11y: () -> Unit = {},
     onNtfyTopicChange: (String) -> Unit,
@@ -34,6 +38,7 @@ fun SettingsBottomSheet(
     sheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
 ) {
     var page by rememberSaveable(state.origin) { mutableStateOf("Settings") }
+    LaunchedEffect(page, state.origin, state.activeProfileId) { if (page == "Speech") onRefreshVoiceSettings() }
     var confirmDisconnect by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     var decorativeMotion by remember { mutableStateOf(CompanionAppearance.motionEnabled(context)) }
@@ -42,7 +47,7 @@ fun SettingsBottomSheet(
         modifier = Modifier.testTag("settings.sheet")) {
         val scroll = remember(page) { androidx.compose.foundation.ScrollState(0) }
         Column(Modifier.fillMaxWidth().verticalScroll(scroll).padding(horizontal = 24.dp).padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(32.dp)) {
+            verticalArrangement = Arrangement.spacedBy(20.dp)) {
             SheetHeading(page, onDismiss, onBack = if (page != "Settings") ({ page = "Settings" }) else null,
                 closeModifier = Modifier.testTag("settings.sheet.close"))
             when (page) {
@@ -71,20 +76,20 @@ fun SettingsBottomSheet(
                     }
                 }
                 "Speech" -> {
-                    GroupedSection("Speech backend") {
+                    GroupedSection("Speech source") {
                         SpeechBackend.entries.forEach { backend ->
-                            val enabled = backend != SpeechBackend.HOST || app.hermes.companion.BuildConfig.HOST_SPEECH_ENABLED
-                            PreferenceRow(if (backend == SpeechBackend.HOST) "Host speech" else "System speech",
-                                if (backend == SpeechBackend.HOST) if (enabled) "Use the selected host and profile" else "Spoken recognition and conversation checks remain deferred"
-                                    else "Android speech services", selected = state.speechBackend == backend,
+                            PreferenceRow(if (backend == SpeechBackend.HOST) "Hermes speech / realtime" else "Android compatibility speech",
+                                if (backend == SpeechBackend.HOST) "Use the selected Hermes profile’s voice settings" else "Android recognition and text-to-speech; turn-based listening",
+                                selected = state.speechBackend == backend,
                                 value = if (state.speechBackend == backend) "Selected" else null,
-                                enabled = enabled, onClick = { onSpeechBackend(backend) }, modifier = Modifier.testTag("settings.speech.${backend.name.lowercase()}"))
+                                onClick = { onSpeechBackend(backend) }, modifier = Modifier.testTag("settings.speech.${backend.name.lowercase()}"))
                         }
                     }
+                    VoiceSettingsControls(state, onRefreshVoiceSettings, onSaveVoiceSettings, onVoicePacing, onLoadVoiceOptions)
                     GroupedSection("Voice behavior") {
-                        PreferenceRow("Spoken replies", "Brief answers; full responses remain available in chat")
-                        PreferenceRow("Provider failures", "A failed request never silently changes the speech backend")
-                        PreferenceRow("Speaker playback", "Listening pauses while the phone speaks")
+                        PreferenceRow("Spoken replies", "Complete conversational answers; code and formatting stay in chat")
+                        PreferenceRow("Background calls", "Continue through screen lock; mute or end from the ongoing notification")
+                        PreferenceRow("Interruption", "Speak to stop playback. Backend work continues unless you revise or cancel it.")
                     }
                 }
                 "Background connection" -> {
@@ -92,7 +97,7 @@ fun SettingsBottomSheet(
                         PreferenceToggle("Stay connected", state.stayConnected, onToggleStay,
                             summary = "Keep the operator connection active in the background", modifier = Modifier.testTag("settings.stay"))
                         if (state.keepA11yAvailable) PreferenceToggle("Keep screen control ready", state.keepA11yOn, onToggleKeepA11y,
-                            summary = "Re-enable accessibility if it drops out. This does not arm Hands.", modifier = Modifier.testTag("settings.keep_a11y"))
+                            summary = "Re-enable accessibility if it drops out while armed. DISARM switches Hermes off when secure-settings permission is granted.", modifier = Modifier.testTag("settings.keep_a11y"))
                     }
                     GroupedSection("Notification topic URL", padded = true) {
                         Text("Use the full URL configured on your Hermes relay. Save it for this exact host address; after upgrading, re-save any existing topic once. Delivery depends on the host publisher and background connection.", style = CompanionType.Caption)

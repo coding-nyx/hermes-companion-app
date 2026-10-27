@@ -88,11 +88,11 @@ class GroupedDesignRenderTest {
         rule.onNodeWithTag("device.stream").performScrollTo().assertIsDisplayed()
         Assert.assertEquals(listOf("stream"), actions)
     }
-    @Test fun settingsSpeechGateAndBackNavigationRemainExplicit() {
+    @Test fun settingsHostSpeechSelectionAndBackNavigationRemainExplicit() {
         mount(settings = true)
         capture("settings-dark")
         rule.onNodeWithTag("settings.speech.open").performScrollTo().performClick()
-        rule.onNodeWithTag("settings.speech.host").assertIsNotEnabled()
+        rule.onNodeWithTag("settings.speech.host").assertIsEnabled()
         capture("speech-dark")
         rule.onNodeWithContentDescription("Back", useUnmergedTree = true).performScrollTo().performClick()
         rule.onNodeWithTag("settings.speech.open").assertIsDisplayed()

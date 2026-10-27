@@ -4,7 +4,6 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -84,8 +83,7 @@ fun ComposerModelBottomSheet(
             }
             if (section == ComposerSettingsSection.MODEL) {
             Text("Model", style = MaterialTheme.typography.titleSmall)
-            app.hermes.companion.design.HairlineField(query, { query = it }, placeholder = "Search models or providers",
-                keyboardType = androidx.compose.ui.text.input.KeyboardType.Text,
+            app.hermes.companion.design.SearchField(query, { query = it }, placeholder = "Search models or providers",
                 modifier = Modifier.fillMaxWidth().testTag("composer.models.search"))
             Box {
                 ActionButton((provider ?: "All providers") + " ▾", { providersOpen = true },
@@ -123,7 +121,7 @@ fun ComposerModelBottomSheet(
 
 @Composable
 private fun ComposerSectionTab(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val shape = CutCornerShape(topEnd = 7.dp, bottomStart = 7.dp)
+    val shape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 7.dp, bottomStart = 7.dp)
     Box(modifier.clip(shape).background(if (selected) CompanionColor.SignalSubtle else CompanionColor.VoidElevated)
         .border(1.dp, if (selected) CompanionColor.Signal else CompanionColor.LineStrong, shape)
         .selectable(selected = selected, role = Role.Tab, onClick = onClick)

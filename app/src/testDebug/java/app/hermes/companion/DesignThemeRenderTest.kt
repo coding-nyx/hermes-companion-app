@@ -22,6 +22,17 @@ import org.robolectric.annotation.Config
 class DesignThemeRenderTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
+    @Test fun globalChromeRetainsTheCyberpunkCutCornerShapes() {
+        var cutCorners = false
+        rule.setContent { CompanionTheme {
+            val shapes = androidx.compose.material3.MaterialTheme.shapes
+            cutCorners = listOf(shapes.extraSmall, shapes.small, shapes.medium, shapes.large, shapes.extraLarge)
+                .all { it is androidx.compose.foundation.shape.CutCornerShape }
+            Text("Cyberpunk chrome")
+        } }
+        rule.runOnIdle { org.junit.Assert.assertTrue("Density changes must preserve the cyberpunk theme", cutCorners) }
+    }
+
     @Test fun defaultTextIsReadableWhilePrimaryButtonsKeepDarkLabels() {
         rule.setContent { CompanionTheme { Column {
             Text("Canvas text")

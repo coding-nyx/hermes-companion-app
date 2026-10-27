@@ -24,25 +24,15 @@ class HostClientPool(private val factory: () -> DashboardClient = { DashboardCli
     fun evict(origin: String) {
         clients.remove(HostCredentialScope.key(origin))?.let {
             it.closeRpc()
+            it.closeBotSockets()
             it.closeDeviceLane()
         }
     }
 
     companion object {
         fun key(origin: String): String {
-            val trimmed = origin.trim()
-            if (trimmed.isBlank()) return ""
-            val withScheme = if ("://" in trimmed) trimmed else "http://$trimmed"
-            val scheme = withScheme.substringBefore("://").lowercase()
-            val rest = withScheme.substringAfter("://").substringBefore('/').substringAfterLast('@')
-            val (host, port) = if (rest.startsWith("[")) {
-                (rest.substringBefore(']') + "]").lowercase() to rest.substringAfter(']').removePrefix(":")
-            } else {
-                rest.substringBefore(':').lowercase() to rest.substringAfter(':', "")
-            }
-            if (host.isBlank()) return ""
-            val default = (scheme == "http" && port == "80") || (scheme == "https" && port == "443")
-            return if (port.isBlank() || default) "$scheme://$host" else "$scheme://$host:$port"
+            if (origin.isBlank()) return ""
+            return runCatching { HostCredentialScope.key(origin) }.getOrDefault("")
         }
     }
 }

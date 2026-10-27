@@ -19,6 +19,40 @@ hermes plugins enable hermes-companion
 
 Do not pass a local filesystem path to `hermes plugins install` — it is treated as a GitHub URL.
 
+## Continuous voice and Hermes updates
+
+Voice support ships in `dashboard/` and loads through Hermes’s authenticated,
+enabled-plugin API hook at `/api/plugins/hermes-companion/audio/*`. The relay
+keeps `/api/audio/*` aliases for existing Companion clients. No Hermes source
+patch is installed. Speech configuration and provider credentials stay on the host.
+
+`install.sh` updates the relay and reloads an existing managed dashboard. It enables
+Companion for the machine default and the active profile using Hermes’s config
+writer; it does not change speech providers, voices, keys, or other plugins.
+For another profile, run the installer after selecting it, or enable Companion
+explicitly for that profile and restart the dashboard. Native API trust gates remain
+in effect. The machine dashboard launcher explicitly selects the default profile.
+
+Updating/reinstalling Hermes while preserving `$HERMES_HOME/plugins` and profile
+configuration retains the integration. A full data-directory removal requires
+installing/enabling Companion again. Reinstalling/updating the plugin restores all
+voice code. Native handler signature changes fail with a compatibility error rather
+than patching the new Hermes version. Uninstall/disable plus dashboard restart
+removes the process-local adapters.
+
+The original source overlay is retired once, with recognized source restored and
+recovery copies moved to `$HERMES_HOME/state/companion-voice-legacy`. Unrecognized
+source edits abort migration before either tracked core file is written. The pinned
+upstream Edge protocol adapter repairs installed v1 clients in memory; it does not
+replace dependencies or modify their installed files. Its source revision and LGPL
+license are in `dashboard/edge_protocol/`.
+
+Native integration tests run inside Hermes with:
+
+```sh
+scripts/run_tests.sh /path/to/hermes-companion/tests/native/test_voice_native.py -q
+```
+
 ## After install
 
 Phone origin: `http://<hermes-tailscale-or-lan>:9120`
@@ -73,6 +107,21 @@ HERMES_COMPANION_RELAY_URL=http://127.0.0.1:9120
 ```
 
 Standalone: `python3 -m relay`
+
+### Connection mode from the phone
+
+Device (including pairing) and Gateway show the host's actual connection mode. A paired
+phone can select **Native Hermes** or **Standalone** and explicitly apply the change.
+Native mode checks `profiles.list` on the configured dashboard before saving; a failed
+check leaves the current mode intact. Pairing and Hands do not select or change routing.
+
+The saved choice in `$HERMES_HOME/companion-connection.json` survives relay restarts and
+takes precedence over the startup `HERMES_COMPANION_STANDALONE` environment variable.
+With no saved choice, the existing environment/default still applies. The setting is
+host-wide: changing it reconnects operator websockets while leaving device lanes live.
+`POST /companion/connection/mode` requires loopback or a paired device credential and
+`{mode, expected_mode}`; stale competing changes are rejected. The upstream address is
+configured by the host, not accepted from a phone-supplied URL.
 
 ## Tests
 

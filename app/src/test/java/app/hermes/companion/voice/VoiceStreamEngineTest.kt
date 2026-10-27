@@ -16,6 +16,21 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], application = Application::class)
 class VoiceStreamEngineTest {
+    @Test fun appOwnedInputCanResumeAfterNoiseWithoutKeepingTranscriptionTimeout() = runTest {
+        Fixture(this).use { f ->
+            f.input.resumesCaptureAfterProcessing = true
+            f.engine.startStream(); runCurrent()
+            f.input.processing(); runCurrent()
+            assertEquals(VoiceStreamState.TRANSCRIBING, f.engine.state)
+            advanceTimeBy(1_500); f.input.ready(); runCurrent()
+            assertEquals(VoiceStreamState.LISTENING, f.engine.state)
+            assertEquals(1, f.input.starts)
+            advanceTimeBy(600); runCurrent() // beyond old transcription deadline; below fresh listening deadline
+            assertTrue(f.errors.isEmpty()); assertEquals(VoiceStreamState.LISTENING, f.engine.state)
+            f.input.result("A real thought"); runCurrent()
+            assertEquals(listOf("A real thought"), f.prompts)
+        }
+    }
     @Test fun aDuplicateTranscriptFromThePreviousTurnCannotSubmitANewPrompt() = runTest {
         Fixture(this).use { f ->
             f.engine.startStream(); runCurrent()
@@ -297,6 +312,7 @@ class VoiceStreamEngineTest {
         override fun close() { engine.shutdown(); scope.cancel() }
     }
     private class Input : SpeechInput {
+        override var resumesCaptureAfterProcessing = false
         override var reportsReadiness=false
         var ready: () -> Unit = {}
         var starts = 0

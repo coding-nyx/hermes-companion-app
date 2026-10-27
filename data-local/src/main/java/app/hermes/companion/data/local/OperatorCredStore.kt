@@ -156,7 +156,7 @@ class OperatorCredStore(private val prefs: SharedPreferences) {
         prefs.edit().putString(KEY_CREDS, obj.toString()).apply()
     }
 
-    private fun hostKey(origin: String): String = HostKeys.of(origin)
+    private fun hostKey(origin: String): String = HostKeys.exact(origin)
 
     companion object {
         private const val FILE = "companion.operator"

@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -27,7 +26,7 @@ internal fun ProfileChoice(
     enabled: Boolean = true,
     switching: Boolean = false,
 ) {
-    val shape = CutCornerShape(topEnd = 10.dp, bottomStart = 10.dp)
+    val shape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 10.dp, bottomStart = 10.dp)
     Row(
         modifier.fillMaxWidth().heightIn(min = 64.dp).clip(shape)
             .background(if (selected) CompanionColor.AccentDim else CompanionColor.VoidElevated)

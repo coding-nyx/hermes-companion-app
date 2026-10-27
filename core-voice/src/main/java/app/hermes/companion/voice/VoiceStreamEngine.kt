@@ -195,7 +195,13 @@ class VoiceStreamEngine(
                 onError = { error -> if (voiceInput.terminalErrors) onMain(epoch) {
                     if (inputEpoch == inputGeneration) fail(error)
                 } },
-                onStateChange = { isReady -> if (isReady) onMain(epoch) { ready() } },
+                onStateChange = { isReady -> if (isReady) onMain(epoch) {
+                    if (inputEpoch == inputGeneration && streamState == VoiceStreamState.TRANSCRIBING && voiceInput.resumesCaptureAfterProcessing) {
+                        inactivityJob?.cancel(); inactivityJob = null
+                        updateState(VoiceStreamState.LISTENING)
+                    }
+                    ready()
+                } },
                 onActivity = { onMain(epoch) {
                     if (inputEpoch == inputGeneration && streamState == VoiceStreamState.LISTENING) {
                         ready()

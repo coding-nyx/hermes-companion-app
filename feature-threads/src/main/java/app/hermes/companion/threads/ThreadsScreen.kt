@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.material3.DropdownMenu
@@ -114,16 +113,18 @@ fun ThreadsScreen(
     /** Injected clock so renders (and tests) are deterministic. */
     nowMs: Long = System.currentTimeMillis(),
     showToolbar: Boolean = true,
+    displayTitle: (SessionRef) -> String = { it.title.ifBlank { it.id } },
 ) {
     val density = LocalDensity.current
     var createHeight by remember { mutableStateOf(56.dp) }
     var query by rememberSaveable { mutableStateOf("") }
     // TELEGRAM is a pure view filter (screen-local, like the text filter); ARCHIVED changes the host query.
     var telegramOnly by rememberSaveable { mutableStateOf(false) }
-    val filtered = SessionLists.filter(
-        if (telegramOnly) SessionLists.bySource(sessions, SessionLists.SOURCE_TELEGRAM) else sessions,
-        query,
-    )
+    val scoped = if (telegramOnly) SessionLists.bySource(sessions, SessionLists.SOURCE_TELEGRAM) else sessions
+    val q = query.trim()
+    val filtered = scoped.filter { q.isBlank() || displayTitle(it).contains(q, ignoreCase = true) || it.title.contains(q, ignoreCase = true)
+        || it.id.contains(q, ignoreCase = true) || it.source.contains(q, ignoreCase = true)
+    }
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -155,18 +156,9 @@ fun ThreadsScreen(
                     }
                 }
             }
-            Row(Modifier.padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm), verticalAlignment = Alignment.CenterVertically) {
-                HairlineField(
-                    value = query,
-                    onValueChange = { query = it },
-                    placeholder = "Search conversations",
-                    keyboardType = KeyboardType.Text,
-                    imeAction = ImeAction.Search,
-                    keepKeyboardOnDone = false,
-                    modifier = Modifier.weight(1f).testTag("threads.filter"),
-                )
-                if (query.isNotEmpty()) ActionButton("Clear", { query = "" },
-                    modifier = Modifier.testTag("threads.filter.clear").semantics { contentDescription = "Clear conversation search" })
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                app.hermes.companion.design.SearchField(query, { query = it }, placeholder = "Search conversations",
+                    modifier = Modifier.fillMaxWidth().testTag("threads.filter"))
             }
             SortRow(
                 sort = sort,
@@ -247,6 +239,7 @@ fun ThreadsScreen(
                         is RailItem.Thread -> item(key = item.session.id) {
                             ThreadRow(
                                 session = item.session,
+                                title = displayTitle(item.session),
                                 stamp = item.stamp,
                                 onOpen = onOpen,
                                 onDeleteRequest = onDeleteRequest,
@@ -263,7 +256,7 @@ fun ThreadsScreen(
                 .semantics { contentDescription = "New chat" },
             containerColor = CompanionColor.Signal,
             contentColor = CompanionColor.Void,
-            shape = CutCornerShape(topEnd = 12.dp, bottomStart = 12.dp),
+            shape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 12.dp, bottomStart = 12.dp),
         ) {
             ControlIcon(ControlGlyph.PLUS, color = CompanionColor.Void)
             Spacer(Modifier.width(12.dp))
@@ -425,6 +418,7 @@ private fun GroupHeader(label: String) {
 @Composable
 private fun ThreadRow(
     session: SessionRef,
+    title: String,
     stamp: String,
     onOpen: (SessionRef) -> Unit,
     onDeleteRequest: (SessionRef) -> Unit,
@@ -435,7 +429,7 @@ private fun ThreadRow(
         if (session.source.isNotBlank()) add(session.source.lowercase())
         if (session.pinned) add("pinned")
     }.joinToString(" · ")
-    val cardShape = CutCornerShape(topEnd = 12.dp, bottomStart = 12.dp)
+    val cardShape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 12.dp, bottomStart = 12.dp)
     var optionsOpen by remember(session.id) { mutableStateOf(false) }
     Row(
         modifier = Modifier
@@ -461,7 +455,7 @@ private fun ThreadRow(
         )
         Column(Modifier.weight(1f)) {
             Text(
-                text = session.title.ifBlank { session.id },
+                text = title,
                 style = CompanionType.Body.copy(
                     color = CompanionColor.Text,
                     fontWeight = if (session.unread) FontWeight.SemiBold else FontWeight.Normal,
@@ -520,7 +514,7 @@ private fun ThreadRow(
         Box {
             androidx.compose.material3.IconButton(onClick = { optionsOpen = true },
                 modifier = Modifier.testTag("threads.actions.${session.id}").semantics {
-                    contentDescription = "Actions for ${session.title.ifBlank { session.id }}"
+                    contentDescription = "Actions for $title"
                 }) { ControlIcon(ControlGlyph.MORE) }
             DropdownMenu(optionsOpen, { optionsOpen = false }, containerColor = CompanionColor.VoidElevated) {
                 DropdownMenuItem(text = { Text("Delete conversation", color = CompanionColor.Danger) },
@@ -562,7 +556,7 @@ private fun RoomsSection(
         }
         rooms.forEach { room ->
             val isUnread = room.id in unread
-            val roomShape = CutCornerShape(topEnd = 12.dp, bottomStart = 12.dp)
+            val roomShape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 12.dp, bottomStart = 12.dp)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

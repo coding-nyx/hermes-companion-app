@@ -231,6 +231,8 @@ class DashboardClientTest {
 
     @Test
     fun listProfilesParsesDashboardAndBridgeShapes() {
+        val titled = parseProfiles("""{"profiles":[{"name":"research","display_name":"Hermes","ui_meta":{"hermes-bots":{"title":"Research bot"}}}]}""")
+        assertEquals("Research bot", titled.single().displayName)
         val dashboard = parseProfiles(
             """{"profiles":[{"id":"coder","display_name":"Coder","model":"sonnet-4.6","gateway":"running","session_count":2}]}""",
         )
@@ -1345,7 +1347,8 @@ class HostClientPoolTest {
 
     @Test
     fun poolKeyNormalises() {
-        assertEquals("http://100.85.151.99:9120", HostClientPool.key("HTTP://100.85.151.99:9120/x"))
+        assertEquals("http://100.85.151.99:9120/x", HostClientPool.key("HTTP://100.85.151.99:9120/x"))
+        org.junit.Assert.assertNotEquals(HostClientPool.key("https://host/a"), HostClientPool.key("https://host/b"))
         assertEquals("https://h.ts.net", HostClientPool.key("https://h.ts.net:443/"))
         assertEquals("", HostClientPool.key(""))
     }

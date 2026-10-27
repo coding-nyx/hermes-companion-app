@@ -44,7 +44,7 @@ import kotlinx.coroutines.sync.withLock
 /**
  * Operator chat: open/close a session, history paging, approvals, outbox flush with backoff,
  * rewind and interrupt (A7.4). Shares the UI state holder with the ViewModel; runs on the
- * ViewModel scope because every job here is bound to what the user is looking at.
+ * application conversation scope so an active voice call outlives its screen.
  */
 class ChatSessionManager(
     private val clients: HostClientPool,
@@ -55,7 +55,7 @@ class ChatSessionManager(
     draftStore: app.hermes.companion.data.local.ComposerDraftStore? = null,
     private val submitDecision: suspend (String, String, String, app.hermes.companion.model.ApprovalPrompt, String) -> Unit =
         { origin, session, profile, prompt, decision -> clients.forOrigin(origin).respondPrompt(origin, session, profile, prompt, decision) },
-) {
+) : app.hermes.companion.voice.VoiceConversation {
     private val drafts = draftStore?.let { DraftRecovery(it, _state, scope) }
     fun checkpointDraft() { drafts?.checkpoint() }
     private var turnJob: Job? = null
@@ -66,7 +66,7 @@ class ChatSessionManager(
     private var historyJob: Job? = null
     @Volatile private var navigation = 0L
     /** User navigation identity; draft promotion retains it. Speech must never cross this boundary. */
-    val conversationEpoch: Long get() = navigation
+    override val conversationEpoch: Long get() = navigation
     private val instanceId = UUID.randomUUID().toString()
     private val createdSessions = java.util.concurrent.ConcurrentHashMap<String, SessionRef>()
     private val promotedDrafts = mutableMapOf<String, SessionRef>()
@@ -75,11 +75,12 @@ class ChatSessionManager(
     private val decisionRevision = java.util.concurrent.atomic.AtomicLong()
     private fun client(origin: String): DashboardClient = clients.forOrigin(origin)
 
-    var onAssistantDelta: ((String) -> Unit)? = null
-    var onTurnCompleted: (() -> Unit)? = null
-    var onTurnInterrupted: (() -> Unit)? = null
+    override var onAssistantDelta: ((String) -> Unit)? = null
+    override var onTurnCompleted: (() -> Unit)? = null
+    override var onTurnInterrupted: (() -> Unit)? = null
     /** Only a failure of this conversation may end its speech owner. Module errors are independent. */
-    var onTurnFailed: (() -> Unit)? = null
+    override var onTurnFailed: (() -> Unit)? = null
+    var onSessionDeleted: (suspend (String, String, String) -> Unit)? = null
 
     private fun turnModel(): String? = _state.value.modelOverride.trim().takeIf { it.isNotBlank() }
 
@@ -288,7 +289,7 @@ class ChatSessionManager(
     }
 
     /** Open a local dummy composer. Host `session.create` waits until the first send. */
-    fun newThread() {
+    override fun newThread() {
         if (_state.value.origin == null) return
         val profile = _state.value.activeProfileId ?: return
         checkpointDraft()
@@ -318,6 +319,24 @@ class ChatSessionManager(
                 creatingThread = false,
             )
         }
+    }
+
+    override suspend fun ensureVoiceSession(): SessionRef {
+        val st = _state.value
+        val origin = requireNotNull(st.origin)
+        val profile = requireNotNull(st.activeProfileId)
+        if (st.openSession == null) newThread()
+        val snapshot = _state.value
+        return requireNotNull(ensurePersistedSession(origin, profile, requireNotNull(snapshot.openSession), navigation,
+            snapshot.modelOverride, draftSnapshot = snapshot))
+    }
+
+    override fun steerVoice(text: String, voice: app.hermes.companion.model.VoiceTurnMetadata) {
+        val st = _state.value
+        val origin = st.origin ?: return
+        val profile = st.activeProfileId ?: return
+        val session = st.openSession ?: return
+        steer(origin, profile, session, text, voice.copy(steering = true))
     }
 
     /** NEW creates a real host session immediately; first-send also promotes a local draft. */
@@ -435,14 +454,15 @@ class ChatSessionManager(
     }
 
     /** Voice uses the conversation captured at recognition, without clearing keyboard drafts. */
-    fun sendPrompt(text: String, displayText: String = text) {
+    override fun sendPrompt(text: String, displayText: String, voice: app.hermes.companion.model.VoiceTurnMetadata?) {
         val st = _state.value
         if (st.submitting || text.isBlank()) return
         if (st.openSession == null) return fail("no open voice conversation")
-        enqueueInput(st, text.trim(), emptyList(), clearDraft = false, displayText = displayText)
+        enqueueInput(st, text.trim(), emptyList(), clearDraft = false, displayText = displayText, voice = voice)
     }
 
-    private fun enqueueInput(snapshot: CompanionState, text: String, attachments: List<ChatAttachment>, clearDraft: Boolean, displayText: String = text) {
+    private fun enqueueInput(snapshot: CompanionState, text: String, attachments: List<ChatAttachment>, clearDraft: Boolean, displayText: String = text,
+        voice: app.hermes.companion.model.VoiceTurnMetadata? = null) {
         val origin = snapshot.origin ?: return
         val profile = snapshot.activeProfileId ?: return
         val session = snapshot.openSession ?: return
@@ -457,7 +477,7 @@ class ChatSessionManager(
                 val persisted = ensurePersistedSession(origin, profile, session, generation, snapshot.modelOverride, draftSnapshot = snapshot)
                     ?: throw DashboardException("create_failed", "could not create thread")
                 outbox.enqueue(OutboxItem(user.id, origin, profile, persisted.id, text,
-                    System.currentTimeMillis(), attachmentsJson = encodeAttachments(attachments)))
+                    System.currentTimeMillis(), attachmentsJson = encodeAttachments(attachments), voice = voice))
                 _state.update { st ->
                     if (!st.shows(origin, profile, persisted.id) && !(DraftThread.isDraft(session) && st.shows(origin, profile, session.id))) st
                     else st.copy(submitting = if (generation == navigation) false else st.submitting,
@@ -483,20 +503,33 @@ class ChatSessionManager(
         }
     }
 
-    private fun steer(origin: String, profile: String, session: SessionRef, text: String) {
+    private fun steer(origin: String, profile: String, session: SessionRef, text: String,
+        voice: app.hermes.companion.model.VoiceTurnMetadata? = null) {
         if (text.isBlank()) return
         _state.update { it.copy(submitting = true) }
+        val id = "steer-" + UUID.randomUUID()
+        var staged: OutboxItem? = null
         scope.launch {
             try {
+                if (voice != null) {
+                    val baseline = client(origin).pageMessages(origin, session.id, profile).messages.filter { it.role == MessageRole.USER }.map { it.id }
+                    val item = OutboxItem(id, origin, profile, session.id, text, System.currentTimeMillis(), lastError = "awaiting_ack",
+                        baselineUserIds = baseline, voice = voice)
+                    outbox.enqueue(item)
+                    staged = item
+                }
                 client(origin).steerSession(origin, session, text)
+                if (voice != null) outbox.remove(id)
                 _state.update { st ->
                     if (!st.shows(origin, profile, session.id)) st
                     else st.copy(submitting = false, draft = if (st.draft.trim() == text) "" else st.draft,
-                        messages = st.messages + ChatMessage("steer-" + UUID.randomUUID(), MessageRole.USER, text, delivery = MessageDelivery.SENT))
+                        messages = st.messages + ChatMessage(id, MessageRole.USER, text, delivery = MessageDelivery.SENT))
                 }
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
+                staged?.let { outbox.markAttempt(id, origin, profile, "uncertain: voice steering acknowledgement unavailable") }
                 _state.update { if (!it.shows(origin, profile, session.id)) it else it.copy(submitting = false, error = t.toMonoError()) }
+                if (voice != null) onTurnFailed?.invoke()
             }
         }
     }
@@ -637,6 +670,7 @@ class ChatSessionManager(
                 client(origin).deleteSession(origin, owned.id, profile)
                 cache.deleteSession(origin, profile, owned.id)
                 outbox.removeForSession(origin, profile, owned.id)
+                onSessionDeleted?.invoke(origin, profile, owned.id)
                 createdSessions.remove("$origin|$profile|${owned.id}")
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
@@ -648,7 +682,7 @@ class ChatSessionManager(
         }
     }
 
-    fun interrupt() {
+    override fun interrupt() {
         turnJob?.cancel()
         val origin = _state.value.origin
         val session = _state.value.openSession
@@ -715,6 +749,10 @@ class ChatSessionManager(
                     outbox.remove(item.id)
                     continue
                 }
+                if (item.voice?.steering == true) {
+                    updateDelivery(origin, profile, item, MessageDelivery.UNCERTAIN)
+                    continue // A steering request can never be replayed as a new agent command.
+                }
                 if (DeliveryPolicy.uncertain(item) || OutboxPolicy.exhausted(item.attempts) ||
                     item.lastError.startsWith("failed")) {
                     updateDelivery(origin, profile, item, if (DeliveryPolicy.uncertain(item)) MessageDelivery.UNCERTAIN else MessageDelivery.FAILED)
@@ -763,6 +801,7 @@ class ChatSessionManager(
                                 model = if (legacy) turnModel() else null,
                                 partsJson = if (legacy) ChatContent.toSubmitParts(item.text, uploaded) else "",
                                 clientId = if (legacy) item.id else "",
+                                voice = item.voice,
                             ).coalesceDeltas().collect { event ->
                                 if (event is ChatEvent.Accepted || event is ChatEvent.Final || event is ChatEvent.Completed) {
                                     // Once acknowledged, generation failure must not resend the user input.

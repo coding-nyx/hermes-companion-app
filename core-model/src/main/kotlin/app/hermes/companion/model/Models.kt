@@ -185,6 +185,7 @@ data class OutboxItem(
     val attachmentsJson: String = "",
     /** Null before submission; captured durable user ids let lost acknowledgments reconcile safely. */
     val baselineUserIds: List<String>? = null,
+    val voice: VoiceTurnMetadata? = null,
 )
 
 @Serializable
@@ -195,6 +196,8 @@ data class CompanionHealth(
     val hermesVersion: String = "",
     val profilesDir: String = "",
     val drift: String = "",
+    val connectionSettings: Boolean = false,
+    val modeSource: String = "",
 )
 
 /** Optional host integration, discovered independently of native operator authentication. */

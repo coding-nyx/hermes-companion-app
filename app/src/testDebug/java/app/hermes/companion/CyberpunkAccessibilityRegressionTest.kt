@@ -36,7 +36,7 @@ class CyberpunkAccessibilityRegressionTest {
         val session = SessionRef("one", "developer", "Current conversation", 0)
         rule.activity.actionBar?.hide()
         rule.setContent { CompanionTheme {
-            CompanionShell(CompanionState(origin = firstHost.origin, hostName = firstHost.name,
+            CompanionShell(CompanionState(tab = MainTab.THREADS, origin = firstHost.origin, hostName = firstHost.name,
                 savedGateways = listOf(firstHost, secondHost), activeProfileId = "developer",
                 profiles = listOf(ProfileRef("developer", "Developer", "D"), ProfileRef("research", "Research", "R")),
                 openSessionId = session.id, openSessionRef = session,
@@ -55,13 +55,14 @@ class CyberpunkAccessibilityRegressionTest {
                 AppNavigationBar(CompanionState(tab = MainTab.THREADS), false, {}, {})
             }
         } } }
-        listOf("threads", "gateway", "voice", "device", "more").forEach {
+        listOf("bots", "threads", "voice", "device", "more").forEach {
             rule.onNodeWithTag("nav.$it").assertIsDisplayed().assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
         }
     }
 
     @Test fun openingAndChoosingCurrentHostDoesNotEndVoice() {
         mountVoice()
+        rule.onNodeWithTag("header.options").performClick()
         rule.onNodeWithTag("context.host").performClick()
         rule.onNodeWithText("End voice to switch conversations?").assertDoesNotExist()
         rule.onNodeWithTag("context.host.${GatewayBook.chipId(firstHost.origin)}").performClick()
@@ -71,6 +72,7 @@ class CyberpunkAccessibilityRegressionTest {
 
     @Test fun cancellingAHostChangePreservesVoiceAndSelection() {
         mountVoice()
+        rule.onNodeWithTag("header.options").performClick()
         rule.onNodeWithTag("context.host").performClick()
         rule.onNodeWithTag("context.host.${GatewayBook.chipId(secondHost.origin)}").performClick()
         rule.onNodeWithText("End voice to switch conversations?").assertIsDisplayed()
@@ -82,6 +84,7 @@ class CyberpunkAccessibilityRegressionTest {
 
     @Test fun confirmedHostChangeEndsVoiceBeforeChangingOwnership() {
         mountVoice()
+        rule.onNodeWithTag("header.options").performClick()
         rule.onNodeWithTag("context.host").performClick()
         rule.onNodeWithTag("context.host.${GatewayBook.chipId(secondHost.origin)}").performClick()
         rule.onNodeWithText("End voice and switch").performClick()
@@ -90,9 +93,11 @@ class CyberpunkAccessibilityRegressionTest {
 
     @Test fun currentProfileIsANoopAndDifferentProfileCanBeCancelled() {
         mountVoice()
+        rule.onNodeWithTag("header.options").performClick()
         rule.onNodeWithTag("context.agent").performClick()
         rule.onNodeWithTag("nav.profile.sheet.developer").performClick()
         assertTrue(actions.isEmpty())
+        rule.onNodeWithTag("header.options").performClick()
         rule.onNodeWithTag("context.agent").performClick()
         rule.onNodeWithTag("nav.profile.sheet.research").performClick()
         rule.onNodeWithText("Stay here").performClick()
@@ -101,6 +106,7 @@ class CyberpunkAccessibilityRegressionTest {
 
     @Test fun cancelledNewChatDoesNotCreateASessionOrEndVoice() {
         mountVoice()
+        rule.onNodeWithTag("header.options").performClick()
         rule.onNodeWithTag("header.newchat").performClick()
         rule.onNodeWithText("Stay here").performClick()
         assertTrue(actions.isEmpty())

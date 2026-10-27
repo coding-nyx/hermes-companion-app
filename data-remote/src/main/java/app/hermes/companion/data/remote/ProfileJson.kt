@@ -114,7 +114,8 @@ internal fun parseProfiles(body: String): List<ProfileRef> {
                 if (id.isBlank()) null
                 else ProfileScope.toRef(
                     id = id,
-                    displayName = el.str("display_name").ifBlank { el.str("displayName") }.ifBlank { id },
+                    displayName = ((el["ui_meta"] as? JsonObject)?.get("hermes-bots") as? JsonObject)
+                        ?.str("title").orEmpty().ifBlank { el.str("display_name") }.ifBlank { el.str("displayName") }.ifBlank { id },
                     model = el.str("model").ifBlank { el.str("model_name") },
                     gateway = when {
                         el.bool("gateway_running") -> "running"

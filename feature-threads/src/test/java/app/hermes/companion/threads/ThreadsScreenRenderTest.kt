@@ -1,5 +1,7 @@
 package app.hermes.companion.threads
 
+import androidx.compose.ui.test.onNodeWithContentDescription
+
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -31,6 +33,17 @@ import org.robolectric.annotation.GraphicsMode
 @Config(sdk = [31], qualifiers = "w360dp-h720dp-xhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ThreadsScreenRenderTest {
+    @Test fun canonicalBotNamesAreSearchableAndOpeningKeepsTheOriginalSessionIdentity() {
+        val canonical = SessionRef("canonical", "research", "Bot Chat", now)
+        var opened: SessionRef? = null
+        rule.setContent { CompanionTheme { ThreadsScreen(sessions = listOf(canonical),
+            displayTitle = { "Research bot" }, onOpen = { opened = it }, nowMs = now) } }
+        rule.onNodeWithText("Research bot").assertIsDisplayed()
+        rule.onNodeWithTag("threads.row.canonical").performClick()
+        assertEquals(canonical, opened)
+        rule.onNodeWithTag("threads.filter").performTextInput("Research bot")
+        rule.onNodeWithTag("threads.row.canonical").assertIsDisplayed()
+    }
     @Test fun conversationFailureRemainsRecoverableBelowTheRoomList() {
         var retries = 0
         val rooms = (1..8).map { app.hermes.companion.model.RoomRef("room-$it", "Planning room $it") }
@@ -120,7 +133,7 @@ class ThreadsScreenRenderTest {
         rule.setContent { CompanionTheme { ThreadsScreen(sessions = rows, onNew = { created++ }, nowMs = now) } }
         rule.onNodeWithTag("threads.filter").performTextInput("no matching phrase")
         rule.onNodeWithTag("threads.nomatch").assertIsDisplayed()
-        rule.onNodeWithTag("threads.filter.clear").performClick()
+        rule.onNodeWithContentDescription("Clear search").performClick()
         rule.onNodeWithTag("threads.count").assertTextEquals("3")
         assertEquals(0, created)
     }

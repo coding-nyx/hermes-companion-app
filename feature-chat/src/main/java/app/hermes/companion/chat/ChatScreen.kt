@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.IconButton
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -149,6 +150,7 @@ fun ChatScreen(
     pendingSpeaker: String? = null,
     onMention: (String) -> Unit = {},
     profiles: List<ProfileRef> = emptyList(),
+    assistantName: String = "Agent",
     /** Room v2 (A22.10): floor state, participants, actions. Null outside a room. */
     room: RoomRef? = null,
     roomCandidates: List<Pair<String, String>> = emptyList(),
@@ -165,8 +167,10 @@ fun ChatScreen(
     approvalBusy: Boolean = false,
     onOpenReasoningPicker: (() -> Unit)? = null,
 ) {
+    var composerActive by remember(threadId) { mutableStateOf(false) }
     var expandedDraft by rememberSaveable(threadId) { mutableStateOf(false) }
     val roomMode = participants.isNotEmpty()
+    val transcript = remember(messages) { messages.distinctBy { it.id } }
     val listState = remember(threadId) { LazyListState() }
     val scope = rememberCoroutineScope()
     var landed by remember(threadId) { mutableStateOf(false) }
@@ -283,9 +287,9 @@ fun ChatScreen(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = CompanionSpace.Page, vertical = CompanionSpace.Lg)
+                .padding(horizontal = CompanionSpace.Lg)
                 .testTag("chat.list"),
-            verticalArrangement = Arrangement.spacedBy(CompanionSpace.Xxl),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp),
         ) {
             if (loading) {
                 item(key = "history.loading") {
@@ -300,13 +304,15 @@ fun ChatScreen(
                 }
             }
             // Duplicate keys crash LazyColumn outright; a reducer race must never take the app down.
-            items(messages.distinctBy { it.id }, key = { it.id }) { message ->
-                when (message.role) {
-                    MessageRole.USER -> UserRow(message, if (roomMode) ({}) else onRewind, onFetchMedia, onOpenMedia, onRetryMessage)
-                    MessageRole.TOOL -> Box(Modifier.padding(start = AgentRailInset)) {
-                        ToolRow(message, onFetchMedia, onOpenMedia)
+            itemsIndexed(transcript, key = { _, message -> message.id }) { index, message ->
+                Column(Modifier.padding(top = transcriptGap(transcript.getOrNull(index - 1), message))) {
+                    when (message.role) {
+                        MessageRole.USER -> UserRow(message, if (roomMode) ({}) else onRewind, onFetchMedia, onOpenMedia, onRetryMessage)
+                        MessageRole.TOOL -> Box(Modifier.padding(start = AgentRailInset)) {
+                            ToolRow(message, onFetchMedia, onOpenMedia)
+                        }
+                        MessageRole.ASSISTANT -> if (message.reasoning) ReasoningRow(message) else AssistantRow(message, onFetchMedia, onOpenMedia, participants, profiles, assistantName, onReadAloud, readAloudMessageId)
                     }
-                    MessageRole.ASSISTANT -> if (message.reasoning) ReasoningRow(message) else AssistantRow(message, onFetchMedia, onOpenMedia, participants, profiles, onReadAloud, readAloudMessageId)
                 }
             }
             val last = messages.lastOrNull()
@@ -323,9 +329,10 @@ fun ChatScreen(
                         },
                         speaker = who,
                         railIndex = Rooms.speakerIndex(who, participants),
-                        roomMode = roomMode,
                         participants = participants,
                         profiles = profiles,
+                        assistantName = assistantName,
+                        modifier = Modifier.padding(top = transcriptGap(last, MessageRole.ASSISTANT, who)),
                     )
                 }
             }
@@ -520,6 +527,7 @@ fun ChatScreen(
 
         MarkdownComposer(
             value = draft,
+            placeholder = "Message $assistantName…",
             onValueChange = onDraftChange,
             onSend = { if (!submitting && !creatingThread) onSend() },
             modifier = Modifier.padding(horizontal = 8.dp, vertical = if (compactComposer) 4.dp else 8.dp),
@@ -527,34 +535,35 @@ fun ChatScreen(
             onOpenReasoningSettings = if (!roomMode) (onOpenReasoningPicker ?: onOpenModelPicker) else null,
             modelSettingsEnabled = !creatingThread && app.hermes.companion.domain.DraftThread.isPersisted(threadId),
             compactLayout = compactComposer,
+            onEditingChange = { composerActive = it },
             onExpand = { expandedDraft = true },
             leadingControls = {
             if (!roomMode) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ComposerButton("Add attachment", "chat.attach", onToggleAttach) { tint ->
+                Row {
+                    ComposerButton("Add attachment", "chat.attach", onToggleAttach, foreground = CompanionColor.TextDim, border = Color.Transparent) { tint ->
                         ComposerActionIcon(ComposerIcon.ADD, tint)
                     }
                     val commandsActive = slashOpen || draft.startsWith("/")
                     ComposerButton(
                         if (slashOpen) "Hide commands" else "Show commands",
                         "chat.slash", { slashOpen = !slashOpen },
-                        foreground = if (commandsActive) CompanionColor.Warn else CompanionColor.Signal,
+                        foreground = if (commandsActive) CompanionColor.Warn else CompanionColor.TextDim,
                         background = if (commandsActive) CompanionColor.Warn.copy(alpha = 0.2f) else Color.Transparent,
-                        border = if (commandsActive) CompanionColor.Warn else CompanionColor.LineStrong,
+                        border = Color.Transparent,
                     ) { tint -> ComposerActionIcon(ComposerIcon.COMMANDS, tint) }
                 }
             }
             },
             trailingControls = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                if (!roomMode) {
+            Row(verticalAlignment = Alignment.Bottom) {
+                if (!roomMode && composerActive) {
                     ComposerButton(
                         if (isListeningVoice) "Stop dictation" else "Dictate message",
                         "chat.voice", onVoiceClick,
                         onLongClick = onVoiceLongClick,
-                        foreground = if (isListeningVoice) CompanionColor.Warn else CompanionColor.Signal,
+                        foreground = if (isListeningVoice) CompanionColor.Warn else CompanionColor.TextDim,
                         background = if (isListeningVoice) CompanionColor.Warn.copy(alpha = 0.2f) else Color.Transparent,
-                        border = if (isListeningVoice) CompanionColor.Warn else CompanionColor.LineStrong,
+                        border = Color.Transparent,
                     ) { tint -> ComposerActionIcon(if (isListeningVoice) ComposerIcon.STOP else ComposerIcon.MICROPHONE, tint) }
                 }
                 val interrupting = streaming && !roomMode && draft.isBlank()
@@ -584,13 +593,13 @@ fun ChatScreen(
     if (expandedDraft) androidx.compose.material3.ModalBottomSheet(onDismissRequest = { expandedDraft = false },
         sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = CompanionColor.Void, contentColor = CompanionColor.Text) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp).testTag("chat.expanded"),
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp).testTag("chat.expanded"),
             verticalArrangement = Arrangement.spacedBy(16.dp)) {
             app.hermes.companion.design.SheetHeading("Edit draft", { expandedDraft = false },
                 closeModifier = Modifier.testTag("chat.expanded.close"))
-            MarkdownComposer(draft, onDraftChange, expanded = true, tagPrefix = "chat.expanded")
+            MarkdownComposer(draft, onDraftChange, expanded = true, tagPrefix = "chat.expanded", placeholder = "Message $assistantName…")
             app.hermes.companion.design.ActionButton("Done editing", { expandedDraft = false },
-                kind = app.hermes.companion.design.ActionKind.PRIMARY, modifier = Modifier.testTag("chat.expanded.done"))
+                kind = app.hermes.companion.design.ActionKind.PRIMARY, modifier = Modifier.fillMaxWidth().testTag("chat.expanded.done"))
         }
     }
 
@@ -664,8 +673,9 @@ private fun UserRow(
                 modifier = Modifier
                     .clip(bubbleShape)
                     .background(CompanionColor.BubbleUser)
+                    .heightIn(min = 48.dp)
                     .clickable { onRewind(message) }
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 MessageBlocks(message, onFetchMedia, onOpenMedia)
             }
@@ -676,15 +686,14 @@ private fun UserRow(
 @Composable
 private fun ReasoningRow(message: ChatMessage) {
     var expanded by remember(message.id) { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp).testTag("chat.reasoning")) {
+    Column(Modifier.fillMaxWidth().padding(start = AgentRailInset).testTag("chat.reasoning")) {
         Text(if (expanded) "▾ REASONING" else "▸ REASONING",
             style = CompanionType.Caption.copy(color = CompanionColor.TextDim),
-            modifier = Modifier.clickable { expanded = !expanded }.padding(vertical = 6.dp))
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { expanded = !expanded }.padding(vertical = 12.dp))
         if (expanded) Text(message.text, style = CompanionType.Body.copy(color = CompanionColor.TextDim))
     }
 }
 
-/** Agent turn: full width, 2dp signal rail, `HERMES` label, live cursor while streaming. */
 /**
  * Left rail for agent rows. One accent only: participants differ by glyph and rail texture —
  * index 0 solid, 1 dashed, 2+ dotted (tokens.yaml: "do not invent a second green").
@@ -724,10 +733,11 @@ private fun AssistantRow(
     onOpenMedia: (ChatBlock) -> Unit,
     participants: List<RoomParticipant> = emptyList(),
     profiles: List<ProfileRef> = emptyList(),
+    assistantName: String,
     onReadAloud: (ChatMessage) -> Unit,
     readAloudMessageId: String?,
 ) {
-    val label = Rooms.speakerLabel(message.speaker, participants, profiles).let { if (it == "HERMES") "Hermes" else it }
+    val label = Rooms.speakerLabel(message.speaker, participants, profiles, assistantName)
     val clipboard = LocalClipboardManager.current
     val railIndex = Rooms.speakerIndex(message.speaker, participants)
     val error = message.toolDetail.orEmpty().takeIf { message.speaker != null && message.text.isBlank() && !message.passed }.orEmpty()
@@ -743,83 +753,31 @@ private fun AssistantRow(
             Spacer(Modifier.width(AgentRailInset - 2.dp))
         }
         Column(Modifier.weight(1f)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.padding(bottom = 4.dp),
-            ) {
-                if (message.speaker != null) {
-                    val glyph = Rooms.glyph(message.speaker)
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-
-                            .padding(horizontal = 5.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            text = glyph,
-                            style = CompanionType.Caption.copy(
-                                color = CompanionColor.Signal,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp,
-                            ),
-                        )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
+                    Text(label, style = CompanionType.Caption.copy(color = CompanionColor.Signal, fontWeight = FontWeight.SemiBold),
+                        modifier = Modifier.testTag("chat.speaker.${message.id}"))
+                    if (message.passed) Text("passed", style = CompanionType.Caption)
+                    if (message.summary) Text("summary", style = CompanionType.Caption.copy(color = CompanionColor.Signal), modifier = Modifier.testTag("chat.summary"))
+                    if (message.speaker != null && Rooms.mentionsOperator(message.text))
+                        Text("@YOU", style = CompanionType.Caption.copy(color = CompanionColor.Warn), modifier = Modifier.testTag("chat.mention.you"))
+                    if (error.isNotBlank()) Text(Rooms.turnErrorLabel(error), style = CompanionType.Caption.copy(color = CompanionColor.Warn), modifier = Modifier.testTag("chat.turn.error"))
+                    if (message.streaming) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        LiveDot()
+                        Text("streaming", style = CompanionType.Caption, modifier = Modifier.testTag("chat.streaming"))
                     }
                 }
-                Text(
-                    text = label,
-                    style = CompanionType.Caption.copy(
-                        color = CompanionColor.Signal,
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                )
-                if (message.speaker != null) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-
-                            .padding(horizontal = 4.dp, vertical = 1.dp),
-                    ) {
-                        Text(
-                            text = "AGENT",
-                            style = CompanionType.Caption.copy(
-                                color = CompanionColor.TextDim,
-                                fontSize = 13.sp,
-                            ),
-                        )
+                if (!message.streaming && message.text.isNotBlank() && !message.passed) {
+                    IconButton(onClick = { clipboard.setText(AnnotatedString(message.text)) },
+                        modifier = Modifier.size(48.dp).testTag("chat.copy.${message.id}").semantics { contentDescription = "Copy answer" }) {
+                        ComposerActionIcon(ComposerIcon.COPY, CompanionColor.TextDim)
                     }
-                }
-                if (message.passed) {
-                    Text(text = "passed", style = CompanionType.Caption.copy(color = CompanionColor.TextMute))
-                }
-                if (message.summary) {
-                    Text(text = "summary", style = CompanionType.Caption.copy(color = CompanionColor.Signal), modifier = Modifier.testTag("chat.summary"))
-                }
-                if (message.speaker != null && Rooms.mentionsOperator(message.text)) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(CompanionColor.Warn.copy(alpha = 0.2f))
-                            .border(CompanionSpace.Hairline, CompanionColor.Warn, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 5.dp, vertical = 2.dp),
-                    ) {
-                        Text(text = "@YOU", style = CompanionType.Caption.copy(color = CompanionColor.Warn, fontWeight = FontWeight.Bold), modifier = Modifier.testTag("chat.mention.you"))
+                    IconButton(onClick = { onReadAloud(message) },
+                        modifier = Modifier.size(48.dp).testTag("chat.read.${message.id}").semantics {
+                            contentDescription = if (readAloudMessageId == message.id) "Stop reading aloud" else "Read answer aloud"
+                        }) {
+                        ComposerActionIcon(if (readAloudMessageId == message.id) ComposerIcon.STOP else ComposerIcon.SPEAKER, CompanionColor.TextDim)
                     }
-                }
-                if (error.isNotBlank()) {
-                    Text(
-                        text = Rooms.turnErrorLabel(error),
-                        style = CompanionType.Caption.copy(color = CompanionColor.Warn),
-                        modifier = Modifier.testTag("chat.turn.error"),
-                    )
-                }
-                if (message.streaming) {
-                    LiveDot()
-                    Text(
-                        text = "streaming",
-                        style = CompanionType.Caption.copy(color = CompanionColor.TextMute),
-                        modifier = Modifier.testTag("chat.streaming"),
-                    )
                 }
             }
             Box(
@@ -846,20 +804,7 @@ private fun AssistantRow(
                     }
                 }
             }
-            if (!message.streaming && message.text.isNotBlank() && !message.passed) {
-                Row {
-                    IconButton(onClick = { clipboard.setText(AnnotatedString(message.text)) },
-                        modifier = Modifier.testTag("chat.copy.${message.id}").semantics { contentDescription = "Copy answer" }) {
-                        ComposerActionIcon(ComposerIcon.COPY, CompanionColor.TextDim)
-                    }
-                    IconButton(onClick = { onReadAloud(message) },
-                        modifier = Modifier.testTag("chat.read.${message.id}").semantics {
-                            contentDescription = if (readAloudMessageId == message.id) "Stop reading aloud" else "Read answer aloud"
-                        }) {
-                        ComposerActionIcon(if (readAloudMessageId == message.id) ComposerIcon.STOP else ComposerIcon.SPEAKER, CompanionColor.TextDim)
-                    }
-                }
-            }
+
         }
     }
 }
@@ -870,19 +815,18 @@ private fun PendingRow(
     label: String,
     speaker: String? = null,
     railIndex: Int = 0,
-    roomMode: Boolean = false,
     participants: List<RoomParticipant> = emptyList(),
     profiles: List<ProfileRef> = emptyList(),
+    assistantName: String,
+    modifier: Modifier = Modifier,
 ) {
     val speakerText = when {
         speaker != null -> Rooms.displayName(speaker, participants, profiles)
-        participants.size == 1 -> Rooms.displayName(participants[0].profile, participants, profiles)
-        roomMode -> "ROOM"
-        else -> "HERMES"
+        else -> Rooms.speakerLabel(null, participants, profiles, assistantName)
     }
     val pillShape = RoundedCornerShape(12.dp)
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
             .testTag("chat.pending"),
@@ -1022,8 +966,9 @@ private fun ToolRow(
             .fillMaxWidth()
             .clip(cardShape)
 
+            .heightIn(min = 48.dp)
             .clickable { expanded = !expanded }
-            .padding(horizontal = 12.dp, vertical = 10.dp)
+            .padding(horizontal = 10.dp, vertical = 12.dp)
             .testTag(if (running) "chat.tool.running" else "chat.tool"),
     ) {
         Row(

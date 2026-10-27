@@ -22,6 +22,24 @@ hc_python() {
   command -v python3 || command -v python
 }
 
+# The enabled dashboard API is loaded on startup. Updating the plugin must reload
+# it as well as the relay; neither service edits the Hermes installation.
+hc_restart_dashboard() {
+  local src="$1" dest="$2" hermes_home="$3"
+  case "$(hc_os)" in
+    linux)
+      if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet hermes-dashboard.service; then
+        hc_install_linux_unit "$src/systemd/hermes-dashboard.service" hermes-dashboard.service "$dest" "$hermes_home"
+      fi
+      ;;
+    darwin)
+      if launchctl print "gui/$(id -u)/ai.hermes.dashboard" >/dev/null 2>&1; then
+        hc_install_darwin_dashboard "$hermes_home"
+      fi
+      ;;
+  esac
+}
+
 hc_detect_venv() {
   if [ -n "${HERMES_VENV:-}" ] && [ -x "$HERMES_VENV/bin/python" ]; then
     return
@@ -40,11 +58,11 @@ hc_dashboard_args() {
   # Prints argv lines for the dashboard process (or nothing if we cannot start it).
   hc_detect_venv
   if [ -n "${HERMES_VENV:-}" ] && [ -x "$HERMES_VENV/bin/python" ]; then
-    printf '%s\n' "$HERMES_VENV/bin/python" -m hermes_cli.main dashboard --host 127.0.0.1 --port 9119 --no-open --skip-build
+    printf '%s\n' "$HERMES_VENV/bin/python" -m hermes_cli.main --profile default dashboard --host 127.0.0.1 --port 9119 --no-open --skip-build
     return 0
   fi
   if command -v hermes >/dev/null 2>&1; then
-    printf '%s\n' "$(command -v hermes)" dashboard --host 127.0.0.1 --port 9119 --no-open --skip-build
+    printf '%s\n' "$(command -v hermes)" --profile default dashboard --host 127.0.0.1 --port 9119 --no-open --skip-build
     return 0
   fi
   return 1

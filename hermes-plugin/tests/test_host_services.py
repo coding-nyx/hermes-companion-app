@@ -41,6 +41,17 @@ hc_write_launchd_plist "{plist}" "ai.hermes.companion-relay" "{tmp}" "{log}" \\
         expected = {"Darwin": "darwin", "Linux": "linux"}.get(uname, "other")
         self.assertEqual(out, expected)
 
+    def test_machine_dashboard_is_pinned_to_default_not_the_active_chat_profile(self):
+        with tempfile.TemporaryDirectory() as folder:
+            executable = Path(folder) / 'bin/python'
+            executable.parent.mkdir()
+            executable.write_text('#!/bin/sh\nexit 0\n')
+            executable.chmod(0o755)
+            out = subprocess.check_output(["bash", "-c",
+                f'. "{PLUGIN / "host_services.sh"}"; hc_dashboard_args'], text=True,
+                env=dict(os.environ, HERMES_VENV=folder))
+        self.assertIn("--profile\ndefault\ndashboard\n", out)
+
 
 if __name__ == "__main__":
     unittest.main()

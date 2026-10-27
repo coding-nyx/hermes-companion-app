@@ -7,7 +7,6 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -45,7 +44,7 @@ internal fun ComposerButton(
     content: @Composable (Color) -> Unit,
 ) {
     val tint = if (enabled) foreground else CompanionColor.TextMute
-    val shape = CutCornerShape(topEnd = 7.dp, bottomStart = 7.dp)
+    val shape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 7.dp, bottomStart = 7.dp)
     Box(
         Modifier.size(48.dp)
             .testTag(tag)

@@ -69,11 +69,7 @@ android {
             resValue("string", "project_id", firebaseProject["project_id"].toString())
         }
         versionName = System.getenv("HERMES_VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "0.1.0"
-        // Operator recognition/conversation gate is still pending. Flip only after phase-one device acceptance.
-        buildConfigField("boolean", "HOST_SPEECH_ENABLED", "false")
-        buildConfigField("boolean", "HOST_SPEECH_STREAMING_ENABLED", "false")
-        // Provider setup declined; transport tests do not enable live calls.
-        buildConfigField("boolean", "NATIVE_REALTIME_ENABLED", "false")
+        // Voice availability is checked against the selected host/profile at call startup.
     }
     signingConfigs {
         if (hasReleaseKey) {

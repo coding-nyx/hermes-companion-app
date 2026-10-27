@@ -21,11 +21,12 @@ class NativeSpeechTransport(
     private val client: DashboardClient,
     private val origin: String,
     private val profile: String,
+    private val snapshot: String = "",
 ) : StreamingSpeechTransport {
     init { require(origin.isNotBlank() && profile.isNotBlank()) }
-    override suspend fun transcribe(wav: ByteArray) = client.transcribeAudio(origin, profile, wav, "audio/wav").text
-    override suspend fun synthesize(text: String) = client.synthesizeSpeech(origin, profile, text)
-    override suspend fun openSpeechStream() = client.openSpeechStream(origin, profile)
+    override suspend fun transcribe(wav: ByteArray) = client.transcribeAudio(origin, profile, wav, "audio/wav", snapshot).text
+    override suspend fun synthesize(text: String) = client.synthesizeSpeech(origin, profile, text, snapshot)
+    override suspend fun openSpeechStream() = client.openSpeechStream(origin, profile, snapshot)
 }
 
 interface SpeechCapture {

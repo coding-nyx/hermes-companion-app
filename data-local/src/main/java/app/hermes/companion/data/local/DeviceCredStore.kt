@@ -17,7 +17,7 @@ class DeviceCredStore(private val prefs: SharedPreferences) {
     fun save(cred: DeviceCred) {
         require(cred.deviceId.isNotBlank()) { "device_id required" }
         require(cred.credential.isNotBlank()) { "credential required" }
-        val key = HostKeys.of(cred.origin)
+        val key = HostKeys.exact(cred.origin)
         require(key.isNotBlank()) { "origin required" }
         val all = loadAllMap()
         all[key] = cred.copy(origin = key)
@@ -25,7 +25,7 @@ class DeviceCredStore(private val prefs: SharedPreferences) {
     }
 
     /** Credential paired with [origin], or null. */
-    fun load(origin: String): DeviceCred? = loadAllMap()[HostKeys.of(origin)]
+    fun load(origin: String): DeviceCred? = loadAllMap()[HostKeys.exact(origin)]
 
     /** Any credential (legacy callers / "is this phone paired to anything"). */
     fun load(): DeviceCred? = loadAllMap().values.firstOrNull()
@@ -39,7 +39,7 @@ class DeviceCredStore(private val prefs: SharedPreferences) {
     fun adoptLegacy(origin: String): DeviceCred? {
         val all = loadAllMap()
         val orphan = all.remove("") ?: return null
-        val key = HostKeys.of(origin)
+        val key = HostKeys.exact(origin)
         if (key.isBlank()) return null
         val adopted = orphan.copy(origin = key)
         all.putIfAbsent(key, adopted)
@@ -49,7 +49,7 @@ class DeviceCredStore(private val prefs: SharedPreferences) {
 
     fun clear(origin: String) {
         val all = loadAllMap()
-        all.remove(HostKeys.of(origin))
+        all.remove(HostKeys.exact(origin))
         writeAll(all)
     }
 
@@ -82,7 +82,7 @@ class DeviceCredStore(private val prefs: SharedPreferences) {
         val legacyId = prefs.getString(KEY_DEVICE, null).orEmpty()
         val legacyCred = prefs.getString(KEY_CRED, null).orEmpty()
         if (legacyId.isNotBlank() && legacyCred.isNotBlank()) {
-            val key = HostKeys.of(prefs.getString(KEY_ORIGIN, null).orEmpty())
+            val key = HostKeys.exact(prefs.getString(KEY_ORIGIN, null).orEmpty())
             if (key !in out) {
                 out[key] = DeviceCred(
                     deviceId = legacyId,

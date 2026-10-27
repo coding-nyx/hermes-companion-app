@@ -67,9 +67,9 @@ class RoomsTest {
     fun speakerLabelNeverSaysHermesInRoomMode() {
         val parts = listOf(RoomParticipant("coder", "COD"), RoomParticipant("ops", "OPS"))
         assertEquals("coder", Rooms.speakerLabel("coder", parts))
-        assertEquals("AGENT", Rooms.speakerLabel(null, parts))
+        assertEquals("Agent", Rooms.speakerLabel(null, parts))
         val singlePart = listOf(RoomParticipant("coder", "COD"))
         assertEquals("coder", Rooms.speakerLabel(null, singlePart))
-        assertEquals("HERMES", Rooms.speakerLabel(null, emptyList()))
+        assertEquals("Agent", Rooms.speakerLabel(null, emptyList()))
     }
 }

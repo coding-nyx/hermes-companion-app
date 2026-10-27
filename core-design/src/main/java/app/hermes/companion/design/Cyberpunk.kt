@@ -14,7 +14,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -92,7 +91,7 @@ fun SignalSignature(modifier: Modifier = Modifier, label: String = "HERMES / COM
 @Composable
 fun ContextControl(label: String, value: String, onClick: () -> Unit, modifier: Modifier = Modifier,
     enabled: Boolean = true, accent: Color = CompanionColor.Signal) {
-    val shape = CutCornerShape(topEnd = 8.dp, bottomStart = 8.dp)
+    val shape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 8.dp, bottomStart = 8.dp)
     Column(modifier.heightIn(min = CompanionSpace.Touch).clip(shape)
         .background(CompanionColor.VoidElevated).border(1.dp, CompanionColor.LineStrong, shape)
         .clickable(enabled = enabled, role = Role.Button, onClick = onClick)

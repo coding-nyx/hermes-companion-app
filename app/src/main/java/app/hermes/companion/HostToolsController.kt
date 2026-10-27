@@ -33,6 +33,42 @@ class HostToolsController(
         _state.update { if (it.origin != origin) it else transform(it) }
     }
 
+    fun loadConnectionHealth() {
+        val origin = _state.value.origin ?: return
+        scope.launch {
+            val health = try { client(origin).companionHealth(origin) }
+            catch (t: Throwable) { if (t is CancellationException) throw t; null }
+            applyIfOrigin(origin) { it.copy(relayHealth = health) }
+        }
+    }
+
+    fun setConnectionMode(mode: String) {
+        val current = _state.value
+        val origin = current.origin ?: return
+        val expected = current.relayHealth?.mode ?: return
+        if (current.connectionModeBusy || current.relayHealth.connectionSettings != true || mode == expected) return
+        if (current.isVoiceStreamActive) {
+            applyIfOrigin(origin) { it.copy(connectionModeError = "End the current voice conversation before changing this gateway's connection mode.") }
+            return
+        }
+        applyIfOrigin(origin) { it.copy(connectionModeBusy = true, connectionModeError = null) }
+        scope.launch {
+            try {
+                client(origin).setConnectionMode(origin, mode, expected)
+                val health = client(origin).companionHealth(origin)
+                applyIfOrigin(origin) { it.copy(relayHealth = health, connectionModeBusy = false, botMode = BotModeState()) }
+                if (_state.value.origin == origin) {
+                    client(origin).closeRpc(); client(origin).closeBotSockets()
+                    onConnect(origin)
+                }
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                applyIfOrigin(origin) { it.copy(connectionModeBusy = false, connectionModeError = t.message ?: "Could not change the host's connection mode. Refresh and check its current mode.") }
+                loadConnectionHealth()
+            }
+        }
+    }
+
     fun refreshHostMetrics() {
         val origin = _state.value.origin ?: return
         scope.launch {

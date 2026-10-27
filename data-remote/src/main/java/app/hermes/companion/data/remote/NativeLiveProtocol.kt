@@ -13,12 +13,15 @@ object NativeLiveProtocol {
         fun field(name: String) = (obj[name] as? JsonPrimitive)?.contentOrNull
         return when (field("type")) {
             "session.started", "session.updated" -> NativeLiveEvent.Started((obj["session"] as? JsonObject)?.get("id")?.jsonPrimitive?.contentOrNull)
-            "session.input_transcript.delta" -> field("delta")?.let { NativeLiveEvent.Caption("user", it) }
-            "session.output_transcript.delta" -> field("delta")?.let { NativeLiveEvent.Caption("assistant", it) }
+            "session.input_transcript.delta" -> field("delta")?.let { NativeLiveEvent.Caption("user", it,
+                obj["start_ms"]?.jsonPrimitive?.longOrNull ?: 0, obj["end_ms"]?.jsonPrimitive?.longOrNull ?: 0, field("event_id").orEmpty()) }
+            "session.output_transcript.delta" -> field("delta")?.let { NativeLiveEvent.Caption("assistant", it,
+                obj["start_ms"]?.jsonPrimitive?.longOrNull ?: 0, obj["end_ms"]?.jsonPrimitive?.longOrNull ?: 0, field("event_id").orEmpty()) }
             "session.delegation.created" -> (obj["delegation"] as? JsonObject)?.let { d ->
                 val id = (d["id"] as? JsonPrimitive)?.contentOrNull
                 val target = (d["target"] as? JsonPrimitive)?.contentOrNull ?: "client"
-                if (target != "client" || id.isNullOrBlank() || id.length > 256) null else NativeLiveEvent.Delegation(id)
+                if (target != "client" || id.isNullOrBlank() || id.length > 256) null else NativeLiveEvent.Delegation(id,
+                    obj["offset_ms"]?.jsonPrimitive?.longOrNull ?: Long.MAX_VALUE)
             }
             "session.closed" -> NativeLiveEvent.Closed(field("reason"))
             "error" -> (obj["error"] as? JsonObject).let { error -> NativeLiveEvent.Error(

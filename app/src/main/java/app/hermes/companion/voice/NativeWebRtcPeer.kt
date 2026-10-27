@@ -30,6 +30,7 @@ class NativeWebRtcPeer(
     @Volatile private var closed = false
     private val disposed = java.util.concurrent.atomic.AtomicBoolean(false)
     private var prepared = false
+    private var microphoneMuted = false
     private var module: JavaAudioDeviceModule? = null
     private var factory: PeerConnectionFactory? = null
     private var peer: PeerConnection? = null
@@ -88,7 +89,7 @@ class NativeWebRtcPeer(
         } catch (t: Throwable) { fail(t); throw t }
     }
     suspend fun mute(muted: Boolean) = withContext(worker) {
-        checkOpen(); track?.setEnabled(!muted); module?.setMicrophoneMute(muted)
+        checkOpen(); microphoneMuted = muted; track?.setEnabled(!muted); module?.setMicrophoneMute(muted)
     }
     suspend fun speaker(enabled: Boolean): Boolean = withContext(worker) { checkOpen(); audio.useSpeaker(enabled) }
     suspend fun send(messages: List<String>) = withContext(worker) {
@@ -124,7 +125,7 @@ class NativeWebRtcPeer(
         }
         module = JavaAudioDeviceModule.builder(context.applicationContext).setAudioAttributes(VoiceAudioSession.attributes)
             .setUseStereoInput(false).setUseStereoOutput(false).setEnableVolumeLogger(false)
-            .createAudioDeviceModule().also { it.setAudioRecordEnabled(microphone) }
+            .createAudioDeviceModule().also { it.setMicrophoneMute(microphoneMuted); it.setAudioRecordEnabled(microphone) }
         factory = PeerConnectionFactory.builder().setAudioDeviceModule(module).createPeerConnectionFactory()
         val configuration = PeerConnection.RTCConfiguration(emptyList()).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
@@ -136,6 +137,7 @@ class NativeWebRtcPeer(
         if (microphone) {
             source = factory?.createAudioSource(MediaConstraints())
             track = factory?.createAudioTrack("companion-microphone", source)
+            track?.setEnabled(!microphoneMuted)
             peer?.addTrack(requireNotNull(track), listOf("companion-voice"))
         } else peer?.addTransceiver(MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
             RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY))

@@ -1,5 +1,5 @@
 name: hermes-companion
-version: "0.9.0"
+version: "1.0.0"
 description: Pair an Android companion as a device node and expose mobile_* tools (a11y lane + direct API lane).
 author: hermes-companion-app
 kind: standalone

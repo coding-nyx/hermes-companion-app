@@ -14,11 +14,13 @@ import queue
 import socket
 import struct
 import threading
+from contextlib import contextmanager
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 try:
+    from .connection_mode import ConnectionMode, default_path as connection_mode_path
     from .drift import self_test
     from .rooms import RoomController, RoomError, RoomEvents, RoomStore
     from .rooms import default_store_path as default_rooms_path
@@ -33,6 +35,7 @@ try:
     from .terminal_pty import PtySession, execute_quick_command
     from .tickets import ALLOWLIST, PROTOCOL, TICKET_PREFIX, TicketError, TicketStore, parse_subprotocols
 except ImportError:  # script/tests on sys.path
+    from connection_mode import ConnectionMode, default_path as connection_mode_path
     from drift import self_test
     from rooms import RoomController, RoomError, RoomEvents, RoomStore
     from rooms import default_store_path as default_rooms_path
@@ -230,7 +233,11 @@ class RelayState:
         rooms: RoomStore | None = None,
         peers: PeerStore | None = None,
         agents: AgentSessions | None = None,
+        connection: ConnectionMode | None = None,
     ):
+        self.connection = connection or ConnectionMode()
+        self.routing_lock = threading.RLock()
+        self.operator_connections = set()
         self.pairing = pairing or PairingStore()
         # Coding-agent sessions (P23): tmux-backed, per-host tool discovery.
         self.agents = agents or AgentSessions()
@@ -255,7 +262,7 @@ class RelayState:
         self.room_controller = RoomController(
             self.rooms,
             self.room_events,
-            available=lambda: not standalone_enabled(),
+            available=lambda: not self.is_standalone(),
             token_provider=self._dashboard_token,
             peers=self.peers,
             wake=self._publish_wake,
@@ -265,10 +272,60 @@ class RelayState:
             upstream=self.room_controller.upstream,
             ws_factory=self.room_controller.ws_factory,
             token_provider=self._dashboard_token,
-            available=lambda: not standalone_enabled(),
+            available=lambda: not self.is_standalone(),
             chatq=self.room_controller.chatq,
         )
         self._dashboard_token_cache: str | None = None
+
+    def is_standalone(self) -> bool:
+        return self.connection.mode == "standalone"
+
+    @contextmanager
+    def routing_connection(self, sock, websocket: bool):
+        with self.routing_lock:
+            if websocket:
+                self.operator_connections.add(sock)
+            standalone = self.is_standalone()
+        try:
+            yield standalone
+        finally:
+            if websocket:
+                with self.routing_lock:
+                    self.operator_connections.discard(sock)
+
+    def set_connection_mode(self, mode: str, expected: str) -> dict:
+        if mode not in ("proxy", "standalone") or expected not in ("proxy", "standalone"):
+            raise OperatorError("Choose native Hermes or standalone", 400)
+        with self.routing_lock:
+            if self.connection.mode == mode:
+                return {"ok": True, "mode": mode}
+            if self.connection.mode != expected:
+                raise OperatorError("Connection mode changed on another device. Refresh and try again.", 409)
+        if mode == "proxy":
+            host, port = self.room_controller.upstream
+            self._dashboard_token_cache = None
+            ws = self.room_controller.ws_factory(host, port, "default")
+            try:
+                hello = ws.connect(token=self._dashboard_token())
+                if hello.get("instance_id") == "companion-standalone":
+                    raise ValueError("Standalone upstream")
+                roster = ws.request("profiles.list", {"profile": "default"}, timeout=5)
+                if not isinstance(roster.get("profiles"), list):
+                    raise ValueError("Missing native roster")
+            except Exception:
+                raise OperatorError("Native Hermes could not be verified at the host's configured dashboard. Start or connect the native backend, then retry. The previous mode was kept.", 409) from None
+            finally:
+                ws.close()
+        with self.routing_lock:
+            if self.connection.mode != expected:
+                raise OperatorError("Connection mode changed on another device. Refresh and try again.", 409)
+            self.connection.save(mode)
+            connections = list(self.operator_connections)
+            self.operator_connections.clear()
+        # Reconnect operator chats to the new backend. Device control lanes stay live.
+        for sock in connections:
+            _shutdown(sock)
+        return {"ok": True, "mode": mode}
 
     def _publish_wake(self, room, kind: str, payload: dict) -> None:
         """Room wake (A22.5): POST a small JSON ping to every paired phone's ntfy topic.
@@ -578,11 +635,13 @@ class CompanionHandler(BaseHTTPRequestHandler):
         if path.startswith("/companion/"):
             self._companion(path)
             return
-        if standalone_enabled():
-            if not self._standalone(parsed):
-                self._json({"error": "not_found", "path": parsed.path}, 404)
-            return
-        self._proxy()
+        websocket = (self.headers.get("Upgrade") or "").lower() == "websocket"
+        with self.state.routing_connection(self.connection, websocket) as standalone:
+            if standalone:
+                if not self._standalone(parsed):
+                    self._json({"error": "not_found", "path": parsed.path}, 404)
+                return
+            self._proxy()
 
     def _json(self, payload: dict, status: int = 200):
         body = json.dumps(payload).encode()
@@ -613,8 +672,8 @@ class CompanionHandler(BaseHTTPRequestHandler):
 
     def _health(self):
         host, port = self.upstream
-        upstream = "unused" if standalone_enabled() else probe_upstream(host, port)
-        if standalone_enabled():
+        upstream = "unused" if self.state.is_standalone() else probe_upstream(host, port)
+        if self.state.is_standalone():
             payload = self.state.operator.health()
             payload["upstream"] = probe_upstream(host, port)
             payload["mode"] = "standalone"
@@ -629,9 +688,11 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 "drift": "proxy",
                 "warnings": [],
             }
+        payload["connection_settings"] = True
+        payload["mode_source"] = self.state.connection.source
         payload["upstream_url"] = f"http://{host}:{port}"
         ctl_mode = self.state.room_controller.mode()
-        if standalone_enabled():
+        if self.state.is_standalone():
             payload["rooms"] = "ok_text_only" if ctl_mode == "ok_text_only" else "unavailable_standalone"
         else:
             payload["rooms"] = "ok" if upstream == "reachable" else ("ok_text_only" if self.state.room_controller.chatq.available() else "upstream_down")
@@ -807,7 +868,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
 
     def _operator_ok(self) -> bool:
         """Standalone with no basic-auth (typical Tailscale) or a valid operator session."""
-        if not standalone_enabled():
+        if not self.state.is_standalone():
             return False
         op = getattr(self.state, "operator", None)
         if op is None:
@@ -847,6 +908,16 @@ class CompanionHandler(BaseHTTPRequestHandler):
             scheme = (self.headers.get("Authorization") or "").split(" ", 1)[0] or "none"
             print(f"companion relay 401 {self.command} {path} from {self.client_address[0]} auth={scheme}", flush=True)
             return self._json({"error": "unauthorized", "hint": "pair this phone or call from the host"}, 401)
+        if path == "/companion/connection/mode" and self.command == "POST":
+            try:
+                body = self._read_json()
+                return self._json(self.state.set_connection_mode(body.get("mode"), body.get("expected_mode")))
+            except OperatorError as extra:
+                return self._json({"error": "connection_mode", "message": extra.error}, extra.status)
+            except (ValueError, TypeError):
+                return self._json({"error": "invalid_connection_mode"}, 400)
+            except Exception:
+                return self._relay_failed(path)
         if path.startswith("/companion/rooms"):
             try:
                 return self._rooms(path)
@@ -1539,7 +1610,15 @@ class CompanionHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         rest = self.rfile.read(length) if length else b""
         upgrade = (self.headers.get("Upgrade") or "").lower() == "websocket"
-        req = f"{self.command} {self.path} {self.request_version}\r\n".encode()
+        # Preserve the legacy phone paths while the implementation ships entirely
+        # in the enabled dashboard plugin. Native auth/disable gates still apply.
+        path = self.path
+        audio_path = urlparse(path).path
+        if audio_path in {"/api/audio/settings", "/api/audio/settings/voices", "/api/audio/settings/snapshot",
+                          "/api/audio/transcribe", "/api/audio/speak", "/api/audio/speak-stream",
+                          "/api/audio/voice-live/status", "/api/audio/voice-live/session"} or audio_path.startswith("/api/audio/settings/snapshot/"):
+            path = path.replace("/api/audio/", "/api/plugins/hermes-companion/audio/", 1)
+        req = f"{self.command} {path} {self.request_version}\r\n".encode()
         host = f"{self.upstream[0]}:{self.upstream[1]}"
         skip = {"host", "connection"}
         req += f"Host: {host}\r\n".encode()
@@ -1587,6 +1666,7 @@ def make_server(
 
 def persistent_state() -> RelayState:
     return RelayState(
+        connection=ConnectionMode(connection_mode_path()),
         pairing=PairingStore(path=default_store_path()),
         rooms=RoomStore(path=default_rooms_path()),
         peers=PeerStore(path=default_peers_path()),
@@ -1600,10 +1680,10 @@ def check_upstream(upstream: str = DEFAULT_UPSTREAM) -> dict:
     report = {
         "upstream": f"http://{host}:{port}",
         "status": status,
-        "mode": "standalone" if standalone_enabled() else "proxy",
+        "mode": ConnectionMode(connection_mode_path()).mode,
         "health": "/companion/health",
     }
-    if status != "reachable" and not standalone_enabled():
+    if status != "reachable" and report["mode"] == "proxy":
         report["warning"] = "dashboard closed; phone will see host_dashboard_down. start hermes dashboard or set HERMES_COMPANION_STANDALONE=1"
     return report
 

@@ -3,6 +3,9 @@ package app.hermes.companion.device
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -76,6 +79,19 @@ class DeviceScreenRenderTest {
         rule.onNodeWithTag("device.disarm").performScrollTo().performClick()
         assertEquals(1, stops)
         rule.onNodeWithTag("device.arm.go").assertDoesNotExist()
+    }
+
+    @Test fun pendingArmKeepsConnectingStateAccessibleAndOffersCancel() {
+        var stops = 0
+        rule.setContent { CompanionTheme {
+            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
+                armPending = true, onPair = {}, onCancel = {}, onRevoke = {}, onDisarm = { stops++ })
+        } }
+        rule.onNodeWithTag("device.arm").assertTextContains("Connecting screen control…")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Connecting"))
+        rule.onNodeWithTag("device.arm.go").assertDoesNotExist()
+        rule.onNodeWithTag("device.disarm").performScrollTo().performClick()
+        assertEquals(1, stops)
     }
 
     @Test fun permissionUpdatesAdvanceTheNextActionWithoutArming() {

@@ -123,6 +123,7 @@ data class OutboxEntity(
     val lastError: String,
     val attachmentsJson: String = "",
     @ColumnInfo(defaultValue = "'null'") val baselineUserIdsJson: String = "null",
+    @ColumnInfo(defaultValue = "'null'") val voiceJson: String = "null",
 )
 
 internal fun persistableMessages(messages: List<ChatMessage>): List<ChatMessage> =
@@ -140,6 +141,7 @@ internal fun OutboxEntity.toItem(): OutboxItem = OutboxItem(
     lastError = lastError,
     attachmentsJson = attachmentsJson,
     baselineUserIds = runCatching { blocksJson.decodeFromString<List<String>?>(baselineUserIdsJson) }.getOrNull(),
+    voice = blocksJson.decodeFromString<app.hermes.companion.model.VoiceTurnMetadata?>(voiceJson),
 )
 
 internal fun OutboxItem.toEntity(): OutboxEntity = OutboxEntity(
@@ -153,6 +155,7 @@ internal fun OutboxItem.toEntity(): OutboxEntity = OutboxEntity(
     lastError = lastError,
     attachmentsJson = attachmentsJson,
     baselineUserIdsJson = blocksJson.encodeToString(baselineUserIds),
+    voiceJson = blocksJson.encodeToString(voice),
 )
 
 private val blocksJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }

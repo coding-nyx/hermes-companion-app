@@ -4,6 +4,10 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.relocation.BringIntoViewRequester
@@ -20,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -35,6 +40,9 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -58,6 +66,7 @@ fun HairlineField(
     focusRequester: FocusRequester? = null,
     keepKeyboardOnDone: Boolean = false,
     onNext: (() -> Unit)? = null,
+    label: String? = null,
     onDone: () -> Unit = {},
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
@@ -67,6 +76,7 @@ fun HairlineField(
     var isFocused by remember { mutableStateOf(false) }
     val freeform = keyboardType == KeyboardType.Text
     val shape = RoundedCornerShape(CompanionSpace.RadiusCard)
+    val fieldStyle = if (label == null) CompanionType.Body else CompanionType.Label.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Normal)
     fun submit() {
         onDone()
         if (!keepKeyboardOnDone) {
@@ -95,8 +105,9 @@ fun HairlineField(
             .clip(shape)
             .background(CompanionColor.VoidSurface)
             .border(if (isFocused) 2.dp else 1.dp, if (isFocused) CompanionColor.Signal else CompanionColor.LineStrong, shape)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
-        textStyle = CompanionType.Body.copy(color = CompanionColor.Text),
+            .then(if (label == null) Modifier else Modifier.semantics { contentDescription = label })
+            .padding(horizontal = if (label == null) 12.dp else 0.dp, vertical = if (label == null) 12.dp else 0.dp),
+        textStyle = fieldStyle.copy(color = CompanionColor.Text),
         cursorBrush = SolidColor(CompanionColor.Signal),
         singleLine = true,
         visualTransformation = visualTransformation,
@@ -114,13 +125,23 @@ fun HairlineField(
             onNext = { onNext?.invoke() ?: focus.moveFocus(androidx.compose.ui.focus.FocusDirection.Next) },
         ),
         decorationBox = { inner ->
-            Box {
+            if (label != null) {
+                Column(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.Center) {
+                    val floating = isFocused || value.isNotEmpty() || !placeholder.isNullOrEmpty()
+                    if (floating) {
+                        Text(label, style = CompanionType.Caption.copy(fontSize = 11.sp, lineHeight = 14.sp), maxLines = 1)
+                        Spacer(Modifier.height(2.dp))
+                    }
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (value.isEmpty() && !placeholder.isNullOrEmpty()) Text(placeholder, style = fieldStyle.copy(color = CompanionColor.TextMute), maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        else if (!floating) Text(label, style = fieldStyle.copy(color = CompanionColor.TextMute), maxLines = 1)
+                        inner()
+                    }
+                }
+            } else Box {
                 if (value.isEmpty() && !placeholder.isNullOrEmpty()) {
-                    Text(
-                        text = placeholder,
-                        style = CompanionType.Body.copy(color = CompanionColor.TextMute),
-                        maxLines = 1,
-                    )
+                    Text(text = placeholder, style = fieldStyle.copy(color = CompanionColor.TextMute), maxLines = 1)
                 }
                 inner()
             }

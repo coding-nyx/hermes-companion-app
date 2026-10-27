@@ -46,7 +46,7 @@ For **Hands, notification streaming, custom rooms and the agent console**, use t
 
 **New** reserves a host session; Hermes persists its conversation when the first message arrives. Tap the chat title for rename, pin, archive and branch. A running turn offers **Steer** with text or **Interrupt** with an empty draft. Delivery labels distinguish queued, sending, sent, failed and uncertain input: **Sent** means acknowledged by Hermes, **Retry** follows an explicit rejection, and **Check** reads history without automatically resubmitting an uncertain send.
 
-The rich-text composer keeps formatting visible and supports expanded draft editing. Tap the center **Voice** dock to open voice controls; long-press it to dictate into the selected conversation. Model and reasoning controls apply to that conversation and show host-confirmed settings. System speech remains available; native Host speech/streaming and realtime rollout remain disabled pending their acceptance gates. See the [prior reliability checkpoint and deferred work](docs/reviews/2026-10-15-closeout.md).
+The rich-text composer keeps formatting visible and supports expanded draft editing. Tap the center **Voice** dock to start a continuous call in the selected conversation; long-press it to dictate. Hermes speech is the default, with explicit Android speech compatibility and host-configured realtime modes. Calls use a foreground microphone service through backgrounding; profile speech settings apply across Hermes clients on the next call. Model and reasoning controls apply to the selected conversation. See the [voice protocol and lifecycle](docs/protocol/voice.md) and [validation and current provider blockers](docs/reviews/2026-10-21-continuous-voice.md).
 
 ### Cyberpunk command center preview
 
@@ -102,6 +102,8 @@ flowchart LR
 Feature modules cover connect, threads, chat, profiles, gateway and device UI. Shared modules own models, design, domain and local/remote data. See `settings.gradle.kts` for the module list.
 
 ## Documentation
+
+- [Desk Companion V1](desk-app/README.md) — separate Android 16+ tablet app with Hermes, native ChatGPT OAuth, native Grok through a private host OAuth broker, and swappable speech.
 
 - [Plugin implementation and setup](hermes-plugin/README.md)
 - [Product plan](docs/PLAN.md)

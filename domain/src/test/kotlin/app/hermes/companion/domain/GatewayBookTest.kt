@@ -7,6 +7,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GatewayBookTest {
+    @Test fun gatewaysOnSeparateProxyPathsAreSeparateRowsAndDefaultPortsDeduplicate() {
+        val rows = GatewayBook.merge(listOf(SavedGateway("one", "One", "https://example/one"), SavedGateway("two", "Two", "https://example/two")), emptyList(), null)
+        assertEquals(2, rows.size); assertEquals(2, rows.map { it.id }.distinct().size)
+        assertEquals(GatewayBook.key("https://EXAMPLE:443/one/"), GatewayBook.key("https://example/one"))
+    }
     @Test
     fun mergesSavedPairedAndLastOkWithoutDupes() {
         val rows = GatewayBook.merge(

@@ -9,8 +9,10 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.*
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.performClick
@@ -84,6 +86,7 @@ class ChatScreenRenderTest {
         onAttach: () -> Unit = {},
         onModels: () -> Unit = {},
         onApproval: (String) -> Unit = {},
+        assistantName: String = "Research",
     ) {
         rule.mainClock.autoAdvance = false
         rule.setContent {
@@ -112,6 +115,7 @@ class ChatScreenRenderTest {
                         participants = participants,
                         pendingSpeaker = pendingSpeaker,
                         room = roomRef,
+                        assistantName = assistantName,
                         roomCandidates = if (roomRef != null) listOf("knight" to "knight") else emptyList(),
                     )
                 }
@@ -142,7 +146,8 @@ class ChatScreenRenderTest {
     @Test fun playingReadAloudOffersStopWithoutHidingRichTextFormatting() {
         mount(listOf(agentDone), streaming = false, readAloudMessageId = agentDone.id)
         rule.onNodeWithContentDescription("Stop reading aloud").assertIsDisplayed()
-        rule.onNodeWithTag("chat.fmt.bold").assertIsDisplayed()
+        rule.onNodeWithTag("chat.draft").performClick(); rule.mainClock.advanceTimeBy(100)
+        rule.onNodeWithTag("chat.format").assertIsDisplayed()
     }
 
     @Test fun failedInputOffersRetryAndDoesNotPretendItWasSent() {
@@ -169,9 +174,9 @@ class ChatScreenRenderTest {
 
     @Test fun restoredComposerKeepsRichTextControlsVisible() {
         mount(emptyList(), streaming = false, draft = "A readable message")
-        for (tag in listOf("bold", "italic", "code", "list")) {
-            rule.onNodeWithTag("chat.fmt.$tag").assertIsDisplayed()
-        }
+        rule.onNodeWithTag("chat.tools").assertDoesNotExist()
+        rule.onNodeWithTag("chat.draft").assertHeightIsEqualTo(48.dp).performClick(); rule.mainClock.advanceTimeBy(100)
+        rule.onNodeWithTag("chat.format").assertIsDisplayed()
         rule.onNodeWithTag("chat.slash").assertIsDisplayed()
         rule.onNodeWithContentDescription("Dictate message").assertIsDisplayed()
         rule.onNodeWithContentDescription("Send message").assertIsDisplayed()
@@ -183,27 +188,100 @@ class ChatScreenRenderTest {
         var sends = 0
         rule.setContent { CompanionTheme { ChatScreen(emptyList(), draft, false, null, null,
             { draft = it }, { sends++ }, {}, {}, threadId = "expanded-fixture") } }
+        rule.onNodeWithTag("chat.draft").performClick(); rule.mainClock.advanceTimeBy(100)
+        rule.onNodeWithTag("chat.controls").performClick(); rule.mainClock.advanceTimeBy(300)
         rule.onNodeWithTag("chat.expand").performClick()
         rule.onNodeWithTag("chat.expanded.draft").performTextInput(" and notes")
+        val config = rule.activity.resources.configuration
+        snap("expanded-editor-${config.uiMode}-${config.fontScale}", includeWindows = true)
         rule.onNodeWithTag("chat.expanded.done").performScrollTo().performClick()
         assertTrue(draft.contains("**formatting**") && draft.contains("and notes"))
         org.junit.Assert.assertEquals(0, sends)
         rule.onNodeWithTag("chat.draft").assertTextEquals(draft)
     }
 
-    @Test fun composerControlsStackBesideAWideDraftAndDispatchTheirOwnActions() {
+    @Test @Config(qualifiers = "w360dp-h720dp-night-xhdpi")
+    fun expandedDraftUsesTheDarkTheme() = expandedEditorPreservesRichTextAndNeverSubmitsTheDraft()
+
+    @Test fun expandedDraftRemainsUsableAtLargeText() {
+        org.robolectric.RuntimeEnvironment.setFontScale(2f)
+        expandedEditorPreservesRichTextAndNeverSubmitsTheDraft()
+    }
+
+    @Test fun conversationMenuRemainsOpenWhenTheKeyboardDropsFocus() {
+        lateinit var focus: androidx.compose.ui.focus.FocusManager
+        var opened = 0
+        rule.setContent { CompanionTheme {
+            focus = androidx.compose.ui.platform.LocalFocusManager.current
+            MarkdownComposer("Keep the draft", {}, onOpenModelSettings = { opened++ })
+        } }
+        rule.onNodeWithTag("chat.draft").performClick()
+        rule.onNodeWithTag("chat.controls").performClick()
+        rule.runOnIdle { focus.clearFocus() }
+        rule.onNodeWithTag("chat.model.settings").assertIsDisplayed().performClick()
+        org.junit.Assert.assertEquals(1, opened)
+        rule.onNodeWithTag("chat.draft").assertTextEquals("Keep the draft")
+    }
+
+    @Test fun leavingTheComposerCollapsesItWithoutLosingMultilineText() {
+        var text by mutableStateOf("First line\nSecond **line**")
+        lateinit var focus: androidx.compose.ui.focus.FocusManager
+        rule.setContent { CompanionTheme {
+            focus = androidx.compose.ui.platform.LocalFocusManager.current
+            MarkdownComposer(text, { text = it })
+        } }
+        rule.onNodeWithTag("chat.draft").assertHeightIsEqualTo(48.dp).performClick()
+        rule.onNodeWithTag("chat.tools").assertIsDisplayed()
+        rule.onNodeWithTag("chat.draft").performTextInput(" more")
+        rule.runOnIdle { focus.clearFocus() }
+        rule.onNodeWithTag("chat.tools").assertDoesNotExist()
+        rule.onNodeWithTag("chat.draft").assertHeightIsEqualTo(48.dp).assertTextEquals(text)
+        assertTrue(text.contains("\n") && text.contains("**line**") && text.contains("more"))
+        snap("compact-idle-multiline")
+    }
+
+    @Test @Config(qualifiers = "w360dp-h720dp-night-xhdpi")
+    fun activeEditorUsesTheFullWidthAndOneCompactToolbarInTheDarkTheme() {
+        mount(emptyList(), false, draft = "A clear message")
+        rule.onNodeWithTag("chat.draft").performClick(); rule.mainClock.advanceTimeBy(100)
+        val text = rule.onNodeWithTag("chat.draft").fetchSemanticsNode().boundsInRoot
+        val send = rule.onNodeWithTag("chat.send").fetchSemanticsNode().boundsInRoot
+        assertTrue(text.bottom <= send.top)
+        assertTrue(text.width > send.width * 5)
+        snap("refined-editor-dark")
+    }
+
+    @Test fun singleLineEditorAllowsDoubleSizeTextToGrowWithoutClipping() {
+        org.robolectric.RuntimeEnvironment.setFontScale(2f)
+        mount(emptyList(), false, draft = "Keep this readable")
+        rule.onNodeWithTag("chat.draft").assertHeightIsAtLeast(48.dp)
+        val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        rule.onNodeWithTag("chat.draft").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        val bounds = rule.onNodeWithTag("chat.draft").fetchSemanticsNode().boundsInRoot
+        assertTrue(layouts.isNotEmpty() && layouts.all { !it.didOverflowHeight && it.size.height <= bounds.height })
+        snap("refined-editor-large-idle")
+        rule.onNodeWithTag("chat.draft").performClick(); rule.mainClock.advanceTimeBy(100)
+        rule.onNodeWithTag("chat.send").assertIsDisplayed()
+        rule.onNodeWithTag("chat.controls").assertIsDisplayed()
+        snap("refined-editor-large-active")
+    }
+
+    @Test fun inactiveComposerUsesOneLineAndFocusedControlsUseOneToolbar() {
         val actions = mutableListOf<String>()
         mount(emptyList(), streaming = false, onSend = { actions += "send" },
             onVoice = { actions += "voice" }, onAttach = { actions += "attach" })
+        rule.onNodeWithTag("chat.composer").assertHeightIsEqualTo(56.dp)
+        rule.onNodeWithTag("chat.attach").assertDoesNotExist()
+        rule.onNodeWithTag("chat.draft").performClick(); rule.mainClock.advanceTimeBy(100)
         fun bounds(tag: String) = rule.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
         val attach = bounds("chat.attach")
         val slash = bounds("chat.slash")
         val voice = bounds("chat.voice")
         val send = bounds("chat.send")
         val draft = bounds("chat.draft")
-        assertTrue(attach.left == slash.left && attach.bottom < slash.top)
-        assertTrue(voice.left == send.left && voice.bottom < send.top)
-        assertTrue(draft.left >= attach.right && draft.right <= send.left)
+        assertTrue(attach.top == slash.top && attach.right <= slash.left)
+        assertTrue(voice.top == send.top && voice.right <= send.left)
+        assertTrue(draft.bottom <= attach.top && draft.width > send.width * 5)
         assertTrue(draft.width > attach.width * 3)
         rule.onNodeWithTag("chat.attach").performClick()
         rule.onNodeWithTag("chat.voice").performClick()
@@ -219,12 +297,15 @@ class ChatScreenRenderTest {
         assertTrue(actions == listOf("stop"))
     }
 
-    @Test fun modelSettingsAreVisibleWithoutFocusAndKeepAllFormattingAvailable() {
+    @Test fun modelSettingsAndFormattingAppearWhenEditing() {
         var opened = 0
         mount(emptyList(), streaming = false, draft = "Keep **this** draft", onModels = { opened++ })
-        rule.onNodeWithText("Model").assertIsDisplayed()
-        rule.onNodeWithText("Reasoning").assertIsDisplayed()
+        rule.onNodeWithTag("chat.model.settings").assertDoesNotExist()
+        rule.onNodeWithTag("chat.draft").performClick(); rule.mainClock.advanceTimeBy(100)
+        rule.onNodeWithTag("chat.controls").performClick(); rule.mainClock.advanceTimeBy(300)
         rule.onNodeWithTag("chat.model.settings").assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        rule.onNodeWithTag("chat.draft").performClick(); rule.mainClock.advanceTimeBy(100)
+        rule.onNodeWithTag("chat.format").performClick(); rule.mainClock.advanceTimeBy(300)
         for (tag in listOf("bold", "italic", "code", "list")) rule.onNodeWithTag("chat.fmt.$tag").assertIsDisplayed()
         assertTrue(opened == 1)
     }
@@ -241,11 +322,16 @@ class ChatScreenRenderTest {
                 }
             }
         }
+        rule.onNodeWithTag("chat.draft").performClick(); rule.mainClock.advanceTimeBy(100)
+        rule.onNodeWithTag("chat.controls").performClick(); rule.mainClock.advanceTimeBy(300)
         rule.onNodeWithTag("chat.model.settings").assertIsDisplayed().assertWidthIsAtLeast(48.dp)
             .assertHeightIsAtLeast(48.dp).performClick()
+        rule.onNodeWithTag("chat.draft").performClick(); rule.mainClock.advanceTimeBy(100)
+        rule.onNodeWithTag("chat.controls").performClick(); rule.mainClock.advanceTimeBy(300)
         rule.onNodeWithTag("chat.reasoning.settings").assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
         assertTrue(opened == 11)
-        rule.onNodeWithTag("chat.fmt.bold").assertIsDisplayed()
+        rule.onNodeWithTag("chat.draft").performClick(); rule.mainClock.advanceTimeBy(100)
+        rule.onNodeWithTag("chat.format").assertIsDisplayed()
         rule.onNodeWithTag("chat.draft").assertIsDisplayed()
     }
 
@@ -314,28 +400,45 @@ class ChatScreenRenderTest {
     @Test fun microphoneTapDictatesAndLongPressStartsVoiceWithoutADuplicateTap() {
         var taps=0; var holds=0
         mount(emptyList(),false,onVoice={taps++},onVoiceLong={holds++})
+        rule.onNodeWithTag("chat.draft").performClick(); rule.mainClock.advanceTimeBy(100)
         rule.onNodeWithTag("chat.voice").performClick()
         rule.onNodeWithTag("chat.voice").performTouchInput { longClick() }
         org.junit.Assert.assertEquals(1,taps)
         org.junit.Assert.assertEquals(1,holds)
-        rule.onNodeWithTag("chat.fmt.bold").assertIsDisplayed()
+        rule.onNodeWithTag("chat.draft").performClick(); rule.mainClock.advanceTimeBy(100)
+        rule.onNodeWithTag("chat.format").assertIsDisplayed()
     }
 
     /** Software-draws the decor view; Compose's idle wait never settles with infinite blink animations. */
-    private fun snap(name: String) {
-        runCatching {
+    private fun snap(name: String, includeWindows: Boolean = false) {
+        val capture = runCatching {
             rule.mainClock.advanceTimeByFrame()
             var bmp: Bitmap? = null
             rule.activityRule.scenario.onActivity { activity ->
                 val v = activity.window.decorView
                 if (v.width > 0 && v.height > 0) {
-                    bmp = Bitmap.createBitmap(v.width, v.height, Bitmap.Config.ARGB_8888).also { v.draw(Canvas(it)) }
+                    bmp = Bitmap.createBitmap(v.width, v.height, Bitmap.Config.ARGB_8888).also { bitmap ->
+                        val canvas = Canvas(bitmap)
+                        if (!includeWindows) v.draw(canvas) else {
+                            val type = Class.forName("android.view.WindowManagerGlobal")
+                            val global = type.getDeclaredMethod("getInstance").invoke(null)
+                            val field = type.getDeclaredField("mViews").apply { isAccessible = true }
+                            @Suppress("UNCHECKED_CAST") val roots = field.get(global) as List<android.view.View>
+                            check(roots.size > 1) { "Expanded editor window missing" }
+                            roots.forEach { root ->
+                                val xy = IntArray(2); root.getLocationOnScreen(xy)
+                                canvas.save(); canvas.translate(xy[0].toFloat(), xy[1].toFloat()); root.draw(canvas); canvas.restore()
+                            }
+                        }
+                    }
                 }
             }
             val out = bmp ?: error("decor view not laid out")
             val dir = File("build/reports/chat-render").apply { mkdirs() }
             File(dir, "$name.png").outputStream().use { out.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        }.onFailure { println("capture skipped for $name: ${it.message}") }
+        }
+        if (includeWindows) capture.getOrThrow()
+        else capture.onFailure { println("capture skipped for $name: ${it.message}") }
     }
 
     @Test
@@ -345,10 +448,11 @@ class ChatScreenRenderTest {
         rule.onNodeWithTag("chat.assistant").assertIsDisplayed()
         rule.onNodeWithTag("chat.tool").assertIsDisplayed()
         rule.onNodeWithText("You").assertIsDisplayed()
-        rule.onNodeWithText("Hermes").assertIsDisplayed()
+        rule.onNodeWithText("Research").assertIsDisplayed()
         rule.onAllNodesWithTag("chat.cursor").assertCountEquals(0)
         rule.onAllNodesWithTag("chat.pending").assertCountEquals(0)
-        rule.onNodeWithContentDescription("Dictate message").assertIsDisplayed()
+        rule.onNodeWithTag("chat.voice").assertDoesNotExist()
+        rule.onNodeWithTag("chat.composer").assertHeightIsEqualTo(56.dp)
         snap("01-idle")
     }
 

@@ -40,8 +40,8 @@ class AppNavigationRenderTest {
 
     @Test fun fourDestinationsAndADistinctCenterVoiceActionHaveTouchTargets() {
         bar(MainTab.THREADS)
-        listOf("Chats", "Gateway", "Device", "More").forEach { compose.onNodeWithText(it).assertIsDisplayed() }
-        listOf("threads", "gateway", "device", "more").forEach {
+        listOf("Bots", "Chats", "Device", "More").forEach { compose.onNodeWithText(it).assertIsDisplayed() }
+        listOf("bots", "threads", "device", "more").forEach {
             compose.onNodeWithTag("nav.$it").assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
         }
         compose.onNodeWithTag("nav.voice").assertIsDisplayed().assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
@@ -49,9 +49,35 @@ class AppNavigationRenderTest {
         capture("navigation-standard")
     }
 
+    @Test fun everyNavigationItemUsesTheSameHeightAndVerticalAlignment() {
+        bar(MainTab.BOTS)
+        val bounds = listOf("bots", "threads", "voice", "device", "more").map { compose.onNodeWithTag("nav.$it").fetchSemanticsNode().boundsInRoot }
+        bounds.forEach { assertEquals(bounds.first().top, it.top, 0.5f); assertEquals(bounds.first().bottom, it.bottom, 0.5f) }
+        capture("navigation-balanced")
+    }
+
+    @Test fun everyChatTypeHidesTheFloatingBarAndReturnsItWhenBrowsing() {
+        val session = SessionRef("s", "default", "Chat", 0)
+        var screen by androidx.compose.runtime.mutableStateOf(CompanionState(origin = "https://host", tab = MainTab.THREADS,
+            activeProfileId = "default", openSessionId = session.id, openSessionRef = session))
+        compose.setContent { CompanionTheme { CompanionShell(screen, onOriginChange = {}, onConnect = {}, onSelectProfile = {},
+            onTab = {}, onOpenSession = {}, onNewThread = {}, onCloseChat = {}, onDraftChange = {}, onSend = {}, onInterrupt = {}, onApproval = {}, imeVisible = false) } }
+        compose.onNodeWithTag("navigation.bar").assertDoesNotExist()
+        compose.runOnIdle { screen = screen.copy(openSessionRef = session.copy(title = "Bot Chat")) }
+        compose.onNodeWithTag("navigation.bar").assertDoesNotExist()
+        compose.runOnIdle { screen = screen.copy(openSessionId = null, openSessionRef = null, openRoomId = "room") }
+        compose.onNodeWithTag("navigation.bar").assertDoesNotExist()
+        compose.runOnIdle { screen = screen.copy(tab = MainTab.BOTS, openRoomId = null, botMode = BotModeState(
+            selected = app.hermes.companion.model.NativeGroupSnapshot(app.hermes.companion.model.NativeGroup("g", "Group", emptyList(), "host", 1)))) }
+        compose.onNodeWithTag("navigation.bar").assertDoesNotExist()
+        compose.runOnIdle { screen = screen.copy(botMode = BotModeState()) }
+        compose.onNodeWithTag("navigation.bar").assertIsDisplayed()
+        capture("floating-bar-dark-chat-exit")
+    }
+
     @Test fun doubledTextKeepsSelectedLabelReadableAndEveryDestinationAccessible() {
         bar(MainTab.DEVICE, fontScale = 2f)
-        listOf("Chats", "Gateway", "Device", "More").forEach { compose.onNodeWithContentDescription(it).assertIsDisplayed().assertHeightIsAtLeast(48.dp) }
+        listOf("Bots", "Chats", "Device", "More").forEach { compose.onNodeWithContentDescription(it).assertIsDisplayed().assertHeightIsAtLeast(48.dp) }
         listOf("Device").forEach {
             val node = compose.onNodeWithText(it, useUnmergedTree = true).assertIsDisplayed()
             val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
@@ -78,7 +104,7 @@ class AppNavigationRenderTest {
     }
 
     @Test fun secondaryDestinationsSelectMoreAndOpenConversationSelectsChats() {
-        assertEquals(NavigationDestination.GATEWAY, navigationDestination(MainTab.GATEWAY, false))
+        assertEquals(NavigationDestination.MORE, navigationDestination(MainTab.GATEWAY, false))
         assertEquals(NavigationDestination.MORE, navigationDestination(MainTab.CONSOLE, false))
         assertEquals(NavigationDestination.MORE, navigationDestination(MainTab.PROFILES, false))
         assertEquals(NavigationDestination.CHATS, navigationDestination(MainTab.CONSOLE, true))
@@ -89,9 +115,9 @@ class AppNavigationRenderTest {
     @Test fun primaryActionsAreExplicitAndMoreOnlyOpensItsMenu() {
         val selected = mutableListOf<MainTab>(); var more = 0
         bar(MainTab.THREADS, onTab = selected::add, onMore = { more++ })
-        compose.onNodeWithTag("nav.gateway").performClick()
+        compose.onNodeWithTag("nav.bots").performClick()
         compose.onNodeWithTag("nav.more").performClick()
-        assertEquals(listOf(MainTab.GATEWAY), selected)
+        assertEquals(listOf(MainTab.BOTS), selected)
         assertEquals(1, more)
     }
 
@@ -111,30 +137,31 @@ class AppNavigationRenderTest {
     @Test fun chatKeepsRichTextAndMovesVoiceToTheDock() {
         val session = SessionRef("synthetic-navigation", "knight", "Navigation test", 0)
         compose.setContent { CompanionTheme {
-            CompanionShell(CompanionState(origin = "http://lab", activeProfileId = "knight",
+            CompanionShell(CompanionState(origin = "http://lab", tab = MainTab.THREADS, activeProfileId = "knight",
                 openSessionId = session.id, openSessionRef = session, draft = "Draft with **formatting**"),
                 onOriginChange = {}, onConnect = {}, onSelectProfile = {},
                 onTab = {}, onOpenSession = {}, onNewThread = {},
                 onCloseChat = {}, onDraftChange = {}, onSend = {}, onInterrupt = {}, onApproval = {}, imeVisible=false)
         } }
-        compose.onNodeWithTag("chat.fmt.bold").assertIsDisplayed()
-        compose.onNodeWithTag("chat.fmt.italic").assertIsDisplayed()
+        compose.onNodeWithTag("chat.tools").assertDoesNotExist()
         compose.onNodeWithTag("header.voice").assertDoesNotExist()
-        compose.onNodeWithTag("nav.voice").assertIsDisplayed()
+        compose.onNodeWithTag("navigation.bar").assertDoesNotExist()
         // Real IME hide/show and shell navigation are exercised by NavigationDeviceTest.
         capture("chat-with-navigation")
     }
 
     @Test fun browsingModulesKeepsVoiceAttachedAndDoesNotCloseTheChat() {
         val session=SessionRef("voice-session","knight","Pinned conversation",0)
-        var screen by androidx.compose.runtime.mutableStateOf(CompanionState(origin="http://lab",activeProfileId="knight",
+        var screen by androidx.compose.runtime.mutableStateOf(CompanionState(origin="http://lab",tab=MainTab.THREADS,activeProfileId="knight",
             openSessionId=session.id,openSessionRef=session,draft="Preserved **draft**",voiceStreamState=VoiceStreamState.MUTED,
             voiceMicrophoneMuted=true,voiceSessionTitle=session.title))
         var closed=0
         compose.setContent { CompanionTheme { CompanionShell(screen,onOriginChange={},onConnect={},onSelectProfile={},
-            onTab={ screen=screen.copy(tab=it,chatMinimized=true) },onOpenSession={},onNewThread={},onCloseChat={closed++},
+            onTab={ screen=screen.copy(tab=it,chatMinimized=true) },onOpenSession={},onNewThread={},onCloseChat={screen=screen.copy(chatMinimized=true)},
             onDraftChange={},onSend={},onInterrupt={},onApproval={},
             onReturnToVoiceConversation={screen=screen.copy(tab=MainTab.THREADS,chatMinimized=false)}, imeVisible=false) } }
+        compose.onNodeWithTag("navigation.bar").assertDoesNotExist()
+        compose.onNodeWithTag("chat.back").performClick()
         compose.onNodeWithTag("nav.device").performClick()
         compose.onNodeWithTag("nav.device").assertIsSelected()
         compose.onNodeWithTag("chat.draft").assertDoesNotExist()
@@ -147,26 +174,26 @@ class AppNavigationRenderTest {
         capture("voice-pinned-conversation")
     }
 
-    @Test fun startFromAModuleRequiresAConversationChoiceBeforeTheMicrophone() {
+    @Test fun startFromAModuleUsesOneExplicitVoiceTapWithoutAConversationChoice() {
         var starts=0
         compose.setContent { CompanionTheme { CompanionShell(CompanionState(origin="http://lab",tab=MainTab.DEVICE,activeProfileId="knight"),
             onOriginChange={},onConnect={},onSelectProfile={},onTab={},onOpenSession={},onNewThread={},onCloseChat={},
             onDraftChange={},onSend={},onInterrupt={},onApproval={},onToggleVoiceStream={starts++}, imeVisible=false) } }
         compose.onNodeWithTag("nav.voice").performClick()
-        compose.onNodeWithTag("voice.start").assertIsDisplayed(); assertEquals(0,starts)
-        compose.onNodeWithTag("voice.start.confirm").performClick(); assertEquals(1,starts)
+        compose.onNodeWithTag("voice.start").assertDoesNotExist()
+        assertEquals(1,starts)
     }
 
     @Test fun keyboardHidesDestinationsButKeepsMuteEndAndRichFormattingVisible() {
         val session=SessionRef("voice-session","knight","Pinned conversation",0)
-        compose.setContent { CompanionTheme { CompanionShell(CompanionState(origin="http://lab",activeProfileId="knight",
+        compose.setContent { CompanionTheme { CompanionShell(CompanionState(origin="http://lab",tab=MainTab.THREADS,activeProfileId="knight",
             openSessionId=session.id,openSessionRef=session,voiceStreamState=VoiceStreamState.MUTED,voiceMicrophoneMuted=true),
             onOriginChange={},onConnect={},onSelectProfile={},onTab={},onOpenSession={},onNewThread={},onCloseChat={},
             onDraftChange={},onSend={},onInterrupt={},onApproval={},imeVisible=true) } }
         compose.onNodeWithTag("nav.voice").assertDoesNotExist()
         compose.onNodeWithTag("voice.stage.mute").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         compose.onNodeWithTag("voice.stage.stop").assertIsDisplayed().assertWidthIsAtLeast(48.dp)
-        compose.onNodeWithTag("chat.fmt.bold").assertIsDisplayed()
+        compose.onNodeWithTag("chat.tools").assertDoesNotExist()
         capture("voice-keyboard-layout")
     }
 
@@ -175,7 +202,7 @@ class AppNavigationRenderTest {
         val session=SessionRef("voice-session","knight","Pinned conversation",0)
         compose.setContent { CompanionTheme { CompositionLocalProvider(
             androidx.compose.ui.platform.LocalConfiguration provides config,LocalDensity provides Density(2f,2f)) {
-            Box(Modifier.size(720.dp,200.dp)) { CompanionShell(CompanionState(origin="http://lab",activeProfileId="knight",
+            Box(Modifier.size(720.dp,200.dp)) { CompanionShell(CompanionState(origin="http://lab",tab=MainTab.THREADS,activeProfileId="knight",
                 openSessionId=session.id,openSessionRef=session,voiceStreamState=VoiceStreamState.MUTED,voiceMicrophoneMuted=true),
                 onOriginChange={},onConnect={},onSelectProfile={},onTab={},onOpenSession={},onNewThread={},onCloseChat={},
                 onDraftChange={},onSend={},onInterrupt={},onApproval={},imeVisible=true) }

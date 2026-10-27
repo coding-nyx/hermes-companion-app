@@ -72,10 +72,9 @@ class NavigationFlowDeviceTest {
                 guarded { compose.onNodeWithTag("threads.resumeDraft").performClick() }
                 compose.waitUntil(5_000) { state.value.openSessionId == DraftThread.ID }
                 assertEquals("Local **bold** draft", state.value.draft)
-                compose.onNodeWithTag("chat.fmt.bold").assertIsDisplayed()
-                compose.onNodeWithTag("chat.fmt.italic").assertIsDisplayed()
-                compose.onNodeWithTag("header.voice").assertIsDisplayed()
-                guarded { compose.onNodeWithTag("nav.threads").performClick() }
+                compose.onNodeWithTag("chat.tools").assertDoesNotExist()
+                compose.onNodeWithTag("header.voice").assertDoesNotExist()
+                guarded { compose.onNodeWithTag("chat.back").performClick() }
                 compose.waitUntil(5_000) { state.value.openSessionId == null }
                 compose.onNodeWithTag("threads.list").assertIsDisplayed()
                 guarded { compose.onNodeWithTag("threads.row.fixture-thread").performClick() }
@@ -83,7 +82,7 @@ class NavigationFlowDeviceTest {
                 i.runOnMainSync { state.update { it.copy(draft = "Thread `code` draft") } }
                 guarded { compose.onNodeWithTag("nav.device").performClick() }
                 compose.waitUntil(5_000) { state.value.tab == MainTab.DEVICE && state.value.openSessionId == null }
-                guarded { compose.onNodeWithTag("nav.threads").performClick() }
+                guarded { compose.onNodeWithTag("chat.back").performClick() }
                 guarded { compose.onNodeWithTag("threads.row.fixture-thread").performClick() }
                 compose.waitUntil(5_000) { state.value.openSessionId == session.id }
                 assertEquals("Thread `code` draft", state.value.draft)
@@ -99,7 +98,7 @@ class NavigationFlowDeviceTest {
                 guarded { compose.onNodeWithTag("threads.resumeDraft").performClick() }
                 compose.waitUntil(5_000) { state.value.openSessionId == DraftThread.ID }
                 assertEquals("Local **bold** draft", state.value.draft)
-                guarded { compose.onNodeWithTag("nav.threads").performClick() }
+                guarded { compose.onNodeWithTag("chat.back").performClick() }
                 guarded { compose.onNodeWithTag("threads.new").performClick() }
                 assertEquals(1, newRequests); assertEquals(0, voiceRequests)
                 assertEquals("Local **bold** draft", drafts.load(local).text)

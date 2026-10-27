@@ -45,11 +45,11 @@ object Rooms {
         speaker: String?,
         participants: List<RoomParticipant> = emptyList(),
         profiles: List<app.hermes.companion.model.ProfileRef> = emptyList(),
+        fallback: String = "Agent",
     ): String = when {
         speaker != null -> displayName(speaker, participants, profiles)
-        participants.size == 1 -> displayName(participants[0].profile, participants, profiles)
-        participants.isNotEmpty() -> "AGENT"
-        else -> "HERMES"
+        participants.size == 1 -> displayName(participants[0].id, participants, profiles)
+        else -> fallback
     }
 
     fun isBackingSession(title: String): Boolean = title.trim().startsWith(BACKING_TITLE_PREFIX)
@@ -57,7 +57,7 @@ object Rooms {
     /** Index of [speaker] among [participants]; drives the rail style (solid/dashed/dotted). */
     fun speakerIndex(speaker: String?, participants: List<RoomParticipant>): Int {
         if (speaker == null) return 0
-        val idx = participants.indexOfFirst { it.profile == speaker }
+        val idx = participants.indexOfFirst { it.id == speaker }
         return if (idx < 0) 0 else idx
     }
 

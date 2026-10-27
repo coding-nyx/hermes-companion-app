@@ -19,6 +19,7 @@ import app.hermes.companion.model.ChatAttachment
 import app.hermes.companion.model.ChatMessage
 import app.hermes.companion.model.CronJob
 import app.hermes.companion.model.DashboardStatus
+import app.hermes.companion.model.CompanionHealth
 import app.hermes.companion.model.CompanionAvailability
 import app.hermes.companion.model.DeviceArm
 import app.hermes.companion.model.GatewayHello
@@ -37,7 +38,7 @@ import app.hermes.companion.model.GatewayChoice
 import app.hermes.companion.model.SavedGateway
 import app.hermes.companion.model.SessionRef
 
-enum class MainTab { THREADS, CONSOLE, REVIEW, REMINDERS, PROFILES, GATEWAY, DEVICE }
+enum class MainTab { THREADS, CONSOLE, REVIEW, REMINDERS, PROFILES, BOTS, GATEWAY, DEVICE }
 
 /** External `hermes-companion://open` request awaiting user confirmation (A7.10). */
 data class DeepLinkRequest(val profileId: String, val sessionId: String, val origin: String = "", val roomId: String = "")
@@ -63,13 +64,14 @@ data class CompanionState(
     val updateLoading: Boolean = false,
     val error: String? = null,
     val profiles: List<ProfileRef> = emptyList(),
+    val botMode: BotModeState = BotModeState(),
     val activeProfileId: String? = null,
     val sessions: List<SessionRef> = emptyList(),
     /** Rail order (A18.9). Sticky per phone; applied in [visibleSessions]. */
     val threadSort: ThreadSort = ThreadSort.DEFAULT,
     /** Include host-archived threads (A18.12). Sticky; toggling refetches with `archived=include`. */
     val showArchived: Boolean = false,
-    val tab: MainTab = MainTab.THREADS,
+    val tab: MainTab = MainTab.BOTS,
     /** Browsing modules or the chat list must not discard the live conversation. */
     val chatMinimized: Boolean = false,
     val openSessionId: String? = null,
@@ -78,6 +80,9 @@ data class CompanionState(
     // Agent rooms (P21). A room and a thread are never open at the same time.
     val rooms: List<RoomRef> = emptyList(),
     val companionAvailability: CompanionAvailability = CompanionAvailability.UNKNOWN,
+    val relayHealth: CompanionHealth? = null,
+    val connectionModeBusy: Boolean = false,
+    val connectionModeError: String? = null,
     val roomsLoading: Boolean = false,
     val roomsError: String? = null,
     val openRoomId: String? = null,
@@ -146,11 +151,14 @@ data class CompanionState(
     val deviceProfileId: String? = null,
     val deviceLane: Boolean = false,
     val a11yBound: Boolean = false,
+    val a11yListed: Boolean? = null,
+    val a11yOffRequested: Boolean = false,
     val overlayGranted: Boolean = false,
     val notifyGranted: Boolean = false,
     val foregroundApp: String = "",
     val lastAudit: String = "",
     val arm: DeviceArm = DeviceArm.DISARMED,
+    val armPending: Boolean = false,
     val ntfyTopic: String = "",
     val stayConnected: Boolean = false,
     /** User opted in to re-enabling the Hands accessibility service (StickyStore.keepA11yOn). */
@@ -183,9 +191,17 @@ data class CompanionState(
     val voicePauseReason: String = "",
     val voiceSessionTitle: String = "",
     val voiceSpeaker: Boolean = true,
-    val speechBackend: app.hermes.companion.model.SpeechBackend = app.hermes.companion.model.SpeechBackend.SYSTEM,
+    val speechBackend: app.hermes.companion.model.SpeechBackend = app.hermes.companion.model.SpeechBackend.HOST,
     val readAloudMessageId: String? = null,
     val nativeVoiceStatus: NativeVoiceStatus? = null,
+    val hostVoiceSettings: app.hermes.companion.model.HostVoiceSettings? = null,
+    val voiceSettingsLoading: Boolean = false,
+    val voiceSettingsError: String = "",
+    val voiceModeLabel: String = "Hermes speech",
+    val voiceDescription: String = "",
+    val voiceCallPhase: app.hermes.companion.model.NativeCallPhase = app.hermes.companion.model.NativeCallPhase.IDLE,
+    val voicePacingMs: Int = 900,
+    val voiceTranscript: List<app.hermes.companion.model.VoiceCaption> = emptyList(),
     val protectedCustom: List<String> = emptyList(),
     val protectedError: String? = null,
     val nlsBound: Boolean = false,
@@ -222,6 +238,11 @@ data class CompanionState(
         get() = rooms.filter { it.seq > (roomSeen[it.id] ?: 0) }.map { it.id }.toSet()
     val activeProfile: ProfileRef?
         get() = profiles.find { it.id == activeProfileId }
+    val chatProfiles: List<ProfileRef>
+        get() = app.hermes.companion.domain.ChatNames.profiles(origin, profiles, botMode.bots)
+    val chatAgentName: String
+        get() = app.hermes.companion.domain.ChatNames.agent(openSession?.profileId ?: activeProfileId, chatProfiles)
+    fun chatTitle(session: SessionRef): String = app.hermes.companion.domain.ChatNames.session(session, chatProfiles)
     /**
      * The open thread. Falls back to [openSessionRef] for the local draft placeholder (never
      * on the rail) and for a freshly created session that the host has not persisted yet.
@@ -248,6 +269,7 @@ data class CompanionState(
         approval = null,
         approvalSubmittingRequestId = null,
         companionAvailability = CompanionAvailability.UNKNOWN,
+        relayHealth = null, connectionModeBusy = false, connectionModeError = null,
         nativeVoiceStatus = null,
         rooms = emptyList(),
         roomsLoading = false,
@@ -298,9 +320,12 @@ internal fun CompanionState.mirror(node: DeviceNodeState): CompanionState = copy
     deviceProfileId = node.deviceProfileId,
     deviceLane = node.laneOpen,
     a11yBound = node.a11yBound,
+    a11yListed = node.a11yListed,
+    a11yOffRequested = node.a11yOffRequested,
     foregroundApp = node.foregroundApp,
     lastAudit = node.lastAudit,
     arm = node.arm,
+    armPending = node.armPending,
     protectedCustom = node.protectedCustom,
     protectedError = node.protectedError,
     nlsBound = node.nlsBound,

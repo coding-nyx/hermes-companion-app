@@ -6,6 +6,7 @@ SRC="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=host_services.sh
 . "$SRC/host_services.sh"
 HOME_DIR="${HERMES_HOME:-$HOME/.hermes}"
+export HERMES_HOME="$HOME_DIR"
 DEST="$HOME_DIR/plugins/hermes-companion"
 mkdir -p "$DEST"
 if command -v rsync >/dev/null 2>&1; then
@@ -27,15 +28,21 @@ if command -v hermes >/dev/null 2>&1; then
   # script *before* hc_ensure_relay, so the files landed and the relay kept running the old
   # code. Never let this gate the restart.
   if hermes plugins enable --help 2>/dev/null | grep -q -- "--no-allow-tool-override"; then
-    hermes plugins enable --no-allow-tool-override hermes-companion </dev/null || true
+    hermes --profile default plugins enable --no-allow-tool-override hermes-companion </dev/null || true
   else
-    hermes plugins enable hermes-companion </dev/null || true
+    hermes --profile default plugins enable hermes-companion </dev/null || true
   fi
 else
   echo "hermes CLI not on PATH — the runtime loads the plugin from config.yaml anyway"
 fi
 
+hc_detect_venv
+# Match the operator's active profile as well as the shared machine dashboard.
+ACTIVE_PROFILE="default"
+if [ -s "$HOME_DIR/active_profile" ]; then ACTIVE_PROFILE="$(cat "$HOME_DIR/active_profile")"; fi
+"$(hc_python)" "$DEST/voice_install.py" --enable-profile default --enable-profile "$ACTIVE_PROFILE"
 hc_ensure_relay "$SRC" "$DEST" "$HOME_DIR"
+hc_restart_dashboard "$SRC" "$DEST" "$HOME_DIR"
 
 echo
 echo "Next:"

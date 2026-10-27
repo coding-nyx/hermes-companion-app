@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -55,8 +57,19 @@ fun MarkdownBlocks(
     onOpenMedia: (url: String, mime: String, name: String) -> Unit = { _, _, _ -> },
 ) {
     val blocks = remember(text) { MarkdownRender.blocks(text) }
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(CompanionSpace.Sm)) {
-        blocks.forEach { block ->
+    Column(modifier = modifier) {
+        blocks.forEachIndexed { index, block ->
+            val previous = blocks.getOrNull(index - 1)
+            val gap = when {
+                previous == null -> 0.dp
+                (previous is MdBlock.Bullet || previous is MdBlock.Ordered) &&
+                    (block is MdBlock.Bullet || block is MdBlock.Ordered) -> 2.dp
+                previous is MdBlock.Quote && block is MdBlock.Quote -> 2.dp
+                block is MdBlock.Heading -> 10.dp
+                previous is MdBlock.Heading -> 4.dp
+                else -> 8.dp
+            }
+            if (gap > 0.dp) Spacer(Modifier.height(gap))
             when (block) {
                 is MdBlock.Heading -> Text(
                     text = block.spans.toAnnotated(links = true),
@@ -72,11 +85,11 @@ fun MarkdownBlocks(
                 )
                 is MdBlock.Paragraph -> MarkdownInline(block.spans, CompanionType.Body)
                 is MdBlock.Bullet -> Row {
-                    Text("▸  ", style = CompanionType.Mono.copy(color = CompanionColor.Signal))
+                    Text("▸  ", style = CompanionType.Body.copy(color = CompanionColor.Signal))
                     MarkdownInline(block.spans, CompanionType.Body, Modifier.weight(1f, fill = false))
                 }
                 is MdBlock.Ordered -> Row {
-                    Text("${block.index}.  ", style = CompanionType.Mono.copy(color = CompanionColor.Signal))
+                    Text("${block.index}.  ", style = CompanionType.Body.copy(color = CompanionColor.Signal))
                     MarkdownInline(block.spans, CompanionType.Body, Modifier.weight(1f, fill = false))
                 }
                 is MdBlock.Quote -> Row(Modifier.height(IntrinsicSize.Min)) {
@@ -158,6 +171,7 @@ private fun CodeBlockView(block: MdBlock.Fence) {
                             copied = false
                         }
                     }
+                    .heightIn(min = 48.dp).widthIn(min = 48.dp)
                     .padding(horizontal = 6.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -214,6 +228,7 @@ private fun MarkdownInline(
 
 @Composable
 private fun TableBlock(block: MdBlock.Table) {
+    val cellWidth = 96.dp * androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f)
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -226,7 +241,7 @@ private fun TableBlock(block: MdBlock.Table) {
                 Text(
                     text = cell,
                     style = CompanionType.MonoSmall.copy(color = CompanionColor.Signal),
-                    modifier = Modifier.width(96.dp).padding(end = 8.dp),
+                    modifier = Modifier.width(cellWidth).padding(end = 8.dp),
                 )
             }
         }
@@ -236,7 +251,7 @@ private fun TableBlock(block: MdBlock.Table) {
                     Text(
                         text = cell,
                         style = CompanionType.MonoSmall.copy(color = CompanionColor.Text),
-                        modifier = Modifier.width(96.dp).padding(end = 8.dp),
+                        modifier = Modifier.width(cellWidth).padding(end = 8.dp),
                     )
                 }
             }

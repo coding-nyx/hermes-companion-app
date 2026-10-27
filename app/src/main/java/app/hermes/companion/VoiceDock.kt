@@ -6,7 +6,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -54,7 +53,7 @@ internal fun VoiceControlIcon(glyph: VoiceControlGlyph, color: Color, modifier: 
     }
 }
 
-internal fun voiceStageLabel(state: CompanionState): String = if (state.approval != null) "Approval needed" else when (state.voiceStreamState) {
+internal fun voiceStageLabel(state: CompanionState): String = if (state.isVoiceStreamActive && state.voiceCallPhase == app.hermes.companion.model.NativeCallPhase.CONNECTING) "Connecting voice…" else if (state.approval != null) "Approval needed" else when (state.voiceStreamState) {
     VoiceStreamState.IDLE -> "Voice ended"
     VoiceStreamState.LISTENING -> if(state.voiceMicrophoneReady)"Listening" else "Preparing microphone…"
     VoiceStreamState.TRANSCRIBING -> "Understanding…"
@@ -65,7 +64,7 @@ internal fun voiceStageLabel(state: CompanionState): String = if (state.approval
 
 @Composable
 internal fun VoiceDock(state: CompanionState, onOpen: () -> Unit, onMute: () -> Unit, onStop: () -> Unit, compact: Boolean = false) {
-    val shape = CutCornerShape(topEnd = 10.dp, bottomStart = 10.dp)
+    val shape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 10.dp, bottomStart = 10.dp)
     val stageColor = when {
         state.approval != null -> CompanionColor.Warn
         state.voiceMicrophoneMuted -> CompanionColor.TextDim
@@ -112,7 +111,7 @@ private fun VoiceIdentity(state: CompanionState) {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 internal fun VoiceControlsSheet(state: CompanionState, onDismiss: () -> Unit, onMute: () -> Unit, onSpeaker: () -> Unit,
-    onStop: () -> Unit, onConversation: () -> Unit) {
+    onStop: () -> Unit, onConversation: () -> Unit, onInterrupt: () -> Unit = {}) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = CompanionColor.VoidElevated, contentColor = CompanionColor.Text) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 16.dp).testTag("voice.controls"),
@@ -121,10 +120,12 @@ internal fun VoiceControlsSheet(state: CompanionState, onDismiss: () -> Unit, on
             Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).testTag("voice.controls.details"),
                 verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 VoiceIdentity(state)
+                ProtocolStatus("Voice mode", state.voiceModeLabel)
+                ProtocolStatus("Speech", state.voiceDescription.ifBlank { "Checking host speech…" })
                 Text(state.voiceSessionTitle.ifBlank { state.openSession?.title ?: "Voice conversation" }, style = CompanionType.Title)
                 Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    val shape = CutCornerShape(topEnd = 12.dp, bottomStart = 12.dp)
+                    val shape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 12.dp, bottomStart = 12.dp)
                     Box(Modifier.size(64.dp).clip(shape).background(CompanionColor.SignalDim)
                         .border(1.dp, CompanionColor.Signal, shape), contentAlignment = Alignment.Center) {
                         VoiceControlIcon(if (state.voiceMicrophoneMuted) VoiceControlGlyph.MUTED else VoiceControlGlyph.WAVE,
@@ -137,15 +138,21 @@ internal fun VoiceControlsSheet(state: CompanionState, onDismiss: () -> Unit, on
                 Text(when {
                     state.voicePauseReason.isNotBlank() -> state.voicePauseReason
                     state.voiceStreamState == VoiceStreamState.LISTENING && !state.voiceMicrophoneReady -> "Wait until Listening appears before speaking."
-                    state.voiceStreamState == VoiceStreamState.TRANSCRIBING -> "Turning your speech into text. The microphone is paused."
+                    state.voiceStreamState == VoiceStreamState.TRANSCRIBING -> if (state.speechBackend == app.hermes.companion.model.SpeechBackend.SYSTEM)
+                        "Turning your speech into text. The microphone is paused." else "Turning your speech into text. Listening continues."
                     state.approval != null -> "Open the conversation to review the exact pending request."
                     state.voiceMicrophoneMuted -> "Listening resumes only when you unmute."
-                    state.voiceStreamState == VoiceStreamState.SPEAKING -> "The microphone pauses during speaker playback."
-                    state.voiceStreamState == VoiceStreamState.THINKING -> "Hermes is preparing its reply."
+                    state.voiceStreamState == VoiceStreamState.SPEAKING -> if (state.speechBackend == app.hermes.companion.model.SpeechBackend.SYSTEM) "Android compatibility speech pauses listening during playback." else "Speak to interrupt. Listening continues during playback."
+                    state.voiceStreamState == VoiceStreamState.THINKING -> "Hermes is preparing its reply. You can keep speaking."
                     else -> "Speak when you are ready."
                 }, style = CompanionType.Body, color = CompanionColor.TextDim)
-                Text("Spoken replies are brief. Read the full answer in chat, or use Read aloud.",
+                Text("Complete conversational replies are spoken. Code and formatting remain in chat.",
                     style = CompanionType.Caption)
+                if (state.voiceTranscript.isNotEmpty()) GroupedSection("Spoken conversation", padded = true) {
+                    state.voiceTranscript.takeLast(6).forEach { caption ->
+                        Text("${if (caption.role == "user") "You" else "Hermes"}: ${caption.text}", style = CompanionType.Body)
+                    }
+                }
                 ActionButton(if (state.approval != null) "Review pending approval" else "Open this conversation",
                     onConversation, modifier = Modifier.fillMaxWidth().testTag("voice.controls.conversation"))
             }
@@ -153,6 +160,7 @@ internal fun VoiceControlsSheet(state: CompanionState, onDismiss: () -> Unit, on
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ActionButton(if (state.voiceMicrophoneMuted) "Resume mic" else "Mute mic", onMute,
                     modifier = Modifier.testTag("voice.controls.mute"))
+                ActionButton("Stop speaking", onInterrupt, modifier = Modifier.testTag("voice.controls.interrupt"))
                 ActionButton(if (state.voiceSpeaker) "Speaker" else "Auto route", onSpeaker,
                     modifier = Modifier.testTag("voice.stage.speaker")
                         .semantics { contentDescription = "Audio output: ${if (state.voiceSpeaker) "Speaker" else "Auto route"}. Change audio output" })

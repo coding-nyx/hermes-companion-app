@@ -37,7 +37,7 @@ class NavigationDeviceTest {
         assertFalse("Unlock the device for navigation testing", keyguard.isKeyguardLocked)
         i.runOnMainSync { (i.targetContext.applicationContext as CompanionApp).deviceNode.arm() }
         val session = SessionRef("synthetic-navigation", "knight", "Navigation test", 0)
-        var screen by mutableStateOf(CompanionState(origin = "http://lab", hostName = "Lab", activeProfileId = "knight",
+        var screen by mutableStateOf(CompanionState(origin = "http://lab", hostName = "Lab", activeProfileId = "knight", tab = MainTab.THREADS,
             openSessionId = session.id, openSessionRef = session, draft = "Draft with **formatting**"))
         val actions = mutableListOf<String>()
         val settingChanges = mutableListOf<Pair<String, String>>()
@@ -48,7 +48,7 @@ class NavigationDeviceTest {
             compose.activity.setContent { CompanionTheme {
                 CompanionShell(screen, onOriginChange = {}, onConnect = {}, onSelectProfile = {},
                     onTab = { actions += it.name; screen = screen.copy(tab = it, chatMinimized = true) }, onOpenSession = {}, onNewThread = {},
-                    onCloseChat = { actions += "close"; screen = screen.copy(openSessionId = null, openSessionRef = null) },
+                    onCloseChat = { actions += "back"; screen = screen.copy(chatMinimized = true) },
                     onDraftChange = {}, onSend = {}, onInterrupt = {}, onApproval = {},
                     onSessionControls = { screen = screen.copy(sessionControls = SessionControlsPanel(
                         app.hermes.companion.data.local.DraftOwner("http://lab", "knight", session.id), session, 1,
@@ -67,35 +67,33 @@ class NavigationDeviceTest {
                     onReturnToVoiceConversation = { screen=screen.copy(tab=MainTab.THREADS,chatMinimized=false) })
             } }
         }
-        compose.onNodeWithTag("chat.fmt.bold").assertIsDisplayed()
-        compose.onNodeWithTag("chat.fmt.italic").assertIsDisplayed()
-        compose.onNodeWithTag("header.voice").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Dictate message").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Send message").assertIsDisplayed()
+        compose.onNodeWithTag("navigation.bar").assertDoesNotExist()
+        compose.onNodeWithTag("chat.tools").assertDoesNotExist()
+        compose.onNodeWithTag("chat.draft").assertHeightIsEqualTo(48.dp)
+        screenshot(i, "navigation-device-chat-idle.png")
+        compose.onNodeWithTag("chat.draft").performClick()
+        compose.onNodeWithTag("chat.format").assertIsDisplayed()
         listOf("attach", "slash", "voice", "send").forEach {
             compose.onNodeWithTag("chat.$it").assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
         }
-        fun bounds(tag: String) = compose.onNodeWithTag("chat.$tag").fetchSemanticsNode().boundsInRoot
-        assertTrue(bounds("attach").bottom < bounds("slash").top)
-        assertTrue(bounds("voice").bottom < bounds("send").top)
-        assertTrue(bounds("draft").width > bounds("attach").width * 3)
-        i.runOnMainSync {
-            compose.activity.window.insetsController?.hide(android.view.WindowInsets.Type.ime())
-        }
-        listOf("threads", "console", "device", "more").forEach {
+        screenshot(i, "navigation-device-chat-editing.png")
+        i.runOnMainSync { compose.activity.window.insetsController?.hide(android.view.WindowInsets.Type.ime()) }
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("chat.tools").fetchSemanticsNodes().isEmpty() }
+        compose.onNodeWithTag("chat.back").performClick()
+        listOf("bots", "threads", "device", "more").forEach {
             compose.onNodeWithTag("nav.$it").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         }
         screenshot(i, "navigation-device-chat.png")
         compose.onNodeWithTag("nav.more").performClick()
         compose.onNodeWithText("Code review").assertIsDisplayed()
         compose.onNodeWithText("Schedules").assertIsDisplayed()
-        compose.onNodeWithText("Hosts").assertIsDisplayed()
-        compose.onNodeWithText("Profiles").assertIsDisplayed()
+        compose.onNodeWithText("Gateways").assertIsDisplayed()
+        compose.onNodeWithText("Agent profiles").assertIsDisplayed()
         screenshot(i, "navigation-device-more.png")
         compose.onNodeWithTag("nav.review").performClick()
         compose.waitUntil(5_000) { screen.tab == MainTab.REVIEW }
         compose.onNodeWithTag("nav.more").assertIsSelected()
-        assertEquals(listOf("REVIEW"), actions)
+        assertEquals("REVIEW", actions.last())
         screenshot(i, "review.png")
         compose.onNodeWithTag("nav.more").performClick()
         compose.onNodeWithTag("nav.console").performClick()
@@ -117,12 +115,16 @@ class NavigationDeviceTest {
         compose.onNodeWithTag("threads.new").assertTextContains("New chat")
         compose.onNodeWithTag("threads.newroom").assertDoesNotExist()
         screenshot(i, "navigation-device-chat-list.png")
-        compose.onNodeWithTag("threads.options").performClick()
+        compose.onNodeWithTag("header.options").performClick()
         compose.onNodeWithText("New agent room").assertIsDisplayed()
         screenshot(i, "navigation-device-chat-options.png")
         i.runOnMainSync { screen = screen.copy(openSessionId = session.id, openSessionRef = session, chatMinimized = false) }
-        compose.onNodeWithTag("chat.model.settings").assertIsDisplayed()
+        compose.onNodeWithTag("chat.model.settings").assertDoesNotExist()
         compose.onNodeWithTag("chat.draft").performClick()
+        compose.onNodeWithTag("chat.controls").performClick()
+        compose.waitUntil(5_000) { runCatching {
+            compose.onNodeWithTag("chat.model.settings").assertIsDisplayed(); true
+        }.getOrDefault(false) }
         compose.onNodeWithTag("chat.model.settings").assertIsDisplayed().performClick()
         // Hiding Samsung IME and attaching the modal can briefly detach both window roots.
         // Wait for the new window, then keep all regular visibility/action assertions.
@@ -145,12 +147,16 @@ class NavigationDeviceTest {
         compose.onNodeWithTag("composer.models.done").performScrollTo().performClick()
         assertEquals("Draft with **formatting**", screen.draft)
         i.runOnMainSync { compose.activity.window.insetsController?.hide(android.view.WindowInsets.Type.ime()) }
-        compose.waitUntil(5_000) { compose.onAllNodesWithTag("nav.voice").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("navigation.bar").assertDoesNotExist()
+        compose.onNodeWithTag("chat.draft").performClick()
         compose.onNodeWithTag("chat.voice").performTouchInput { longClick() }
         compose.waitUntil(5_000) { screen.isVoiceStreamActive }
         assertEquals(1,actions.count { it=="voice" })
         compose.onNodeWithTag("voice.stage.mute").performClick()
         assertTrue(screen.voiceMicrophoneMuted)
+        i.runOnMainSync { compose.activity.window.insetsController?.hide(android.view.WindowInsets.Type.ime()) }
+        compose.waitUntil(5_000) { compose.onAllNodesWithTag("chat.tools").fetchSemanticsNodes().isEmpty() }
+        compose.onNodeWithTag("chat.back").performClick()
         compose.onNodeWithTag("nav.device").performClick()
         compose.onNodeWithTag("voice.stage").assertIsDisplayed()
         assertEquals(session.id,screen.openSessionId)
@@ -158,7 +164,7 @@ class NavigationDeviceTest {
         compose.onNodeWithTag("voice.controls").assertIsDisplayed()
         screenshot(i,"navigation-device-voice-controls.png")
         compose.onNodeWithTag("voice.controls.conversation").performClick()
-        compose.onNodeWithTag("chat.fmt.bold").assertIsDisplayed()
+        compose.onNodeWithTag("chat.tools").assertDoesNotExist()
         compose.onNodeWithTag("chat.draft").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("nav.voice").fetchSemanticsNodes().isEmpty() }
         compose.onNodeWithTag("voice.stage").assertIsDisplayed()
@@ -210,6 +216,10 @@ class NavigationDeviceTest {
         compose.onNodeWithTag("chat.draft").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithTag("nav.voice").fetchSemanticsNodes().isEmpty() }
         screenshot(i, "repair-chat-keyboard.png")
+        compose.onNodeWithTag("chat.controls").performClick()
+        compose.waitUntil(5_000) { runCatching {
+            compose.onNodeWithTag("chat.model.settings").assertIsDisplayed(); true
+        }.getOrDefault(false) }
         compose.onNodeWithTag("chat.model.settings").performClick()
         compose.waitUntil(5_000) { runCatching { compose.onAllNodesWithTag("composer.models").fetchSemanticsNodes().isNotEmpty() }.getOrDefault(false) }
         screenshot(i, "repair-model-picker.png")
@@ -244,6 +254,61 @@ class NavigationDeviceTest {
         deviceLabel = "Samsung Galaxy S22", deviceLane = true, a11yBound = true, notifyGranted = true, overlayGranted = true,
         nlsBound = true, protectedCustom = listOf("com.example.bank"), keepA11yAvailable = true,
     )
+    @Test fun transcriptNamesAndCompactBlocksAcrossChats() = runBlocking {
+        val i = InstrumentationRegistry.getInstrumentation()
+        i.runOnMainSync {
+            compose.activity.setShowWhenLocked(false)
+            compose.activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        val keyguard = i.targetContext.getSystemService(KeyguardManager::class.java)
+        val deadline = System.nanoTime() + 30_000_000_000L
+        while (keyguard.isKeyguardLocked && System.nanoTime() < deadline) delay(100)
+        assertFalse("Unlock the device for transcript testing", keyguard.isKeyguardLocked)
+        i.runOnMainSync { (i.targetContext.applicationContext as CompanionApp).deviceNode.arm() }
+        delay(6_000)
+        val owner = app.hermes.companion.model.BotOwner("https://fixture.invalid", "research")
+        val bot = app.hermes.companion.model.NativeBot(owner, "Research specialist")
+        val session = SessionRef("transcript-fixture", "research", "Bot Chat", 0)
+        val answer = app.hermes.companion.model.ChatMessage("answer", app.hermes.companion.model.MessageRole.ASSISTANT,
+            "## Plan\nFirst paragraph.\n\nSecond paragraph.\n\n- First detail\n- Second detail\n1. First step\n2. Second step\n> First quoted line\n> Second quoted line")
+        var screen by mutableStateOf(CompanionState(origin = owner.origin, hostName = "Design verification", activeProfileId = owner.profile,
+            tab = MainTab.THREADS, openSessionId = session.id, openSessionRef = session,
+            profiles = listOf(app.hermes.companion.model.ProfileRef("research", "Hermes", "RES")),
+            botMode = BotModeState(owner = owner, bots = listOf(bot)),
+            messages = listOf(app.hermes.companion.model.ChatMessage("user", app.hermes.companion.model.MessageRole.USER, "Check the plan."),
+                app.hermes.companion.model.ChatMessage("tool", app.hermes.companion.model.MessageRole.TOOL, "Ready", toolName = "terminal", toolDetail = "Checked the source"), answer)))
+        val read = mutableListOf<String>()
+        i.runOnMainSync { compose.activity.setContent { CompanionTheme {
+            CompanionShell(screen, onOriginChange = {}, onConnect = {}, onSelectProfile = {}, onTab = {}, onOpenSession = {}, onNewThread = {},
+                onCloseChat = {}, onDraftChange = {}, onSend = {}, onInterrupt = {}, onApproval = {}, onReadAloud = { read += it.id })
+        } } }
+        compose.onNodeWithTag("chat.speaker.answer", useUnmergedTree = true).assertTextEquals(bot.title)
+        compose.onNodeWithTag("chat.copy.answer").assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
+        compose.onNodeWithTag("chat.read.answer").performClick()
+        assertEquals(listOf("answer"), read)
+        val first = compose.onNodeWithText("First detail", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val second = compose.onNodeWithText("Second detail", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val paragraph = compose.onNodeWithText("First paragraph.", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val next = compose.onNodeWithText("Second paragraph.", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue("List items need a tighter gap than paragraphs", second.top - first.bottom < next.top - paragraph.bottom)
+        compose.onNodeWithTag("navigation.bar").assertDoesNotExist()
+        screenshot(i, "transcript-bot.png")
+        compose.runOnIdle { screen = screen.copy(botMode = BotModeState(),
+            profiles = listOf(app.hermes.companion.model.ProfileRef("research", "Research agent", "RES")),
+            openSessionRef = session.copy(title = "Release plan")) }
+        compose.onNodeWithTag("chat.speaker.answer", useUnmergedTree = true).assertTextEquals("Research agent")
+        screenshot(i, "transcript-agent.png")
+        val group = app.hermes.companion.model.NativeGroup("g", "Launch team",
+            listOf(app.hermes.companion.model.NativeGroupMember("seat", "research", "research", "Hermes")), "host", 1)
+        compose.runOnIdle { screen = screen.copy(tab = MainTab.BOTS, openSessionId = null, openSessionRef = null,
+            botMode = BotModeState(owner = owner, bots = listOf(bot), selected = app.hermes.companion.model.NativeGroupSnapshot(group), groupVerified = true,
+                events = listOf(app.hermes.companion.model.NativeGroupEvent("e", 1, "message.member", "Hermes", answer.text, "thread", actorId = "seat")))) }
+        compose.onNodeWithTag("bots.event.speaker.1", useUnmergedTree = true).assertTextEquals(bot.title)
+        compose.onNodeWithContentDescription("Reply in thread").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        compose.onNodeWithTag("navigation.bar").assertDoesNotExist()
+        screenshot(i, "transcript-group.png")
+    }
+
     @After fun disarmAfterDeviceChecks() {
         val i=InstrumentationRegistry.getInstrumentation()
         i.runOnMainSync { (i.targetContext.applicationContext as CompanionApp).deviceNode.disarm() }
@@ -258,7 +323,16 @@ class NavigationDeviceTest {
         android.os.SystemClock.sleep(600)
         val packageDeadline = System.nanoTime() + 5_000_000_000L
         while (i.uiAutomation.rootInActiveWindow?.packageName?.toString() != i.targetContext.packageName && System.nanoTime() < packageDeadline) android.os.SystemClock.sleep(100)
-        assertEquals("Capture requires the Companion window", i.targetContext.packageName, i.uiAutomation.rootInActiveWindow?.packageName?.toString())
+        val rootPackage = i.uiAutomation.rootInActiveWindow?.packageName?.toString()
+        var focusedIme = false
+        i.runOnMainSync {
+            focusedIme = compose.activity.window.decorView.hasWindowFocus() &&
+                androidx.core.view.ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                    ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == true &&
+                !i.targetContext.getSystemService(KeyguardManager::class.java).isKeyguardLocked
+        }
+        assertTrue("Capture requires the Companion window or its focused keyboard: root=$rootPackage, focusedIme=$focusedIme",
+            rootPackage == i.targetContext.packageName || focusedIme)
         val bitmap = requireNotNull(i.uiAutomation.takeScreenshot())
         File(i.targetContext.cacheDir, "open-canvas-$name").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         bitmap.recycle()

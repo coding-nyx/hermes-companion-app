@@ -9,13 +9,18 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [SessionEntity::class, MessageEntity::class, OutboxEntity::class],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class CompanionDatabase : RoomDatabase() {
     abstract fun transcript(): CompanionDao
 
     companion object {
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE outbox ADD COLUMN voiceJson TEXT NOT NULL DEFAULT 'null'")
+            }
+        }
         val MIGRATION_6_7 = object : Migration(6, 7) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
@@ -27,7 +32,7 @@ abstract class CompanionDatabase : RoomDatabase() {
                 context.applicationContext,
                 CompanionDatabase::class.java,
                 "companion-cache.db",
-            ).addMigrations(MIGRATION_6_7).fallbackToDestructiveMigration().build()
+            ).addMigrations(MIGRATION_6_7, MIGRATION_7_8).fallbackToDestructiveMigration().build()
 
         fun inMemory(context: Context): CompanionDatabase =
             Room.inMemoryDatabaseBuilder(context, CompanionDatabase::class.java)

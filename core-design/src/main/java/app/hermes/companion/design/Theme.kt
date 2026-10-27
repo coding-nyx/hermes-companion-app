@@ -3,7 +3,6 @@ package app.hermes.companion.design
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.Shapes
-import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -47,8 +46,8 @@ fun CompanionTheme(content: @Composable () -> Unit) {
         androidx.compose.material3.LocalContentColor provides CompanionColor.Text,
     ) {
         MaterialTheme(colorScheme = companionScheme(), typography = companionTypography(),
-            shapes = Shapes(extraSmall = CutCornerShape(4.dp), small = CutCornerShape(6.dp),
-                medium = CutCornerShape(10.dp), large = CutCornerShape(14.dp), extraLarge = CutCornerShape(18.dp)),
+            shapes = Shapes(extraSmall = androidx.compose.foundation.shape.CutCornerShape(4.dp), small = androidx.compose.foundation.shape.CutCornerShape(6.dp),
+                medium = androidx.compose.foundation.shape.CutCornerShape(10.dp), large = androidx.compose.foundation.shape.CutCornerShape(14.dp), extraLarge = androidx.compose.foundation.shape.CutCornerShape(18.dp)),
             content = content)
     }
 }

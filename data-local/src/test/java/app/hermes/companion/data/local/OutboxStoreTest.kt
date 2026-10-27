@@ -31,14 +31,17 @@ class OutboxStoreTest {
 
     @Test
     fun submissionBaselineSurvivesStorageAndRetry() = runBlocking {
-        val input = item("a", MOCK, "coder", 1)
+        val metadata = app.hermes.companion.model.VoiceTurnMetadata("call", "delegation", context = "user: previous words", steering = true)
+        val input = item("a", MOCK, "coder", 1).copy(voice = metadata)
         outbox.enqueue(input)
         outbox.beginSubmission(input, listOf("row-1", "row-2"))
         val stored = outbox.pending(MOCK, "coder").single()
         assertEquals(listOf("row-1", "row-2"), stored.baselineUserIds)
         assertEquals("awaiting_ack", stored.lastError)
+        assertEquals(metadata, stored.voice)
         outbox.retry(stored.copy(attempts = 5))
         assertEquals(0, outbox.pending(MOCK, "coder").single().attempts)
+        assertEquals(metadata, outbox.pending(MOCK, "coder").single().voice)
     }
 
     @Test

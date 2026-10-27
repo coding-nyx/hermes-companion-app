@@ -102,11 +102,10 @@ class MainActivity : FragmentActivity() {
                         if (event == Lifecycle.Event.ON_STOP) {
                             vm.setFleetHealthForeground(false)
                             vm.cancelDictation()
-                            vm.stopVoiceStream(clearError = false)
                             if (!pickerOutstanding) vm.lockIfEnabled()
                         }
                         if (event == Lifecycle.Event.ON_RESUME) {
-                            if (app.sticky.keepA11yOn) CompanionAccessibilityService.ensureEnabled(this@MainActivity)
+                            app.deviceNode.recoverAccessibility()
                             vm.refreshKeepA11yAvailable()
                             val enabled = Settings.Secure.getString(
                                 contentResolver,
@@ -262,6 +261,7 @@ class MainActivity : FragmentActivity() {
                     onSelectConnectGateway = vm::selectConnectChoice,
                     onForgetConnectGateway = vm::forgetConnectChoice,
                     onSelectProfile = vm::selectProfile,
+                    botActions = vm.botActions,
                     onTab = vm::selectTab,
                     onOpenSession = vm::openSession,
                     onNewThread = vm::newThread,
@@ -345,7 +345,10 @@ class MainActivity : FragmentActivity() {
                     onArm = vm::arm,
                     onDisarm = vm::disarm,
                     onEnableA11y = {
-                        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        if (!vm.turnAccessibilityOn()) startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    },
+                    onDisableA11y = {
+                        if (!vm.turnAccessibilityOff()) startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                     },
                     onEnableOverlay = {
                         startActivity(
@@ -417,10 +420,13 @@ class MainActivity : FragmentActivity() {
                     onRefreshModels = vm::loadModelCatalog,
                     onSelectGateway = vm::selectGateway,
                     onAddGateway = vm::addSavedGateway,
+                    onConnectionMode = vm::setConnectionMode,
                     onCheckUpdate = vm::checkUpdates,
                     onApplyUpdate = vm::applyUpdate,
                     onReadAloud = vm::readMessageAloud,
                     onSpeechBackend = vm::setSpeechBackend,
+                    onRefreshVoiceSettings = vm::loadVoiceSettings, onSaveVoiceSettings = vm::saveVoiceSettings,
+                    onVoicePacing = vm::setVoicePacing, onStopVoicePlayback = vm::stopVoicePlayback, onLoadVoiceOptions = vm::loadVoiceOptions,
                     onVoiceClick = {
                         val action = {
                             vm.beginDictation()

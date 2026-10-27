@@ -14,6 +14,29 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31])
 class HostScopedStoresTest {
+    @Test fun proxyPathsKeepIndependentCredentialsProfilesAndGatewayNames() {
+        val first = "https://host.example/one"; val second = "https://host.example/two"
+        val operators = OperatorCredStore(prefs("op.paths"))
+        operators.save(OperatorCred(first, sessionToken = "one")); operators.save(OperatorCred(second, sessionToken = "two"))
+        assertEquals("one", operators.load(first)!!.sessionToken); assertEquals("two", operators.load(second)!!.sessionToken)
+        assertNull(operators.load("https://host.example"))
+        val devices = DeviceCredStore(prefs("device.paths"))
+        devices.save(DeviceCred("d-one", "ash", "c-one", first)); devices.save(DeviceCred("d-two", "research", "c-two", second))
+        assertEquals("c-one", devices.load(first)!!.credential); assertEquals("c-two", devices.load(second)!!.credential)
+        assertNull(devices.load("https://host.example"))
+        prefs("companion.sticky")
+        val sticky = StickyStore(RuntimeEnvironment.getApplication())
+        sticky.setProfile(first, "ash"); sticky.setProfile(second, "research")
+        assertEquals("ash", sticky.profileFor(first)); assertEquals("research", sticky.profileFor(second))
+    }
+
+    @Test fun legacyAuthorityCredentialsCannotBeAdoptedByAProxyPath() {
+        val operators = OperatorCredStore(prefs("op.legacy.paths"))
+        operators.save(OperatorCred("https://host.example", sessionToken = "legacy-root"))
+        assertNull(operators.load("https://host.example/one"))
+        assertEquals("legacy-root", operators.load("https://host.example")!!.sessionToken)
+    }
+
     private fun prefs(name: String) = RuntimeEnvironment.getApplication()
         .getSharedPreferences(name, Context.MODE_PRIVATE).also { it.edit().clear().commit() }
 

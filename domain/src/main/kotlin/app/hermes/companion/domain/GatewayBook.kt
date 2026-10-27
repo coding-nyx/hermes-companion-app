@@ -6,17 +6,15 @@ import app.hermes.companion.model.SavedGateway
 /** Deduped Connect-screen rail: saved book + paired origins + last successful origin. */
 object GatewayBook {
     fun key(origin: String): String {
-        val trimmed = origin.trim()
-        if (trimmed.isBlank()) return ""
-        val withScheme = if ("://" in trimmed) trimmed else "http://$trimmed"
-        val scheme = withScheme.substringBefore("://").lowercase()
-        val rest = withScheme.substringAfter("://").substringBefore('/').substringAfterLast('@')
-        return "$scheme://${rest.lowercase()}"
+        return WakePolicy.topicOwnerKey(origin).orEmpty()
     }
 
-    fun chipId(origin: String): String =
-        origin.substringAfter("://", origin).substringBefore('/').replace(':', '-').lowercase()
-            .ifBlank { "gw" }
+    fun chipId(origin: String): String {
+        val base = origin.substringAfter("://", origin).substringBefore('/').replace(':', '-').lowercase().ifBlank { "gw" }
+        val key = key(origin)
+        val path = key.substringAfter("://", "").substringAfter('/', "")
+        return if (path.isEmpty()) base else "$base-${key.hashCode().toUInt().toString(16)}"
+    }
 
     fun merge(
         saved: List<SavedGateway>,

@@ -44,6 +44,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -63,9 +64,12 @@ data class DeviceNodeState(
     val deviceProfileId: String? = null,
     val laneOpen: Boolean = false,
     val a11yBound: Boolean = false,
+    val a11yListed: Boolean? = null,
+    val a11yOffRequested: Boolean = false,
     val foregroundApp: String = "",
     val lastAudit: String = "",
     val arm: DeviceArm = DeviceArm.DISARMED,
+    val armPending: Boolean = false,
     val protectedCustom: List<String> = emptyList(),
     val protectedError: String? = null,
     /** Hosts this phone is paired with (normalised origins) and the lanes currently open (A8.5). */
@@ -132,6 +136,8 @@ class DeviceNodeCoordinator(
     init {
         // Volume chord, notification tap (DisarmReceiver) and HandsService teardown all land here.
         HandsBridge.onDisarm = { disarm() }
+        CompanionAccessibilityService.onConnectionChanged = { refreshAccessibilityState() }
+        refreshAccessibilityState()
         syncNotifBusConfig()
         StopStreamReceiver.onStopStream = { setNotifStreamEnabled(false) }
         // Open lanes at process start, not on UI bind.
@@ -156,6 +162,7 @@ class DeviceNodeCoordinator(
         scope.launch {
             while (isActive) {
                 delay(2_000)
+                refreshAccessibilityState()
                 val bound = NotifStreamBus.listenerBound
                 if (bound != _state.value.nlsBound) {
                     _state.update { it.copy(nlsBound = bound) }
@@ -206,34 +213,108 @@ class DeviceNodeCoordinator(
 
     // ---- arming -----------------------------------------------------------------------------
 
-    fun arm() {
-        val next = DeviceArming.arm(_state.value.arm)
-        _state.update { it.copy(arm = next) }
-        if (next != DeviceArm.DISARMED) {
-            bumpIdle()
-            syncHands(armed = true)
+    private val armLock = Any()
+    private var armJob: Job? = null
+
+    fun arm() = synchronized(armLock) {
+        if (CompanionAccessibilityService.explicitlyOff(app)) {
+            _errors.tryEmit("Hermes accessibility is switched off. Use TURN ON in Device before ARM.")
+            return@synchronized
+        }
+        if (_state.value.arm != DeviceArm.DISARMED || armJob?.isActive == true) return@synchronized
+        _state.update { it.copy(armPending = true) }
+        armJob = scope.launch {
+            val automatic = CompanionAccessibilityService.canWriteSecureSettings(app)
+            if (automatic) {
+                val enabled = synchronized(armLock) { isActive && CompanionAccessibilityService.ensureEnabled(app) }
+                val connected = enabled && withTimeoutOrNull(5_000) {
+                    while (!CompanionAccessibilityService.bound) delay(50)
+                    true
+                } == true
+                if (!connected) {
+                    synchronized(armLock) {
+                        if (isActive) {
+                            disarm()
+                            _errors.tryEmit("Accessibility did not connect. Enable Hermes in Android Accessibility settings, then retry ARM.")
+                        }
+                    }
+                    return@launch
+                }
+            } else if (!CompanionAccessibilityService.bound) {
+                _errors.tryEmit("Armed with direct tools only. Enable Hermes in Android Accessibility settings for screen control.")
+            }
+            synchronized(armLock) {
+                if (!isActive) return@synchronized
+                _state.update { it.copy(arm = DeviceArming.arm(it.arm), armPending = false, a11yBound = CompanionAccessibilityService.bound) }
+                bumpIdle()
+                syncHands(armed = true)
+            }
         }
     }
 
-    fun disarm() {
+    internal suspend fun awaitArm() { armJob?.join() }
+
+    private fun revokeArm() {
+        armJob?.cancel()
+        armJob = null
         idleJob?.cancel()
         idleJob = null
-        _state.update { it.copy(arm = DeviceArming.disarm()) }
+        _state.update { it.copy(arm = DeviceArming.disarm(), armPending = false) }
         syncHands(armed = false)
     }
 
-    fun setA11yBound(bound: Boolean) {
-        if (!bound && !CompanionAccessibilityService.bound && sticky.keepA11yOn) {
+    /** Explicit local OFF is durable and cannot be undone by remote ARM or keep-on. */
+    fun turnAccessibilityOff(): Boolean = synchronized(armLock) {
+        CompanionAccessibilityService.setExplicitlyOff(app, true)
+        revokeArm()
+        val requested = CompanionAccessibilityService.requestOff(app)
+        refreshAccessibilityState()
+        if (!requested) _errors.tryEmit("Hermes is disarmed. Disable Hermes in Android Accessibility settings to switch the service off.")
+        requested
+    }
+
+    /** ON enables the service only, never command consent. false means open Android Settings. */
+    fun turnAccessibilityOn(): Boolean = synchronized(armLock) {
+        CompanionAccessibilityService.setExplicitlyOff(app, false)
+        val requested = CompanionAccessibilityService.ensureEnabled(app) || CompanionAccessibilityService.bound
+        refreshAccessibilityState()
+        requested
+    }
+
+    fun refreshAccessibilityState() {
+        _state.update { it.copy(
+            a11yBound = CompanionAccessibilityService.bound,
+            a11yListed = CompanionAccessibilityService.listed(app),
+            a11yOffRequested = CompanionAccessibilityService.explicitlyOff(app),
+        ) }
+    }
+
+    fun disarm() = synchronized(armLock) {
+        // Revoke command consent before touching settings, even when permission was revoked.
+        revokeArm()
+        if (CompanionAccessibilityService.canWriteSecureSettings(app)) {
+            if (!CompanionAccessibilityService.disable(app)) {
+                runCatching { CompanionAccessibilityService.instance?.disableSelf() }
+                _errors.tryEmit("Disarmed. Could not update accessibility settings; switch Hermes off in Android Accessibility settings.")
+            }
+        } else if (CompanionAccessibilityService.bound) {
+            _errors.tryEmit("Disarmed. To switch off the service, disable Hermes in Android Accessibility settings.")
+        }
+    }
+
+    /** Recovery must never undo DISARM, including background keep-alive and Activity resume. */
+    fun recoverAccessibility() = synchronized(armLock) {
+        if (!CompanionAccessibilityService.explicitlyOff(app) && _state.value.arm != DeviceArm.DISARMED && sticky.keepA11yOn && !CompanionAccessibilityService.bound) {
             CompanionAccessibilityService.ensureEnabled(app)
         }
-        val on = bound || CompanionAccessibilityService.bound
-        // Losing accessibility downgrades the session to the L0 lane; it does not end it.
-        // Disarming here would take the direct-API tools down with the a11y tree, which is
-        // the coupling the L0 lane exists to remove. The kill switch and the idle
-        // auto-disarm timer stay exactly as they were.
+    }
+
+    fun setA11yBound(bound: Boolean) {
+        recoverAccessibility()
+        refreshAccessibilityState()
         _state.update { st ->
             st.copy(
-                a11yBound = on,
+                a11yBound = CompanionAccessibilityService.bound,
                 foregroundApp = CompanionAccessibilityService.foregroundApp,
             )
         }
@@ -651,7 +732,7 @@ class DeviceNodeCoordinator(
                     arm = if (stillPaired) it.arm else DeviceArm.DISARMED,
                 )
             }
-            if (!stillPaired) syncHands(armed = false) else if (_state.value.arm != DeviceArm.DISARMED) syncHands(true)
+            if (!stillPaired) disarm() else if (_state.value.arm != DeviceArm.DISARMED) syncHands(true)
         }
     }
 
@@ -714,7 +795,11 @@ class DeviceNodeCoordinator(
                     }
                     markLane(key, open = true)
                     backoff = 1_000L
-                    client(laneOrigin).deviceCommands().collect { handleCommand(laneOrigin, it) }
+                    dispatchArmCommands(
+                        client(laneOrigin).deviceCommands(),
+                        armBusy = { command -> client(laneOrigin).replyDevice(DeviceLanePolicy.fail(command.commandId, "arm_pending")) },
+                        handle = { handleCommand(laneOrigin, it) },
+                    )
                 } catch (c: CancellationException) {
                     throw c
                 } catch (d: DashboardException) {
@@ -803,7 +888,10 @@ class DeviceNodeCoordinator(
         bumpIdle()
         val exec = DeviceArming.beginExec(st.arm)
         if (exec != st.arm) _state.update { it.copy(arm = exec, foregroundApp = fg) }
-        val result = withContext(Dispatchers.Default) {
+        val result = if (command.action == "device.arm" || command.action == "device.disarm") {
+            // Start/cancel on the lane's Main context before yielding to another command.
+            execute(command)
+        } else withContext(Dispatchers.Default) {
             runCatching { execute(command) }.getOrElse { t ->
                 DeviceLanePolicy.fail(command.commandId, "timeout", t.message ?: "command failed")
             }
@@ -951,7 +1039,10 @@ class DeviceNodeCoordinator(
                 DeviceLanePolicy.ok(command.commandId, """{"ms":$ms}""")
             }
             "device.arm" -> {
-                arm()
+                withContext(Dispatchers.Main.immediate) {
+                    arm()
+                    awaitArm()
+                }
                 val armedState = _state.value
                 if (armedState.arm == DeviceArm.DISARMED) {
                     DeviceLanePolicy.fail(command.commandId, "arm_failed", "the phone refused to arm")

@@ -15,6 +15,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /** A titled group is the boundary between settings, never a card around a transcript. */
 @Composable
@@ -25,7 +26,7 @@ fun GroupedSection(
     trailing: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionHeader(title, trailing = trailing)
         GroupSurface(padded = padded, content = content)
     }
@@ -36,7 +37,7 @@ fun GroupSurface(modifier: Modifier = Modifier, padded: Boolean = false, content
     val shape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 12.dp, bottomStart = 12.dp)
     Column(modifier.fillMaxWidth().clip(shape).background(CompanionColor.VoidElevated)
         .border(1.dp, CompanionColor.CardBorder, shape)
-        .then(if (padded) Modifier.padding(16.dp) else Modifier),
+        .then(if (padded) Modifier.padding(12.dp) else Modifier),
         verticalArrangement = if (padded) Arrangement.spacedBy(12.dp) else Arrangement.Top,
         content = content)
 }
@@ -55,11 +56,11 @@ fun PreferenceRow(
 ) {
     val large = LocalDensity.current.fontScale >= 1.5f
     Column(Modifier.fillMaxWidth()) {
-        Row(modifier.fillMaxWidth().heightIn(min = 72.dp)
+        Row(modifier.fillMaxWidth().heightIn(min = 64.dp)
             .then(if (onClick != null) Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick) else Modifier)
-            .padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            .padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             leading?.invoke()
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(title, style = CompanionType.RowTitle, color = if (enabled) CompanionColor.Text else CompanionColor.TextMute)
                 if (!summary.isNullOrBlank()) Text(summary, style = CompanionType.Caption)
                 if (large && !value.isNullOrBlank()) Text(value, style = CompanionType.Caption, color = if (selected) CompanionColor.Signal else CompanionColor.TextDim)

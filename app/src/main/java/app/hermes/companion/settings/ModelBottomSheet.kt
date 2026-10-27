@@ -3,7 +3,6 @@ package app.hermes.companion.settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -57,7 +56,7 @@ fun ModelBottomSheet(
                     tone = if (requestedModel || current.isBlank()) CompanionColor.TextDim else CompanionColor.Signal)
                 if (requestedModel) Text("The host catalog has not confirmed this selection.", style = CompanionType.Caption)
             }
-            HairlineField(query, { query = it }, placeholder = "Search models or providers", modifier = Modifier.testTag("model.sheet.search"))
+            app.hermes.companion.design.SearchField(query, { query = it }, placeholder = "Search models or providers", modifier = Modifier.testTag("model.sheet.search"))
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
                 if (models.isEmpty()) item {
                     if (loading) FetchRow("Loading models…", padded = false, modifier = Modifier.testTag("model.sheet.loading"))
@@ -89,7 +88,7 @@ fun ModelBottomSheet(
 @Composable
 internal fun ModelChoiceRow(model: ModelOption, selected: Boolean, enabled: Boolean,
     modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val shape = CutCornerShape(topEnd = 8.dp, bottomStart = 8.dp)
+    val shape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 8.dp, bottomStart = 8.dp)
     Row(modifier.fillMaxWidth().padding(vertical = 4.dp).clip(shape)
         .background(if (selected) CompanionColor.SignalSubtle else CompanionColor.VoidElevated)
         .border(1.dp, if (selected) CompanionColor.Signal else CompanionColor.CardBorder, shape)

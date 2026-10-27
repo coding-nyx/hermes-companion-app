@@ -116,11 +116,11 @@ class OpenCanvasScreensRenderTest {
             rule.mainClock.advanceTimeBy(500)
             capture("populated-${tab.name.lowercase()}-${font}x$suffix")
         }
-        rule.runOnIdle { screen = populated().copy(openSessionId = "design", draft = "Keep **formatting** visible", messages = listOf(
+        rule.runOnIdle { screen = populated().copy(tab = MainTab.THREADS, openSessionId = "design", draft = "Keep **formatting** visible", messages = listOf(
             ChatMessage("u", MessageRole.USER, "Can you summarize the release checks?", delivery = MessageDelivery.SENT),
             ChatMessage("a", MessageRole.ASSISTANT, "The Android build is ready.\n\n- Conversation controls are tested\n- Model changes are scoped to this chat\n- Spoken validation is still pending\n\nReview `ChatScreen.kt` before the next build."))) }
         rule.mainClock.advanceTimeBy(500)
-        rule.onNodeWithTag("chat.fmt.bold").assertIsDisplayed()
+        rule.onNodeWithTag("chat.tools").assertDoesNotExist()
         rule.onNodeWithTag("chat.send").assertIsDisplayed()
         capture("populated-chat-${font}x$suffix")
     }

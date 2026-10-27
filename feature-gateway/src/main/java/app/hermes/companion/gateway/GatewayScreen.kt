@@ -62,6 +62,11 @@ fun GatewayScreen(
     phoneStreamEnabled: Boolean = false,
     onOpenChats: () -> Unit = {},
     onOpenDevice: () -> Unit = {},
+    relayHealth: CompanionHealth? = null,
+    paired: Boolean = false,
+    connectionModeBusy: Boolean = false,
+    connectionModeError: String? = null,
+    onConnectionMode: (String) -> Unit = {},
 ) {
     var detail by rememberSaveable { mutableStateOf<String?>(null) }
     var name by rememberSaveable { mutableStateOf("") }
@@ -81,19 +86,21 @@ fun GatewayScreen(
         onAddGateway(name.trim().ifBlank { uri!!.host }, address)
         name = ""; origin = ""; formError = null; detail = null; dismissKeyboard()
     }
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp).testTag("gateway.surface"),
-        verticalArrangement = Arrangement.spacedBy(32.dp)) {
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp).testTag("gateway.surface"),
+        verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        ConnectionModePreference(relayHealth?.mode.orEmpty(), relayHealth?.connectionSettings == true, paired,
+            connectionModeBusy, connectionModeError, onConnectionMode)
         GroupedSection("Connection lanes", padded = true) {
-            ProtocolStatus("Hermes chats", if (nativeChatConnected) "Connected to native dashboard" else "Native gateway not connected", tone = if (nativeChatConnected) CompanionColor.Signal else CompanionColor.Warn,
+            ProtocolStatus("Hermes chats", if (relayHealth?.mode == "standalone") "Standalone chat backend" else if (nativeChatConnected) "Connected to native dashboard" else "Native gateway not connected", tone = if (nativeChatConnected) CompanionColor.Signal else CompanionColor.Warn,
                 modifier = Modifier.testTag("gateway.native.status"))
-            Text("Threads, streaming and approvals use the Hermes dashboard. Phone pairing is not required for native chat.", style = CompanionType.Caption)
+            Text("Chat, streaming and approvals connect directly. Phone pairing is optional.", style = CompanionType.Caption)
             ProtocolStatus("Companion relay", when (companionAvailability) {
                 CompanionAvailability.AVAILABLE -> "Available · pairing enables phone tools"
                 CompanionAvailability.UNAVAILABLE -> "Unavailable on this connection"
                 else -> "Availability not confirmed"
             }, tone = if (companionAvailability == CompanionAvailability.AVAILABLE) CompanionColor.Accent else CompanionColor.TextDim,
                 modifier = Modifier.testTag("gateway.relay.status"))
-            Text("The optional relay adds rooms, Hands and phone-notification sharing. These capabilities are separate from chat.", style = CompanionType.Caption)
+            Text("The relay adds rooms, Hands and phone notification sharing.", style = CompanionType.Caption)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ActionButton("Open chats", onOpenChats, kind = ActionKind.PRIMARY, modifier = Modifier.testTag("gateway.open.chats"))
                 ActionButton("Permissions", onOpenDevice, modifier = Modifier.testTag("gateway.open.permissions"))
@@ -138,7 +145,7 @@ fun GatewayScreen(
         sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = CompanionColor.Void, contentColor = CompanionColor.Text) {
         Column(Modifier.fillMaxWidth().verticalScroll(remember(detail) { androidx.compose.foundation.ScrollState(0) })
-            .padding(horizontal = 24.dp).padding(bottom = 24.dp).testTag("gateway.details"), verticalArrangement = Arrangement.spacedBy(32.dp)) {
+            .padding(horizontal = 24.dp).padding(bottom = 24.dp).testTag("gateway.details"), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             SheetHeading(detail!!, { detail = null })
             when (detail) {
                 "Add host" -> GroupedSection("Connection", padded = true) {

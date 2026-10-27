@@ -65,7 +65,7 @@ class CompanionViewModel(
         ?: sticky.origin?.takeIf { it.isNotBlank() }
         ?: deviceCreds.load()?.origin?.takeIf { it.isNotBlank() }
         ?: operatorCreds.load()?.origin?.takeIf { it.isNotBlank() }
-    private val _state = MutableStateFlow(
+    private val _state = runtime.conversationState ?: MutableStateFlow(
         CompanionState(
             originInput = initialOrigin.orEmpty(),
             hostName = runtime.hostName(initialOrigin),
@@ -76,12 +76,14 @@ class CompanionViewModel(
             keepA11yAvailable = CompanionAccessibilityService.canWriteSecureSettings(runtime),
             threadSort = ThreadSort.parse(sticky.threadSort),
             showArchived = sticky.showArchived,
-            speechBackend = runCatching { SpeechBackend.valueOf(sticky.speechBackend.orEmpty()) }.getOrDefault(if (BuildConfig.HOST_SPEECH_ENABLED) SpeechBackend.HOST else SpeechBackend.SYSTEM),
+            speechBackend = runCatching { SpeechBackend.valueOf(sticky.speechBackend.orEmpty()) }.getOrDefault(SpeechBackend.HOST),
+            voicePacingMs = sticky.voicePacingMs,
             biometricLock = sticky.biometricLock,
             appLocked = sticky.biometricLock,
             loading = !initialOrigin.isNullOrBlank(),
         ).mirror(runtime.deviceNode.state.value),
     )
+    .also { runtime.conversationState = it }
     val state: StateFlow<CompanionState> = _state
     private val pendingWakeNavigation = PendingWakeNavigation()
     private var connectJob: Job? = null
@@ -90,7 +92,7 @@ class CompanionViewModel(
     private var sessionsJob: Job? = null
     private var dictationBase: String? = null
     private var dictationTarget: Triple<String?, String?, String?>? = null
-    private val chat = ChatSessionManager(clients, cache, outbox, _state, viewModelScope, runtime.drafts)
+    private val chat = runtime.conversationChat ?: ChatSessionManager(clients, cache, outbox, _state, runtime.appScope, runtime.drafts).also { runtime.conversationChat = it }
     private val attachmentStager = AttachmentStager(runtime, _state, viewModelScope, { chat.conversationEpoch })
     private val sessionContext = SessionContextController(_state, viewModelScope, { chat.conversationEpoch }) { origin, session ->
         client(origin).sessionContext(origin, session)
@@ -106,9 +108,8 @@ class CompanionViewModel(
     private val readAloud = MessageReadAloud(VoiceAudioSession(runtime),
         { id -> _state.update { it.copy(readAloudMessageId = id) } },
         { error -> noteError(error) }, { action -> runtime.mainExecutor.execute(action) })
-    private var voiceConversationEpoch = 0L
     private var readAloudConversationEpoch = 0L
-    private var voiceStream = createVoiceStream(_state.value.copy(speechBackend = SpeechBackend.SYSTEM))
+    private val voiceStream = runtime.voiceController ?: VoiceSessionController(runtime, _state, chat).also { runtime.voiceController = it }
 
     private fun transport(st: CompanionState): StreamingSpeechTransport {
         val origin = st.origin ?: error("Connect to use host speech")
@@ -118,47 +119,75 @@ class CompanionViewModel(
     private fun speechInput(st: CompanionState): SpeechInput = when (st.speechBackend) {
         SpeechBackend.SYSTEM -> VoiceInputManager(runtime)
         SpeechBackend.HOST -> {
-            check(BuildConfig.HOST_SPEECH_ENABLED) { "Host speech is awaiting device validation" }
             HostSpeechInput(viewModelScope, AndroidSpeechCapture(runtime), transport(st))
         }
     }
     private fun speechOutput(st: CompanionState, cb: SpeechCallbacks): SpeechOutput = when (st.speechBackend) {
         SpeechBackend.SYSTEM -> TextToSpeechEngine(runtime, cb.onStart, cb.onCompleted, cb.onError, VoiceAudioSession.attributes)
         SpeechBackend.HOST -> {
-            check(BuildConfig.HOST_SPEECH_ENABLED) { "Host speech is awaiting device validation" }
-            if (BuildConfig.HOST_SPEECH_STREAMING_ENABLED) {
+            if (_state.value.hostVoiceSettings?.streaming == true) {
                 StreamingHostSpeechOutput(viewModelScope, transport(st), AndroidPcmSpeechPlayer(viewModelScope), AndroidSpeechPlayer(), cb)
             } else HostSpeechOutput(viewModelScope, transport(st), AndroidSpeechPlayer(), cb)
         }
     }
-    private fun createVoiceStream(st: CompanionState): VoiceStreamEngine {
-        val epoch = chat.conversationEpoch
-        voiceConversationEpoch = epoch
-        return VoiceStreamEngine(
-            context = runtime, scope = viewModelScope,
-            voiceInput = speechInput(st), outputFactory = { cb -> BriefSpeechOutput(speechOutput(st, cb)) },
-            onSendPrompt = { prompt ->
-                if (epoch == chat.conversationEpoch && st.origin == _state.value.origin && st.activeProfileId == _state.value.activeProfileId) {
-                    chat.sendPrompt(prompt)
-                } else {
-                    stopVoiceStream(clearError = false)
-                    noteError("Voice conversation changed. Start voice again in the selected thread.")
-                }
-            }, onInterrupt = { if (epoch == chat.conversationEpoch) chat.interrupt() },
-            onStateChange = { next -> _state.update { it.copy(voiceStreamState = next) } },
-            onError = { error -> noteError(error) },
-            onMutedChange = { muted -> _state.update { it.copy(voiceMicrophoneMuted = muted, voicePauseReason = if(muted)it.voicePauseReason else "") } },
-            onReadinessChange = { ready -> _state.update { it.copy(voiceMicrophoneReady = ready) } },
-            onInputPaused = { reason -> _state.update { it.copy(voicePauseReason = reason) } }).also { it.useSpeaker(st.voiceSpeaker) }
-    }
-
     fun setSpeechBackend(backend: SpeechBackend) {
-        if (backend == SpeechBackend.HOST && !BuildConfig.HOST_SPEECH_ENABLED) {
-            noteError("Host speech is awaiting device validation"); return
-        }
-        cancelDictation(); voiceStream.stopStream(); readAloud.stop()
         sticky.speechBackend = backend.name
         _state.update { it.copy(speechBackend = backend) }
+    }
+    fun stopVoicePlayback() = voiceStream.stopPlayback()
+    fun setVoicePacing(ms: Int) {
+        sticky.voicePacingMs = ms
+        _state.update { it.copy(voicePacingMs = ms) }
+    }
+    fun loadVoiceSettings() {
+        val st = _state.value
+        val origin = st.origin ?: return
+        val profile = st.activeProfileId ?: return
+        if (st.voiceSettingsLoading) return
+        _state.update { it.copy(voiceSettingsLoading = true, voiceSettingsError = "") }
+        viewModelScope.launch {
+            try {
+                val settings = client(origin).audioSettings(origin, profile)
+                _state.update { if (it.origin != origin || it.activeProfileId != profile) it else it.copy(hostVoiceSettings = settings) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                _state.update { if (it.origin != origin || it.activeProfileId != profile) it else it.copy(hostVoiceSettings = null,
+                    voiceSettingsError = "Speech settings are unavailable on this host. Update its native audio API or use its configured speech defaults.") }
+            } finally { _state.update { if (it.origin != origin || it.activeProfileId != profile) it else it.copy(voiceSettingsLoading = false) } }
+        }
+    }
+    fun loadVoiceOptions(key: String) {
+        val st = _state.value; val origin = st.origin ?: return; val profile = st.activeProfileId ?: return
+        val parts = key.split('.')
+        if (parts.size != 3 || parts.first() != "tts" || parts.last() !in setOf("voice", "voice_id")) return
+        viewModelScope.launch {
+            try {
+                val voices = client(origin).audioVoiceCatalog(origin, profile, parts[1])
+                if (voices.isNotEmpty()) _state.update { current ->
+                    if (current.origin != origin || current.activeProfileId != profile) current else current.copy(
+                        hostVoiceSettings = current.hostVoiceSettings?.copy(fields = current.hostVoiceSettings.fields.map { if (it.key == key) it.copy(options = voices) else it }))
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { _state.update { if (it.origin != origin || it.activeProfileId != profile) it else it.copy(voiceSettingsError = "Voice list is unavailable; you can still enter a configured voice ID.") } }
+        }
+    }
+    fun saveVoiceSettings(changes: Map<String, String>) {
+        val st = _state.value
+        val origin = st.origin ?: return
+        val profile = st.activeProfileId ?: return
+        val settings = st.hostVoiceSettings ?: return
+        if (changes.isEmpty() || st.voiceSettingsLoading) return
+        _state.update { it.copy(voiceSettingsLoading = true, voiceSettingsError = "") }
+        viewModelScope.launch {
+            try {
+                val numeric = settings.fields.filter { it.numeric }.map { it.key }.toSet()
+                val confirmed = client(origin).saveAudioSettings(origin, profile, changes, numeric)
+                _state.update { if (it.origin != origin || it.activeProfileId != profile) it else it.copy(hostVoiceSettings = confirmed) }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                _state.update { if (it.origin != origin || it.activeProfileId != profile) it else it.copy(voiceSettingsError = "Could not confirm saved speech settings. Refresh before trying again.") }
+            } finally { _state.update { if (it.origin != origin || it.activeProfileId != profile) it else it.copy(voiceSettingsLoading = false) } }
+        }
     }
     fun readMessageAloud(message: ChatMessage) {
         if (_state.value.messages.none { it.id == message.id && it.text == message.text }) return
@@ -172,8 +201,26 @@ class CompanionViewModel(
 
     private val host = HostToolsController(clients, operatorCreds, _state, viewModelScope) { origin -> connect(origin) }
     private val sync = SyncManager(clients, cache, sticky, operatorCreds, runtime, chat, _state, viewModelScope)
+    private val bots = BotModeController(_state, viewModelScope,
+        app.hermes.companion.data.remote.DashboardNativeBotsApi(clients), runtime.nativeBotOperations, runtime.drafts)
+    val botActions = BotModeActions(
+        refresh = bots::refresh, openBot = { bot ->
+            bots.openBot(bot) { owner, session ->
+                if (_state.value.origin?.let(app.hermes.companion.domain.GatewayBook::key) == owner.origin) {
+                    if (_state.value.activeProfileId != owner.profile) selectProfile(owner.profile)
+                    openSession(session)
+                }
+            }
+        }, saveBot = bots::saveBot, createGroup = bots::createGroup, openGroup = bots::openGroup,
+        closeGroup = bots::closeGroup, draft = bots::draft, send = bots::send, reply = bots::reply,
+        mention = bots::mention, rename = bots::rename, stop = bots::stop, disband = bots::disband,
+        approve = bots::approve, retry = bots::retry, recover = bots::recover)
 
     init {
+        val appOwner = runtime
+        chat.onSessionDeleted = { origin, profile, session ->
+            kotlinx.coroutines.withContext(Dispatchers.IO) { appOwner.voiceJournal.remove(origin, profile, session) }
+        }
         viewModelScope.launch {
             state.collect { snapshot ->
                 refreshLocalDraftEntry(snapshot)
@@ -181,20 +228,10 @@ class CompanionViewModel(
                 sessionContext.observe(snapshot)
                 sessionControls.selectionChanged()
                 sessionControls.hydrate()
-                if (voiceStream.isActive && voiceConversationEpoch != chat.conversationEpoch) stopVoiceStream(clearError = false)
+                if (voiceStream.isActive && voiceStream.conversationEpoch != chat.conversationEpoch) stopVoiceStream(clearError = false)
                 if (snapshot.readAloudMessageId != null && readAloudConversationEpoch != chat.conversationEpoch) readAloud.stop()
             }
         }
-        chat.onAssistantDelta = { delta -> if (voiceConversationEpoch == chat.conversationEpoch) voiceStream.onAssistantDelta(delta) }
-        chat.onTurnCompleted = {
-            if (voiceConversationEpoch == chat.conversationEpoch) {
-                val finalText = _state.value.messages.lastOrNull { it.role == app.hermes.companion.model.MessageRole.ASSISTANT && !it.reasoning }?.text.orEmpty()
-                voiceStream.onAssistantFinal(finalText)
-                voiceStream.onAssistantTurnCompleted()
-            }
-        }
-        chat.onTurnInterrupted = { voiceStream.onAssistantTurnInterrupted() }
-        chat.onTurnFailed = { if (voiceConversationEpoch == chat.conversationEpoch) voiceStream.stopStream() }
         viewModelScope.launch {
             deviceNode.state.collect { node -> _state.update { it.mirror(node) } }
         }
@@ -204,10 +241,8 @@ class CompanionViewModel(
         refreshConnectChoices()
         host.loadSavedGateways()
         sync.startFleetHealth()
-        if (!initialOrigin.isNullOrBlank()) {
-            connect(initialOrigin)
-        } else {
-            probeConnectChoices()
+        if (!voiceStream.isActive) {
+            if (!initialOrigin.isNullOrBlank()) connect(initialOrigin) else probeConnectChoices()
         }
     }
 
@@ -253,7 +288,7 @@ class CompanionViewModel(
         val next = !_state.value.keepA11yOn
         sticky.keepA11yOn = next
         _state.update { it.copy(keepA11yOn = next) }
-        if (next) CompanionAccessibilityService.ensureEnabled(runtime)
+        if (next) deviceNode.recoverAccessibility()
     }
 
     fun toggleStayConnected() {
@@ -376,7 +411,7 @@ class CompanionViewModel(
         sticky.origin = null
         val origin = _state.value.origin
         sync.stopAll()
-        origin?.let { clients.existing(it)?.closeRpc() }
+        origin?.let { clients.existing(it)?.let { api -> api.closeRpc(); api.closeBotSockets() } }
         // Keep device lanes while ARMED so Hands survives an operator disconnect (A8.5).
         if (deviceNode.state.value.arm == DeviceArm.DISARMED) {
             deviceNode.unbind()
@@ -417,7 +452,7 @@ class CompanionViewModel(
                 terminalLogs = emptyList(),
                 pendingAttachments = emptyList(),
                 attachOpen = false,
-                tab = MainTab.THREADS,
+                tab = MainTab.BOTS,
             ).mirror(deviceNode.state.value)
         }
         StayConnectedService.refresh(runtime)
@@ -483,6 +518,8 @@ class CompanionViewModel(
             if (_state.value.agentTools.isEmpty()) agents.refreshTools()
         }
         when (tab) {
+            MainTab.DEVICE -> host.loadConnectionHealth()
+            MainTab.BOTS -> bots.refresh()
             // Pairing may have happened since the last fetch; the room list needs the credential.
             MainTab.THREADS -> {
                 rooms.refreshRooms()
@@ -491,6 +528,7 @@ class CompanionViewModel(
             MainTab.REVIEW -> host.loadGitStatus()
             MainTab.REMINDERS -> host.loadCronJobs()
             MainTab.GATEWAY -> {
+                host.loadConnectionHealth()
                 host.loadVoiceStatus()
                 host.refreshHostMetrics()
                 host.loadModelCatalog()
@@ -502,6 +540,7 @@ class CompanionViewModel(
     }
 
     fun toggleAwakeOnVoice() {
+        if (voiceStream.isActive) { noteError("End the voice conversation before enabling the wake-word microphone"); return }
         val next = !_state.value.awakeOnVoice
         _state.update { it.copy(awakeOnVoice = next) }
         val intent = android.content.Intent(runtime, WakeWordService::class.java)
@@ -655,6 +694,10 @@ class CompanionViewModel(
 
     fun disarm() = deviceNode.disarm()
 
+    fun turnAccessibilityOn(): Boolean = deviceNode.turnAccessibilityOn()
+
+    fun turnAccessibilityOff(): Boolean = deviceNode.turnAccessibilityOff()
+
     fun renameDeviceLabel(name: String) = deviceNode.renameDeviceLabel(name)
 
     fun addProtectedPackage(raw: String) = deviceNode.addProtectedPackage(raw)
@@ -676,27 +719,24 @@ class CompanionViewModel(
 
     // ---- voice stream: VoiceStreamEngine ----
     fun toggleVoiceStream() {
+        if (_state.value.tab == MainTab.BOTS && _state.value.botMode.selected != null) {
+            noteError("Open an individual Bot Chat to start a voice conversation.")
+            return
+        }
         val st = _state.value
         if (st.voiceStreamState == VoiceStreamState.IDLE && st.inRoom) {
             _state.update { it.copy(error = "Voice chat is available in individual threads") }
             return
         }
-        if (st.voiceStreamState == VoiceStreamState.IDLE && (st.origin == null || st.activeProfileId == null || st.streaming || st.submitting || st.creatingThread)) {
-            _state.update { it.copy(error = "Connect and wait for the current reply before starting voice") }
+        if (st.voiceStreamState == VoiceStreamState.IDLE && (st.origin == null || st.activeProfileId == null || st.creatingThread)) {
+            _state.update { it.copy(error = "Connect and select a conversation before starting voice") }
             return
         }
         _state.update { it.copy(error = null) }
-        if (_state.value.voiceStreamState == VoiceStreamState.IDLE) {
-            cancelDictation(); readAloud.stop(); voiceStream.shutdown()
-            if (_state.value.openSessionId == null && !_state.value.inRoom) {
-                chat.newThread()
-                _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = false) }
-            }
-            _state.update { it.copy(voiceSessionTitle = it.openSession?.title ?: "Voice conversation") }
-            try { voiceStream = createVoiceStream(_state.value) }
-            catch (e: Exception) { noteError(e.message ?: "Speech could not start"); return }
-        }
-        voiceStream.toggle()
+        if (voiceStream.isActive) { voiceStream.stopStream(); return }
+        cancelDictation(); readAloud.stop()
+        try { VoiceCallService.start(runtime) }
+        catch (e: Exception) { noteError(e.message ?: "Voice could not start") }
     }
 
     fun stopVoiceStream(clearError: Boolean = true) {
@@ -729,6 +769,7 @@ class CompanionViewModel(
     }
     fun closeChat() {
         pendingWakeNavigation.clear()
+        val returnToBots = _state.value.openSession?.title == "Bot Chat"
         if (voiceStream.isActive) {
             cancelDictation()
             _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = true) }
@@ -738,6 +779,7 @@ class CompanionViewModel(
         readAloud.stop()
         cancelDictation()
         if (_state.value.inRoom) rooms.closeRoom() else chat.closeChat()
+        if (returnToBots) selectTab(MainTab.BOTS)
     }
 
     // ---- Agent rooms (P21) ----
@@ -785,7 +827,10 @@ class CompanionViewModel(
     fun newThread() { pendingWakeNavigation.clear(); _state.update { it.copy(tab = MainTab.THREADS, chatMinimized = false) }; cancelDictation(); readAloud.stop(); voiceStream.stopStream(); if (_state.value.inRoom) rooms.closeRoom(); chat.createThread() }
     fun requestDelete(session: SessionRef) = chat.requestDelete(session)
     fun retryMessage(id: String) { if (_state.value.inRoom) rooms.retryMessage(id) else chat.retryMessage(id) }
-    fun renameSession(title: String) = chat.updateSession(title = title)
+    fun renameSession(title: String) {
+        if (_state.value.openSession?.title == "Bot Chat") noteError("Bot Chat keeps its canonical title. Edit the bot's name in Bots.")
+        else chat.updateSession(title = title)
+    }
     fun pinSession() = chat.updateSession(pinned = !(_state.value.openSession?.pinned ?: false))
     fun archiveSession() = chat.updateSession(archived = !(_state.value.openSession?.archived ?: false))
     fun branchSession() = chat.branchSession()
@@ -795,7 +840,11 @@ class CompanionViewModel(
     fun dismissSessionControls() = sessionControls.dismiss()
     fun setSessionSetting(key: String, value: String, confirmed: Boolean) = sessionControls.set(key, value, confirmed)
     fun redirectSession(text: String) = sessionControls.redirect(text)
-    fun dispatchNativeCommand(text: String) = sessionControls.dispatch(text)
+    fun dispatchNativeCommand(text: String) {
+        val command = app.hermes.companion.domain.BotChatPolicy.command(_state.value.openSession?.title, text)
+        if (command != text && _state.value.draft.trim() == text.trim()) onDraftChange(command)
+        sessionControls.dispatch(command)
+    }
     fun confirmDelete() = chat.confirmDelete()
     fun cancelDelete() = chat.cancelDelete()
     fun beginRewind(message: ChatMessage) = chat.beginRewind(message)
@@ -803,7 +852,7 @@ class CompanionViewModel(
     fun send() {
         if (attachmentStager.isPreparingCurrent()) { noteError("Wait for attachment preparation to finish."); return }
         if (_state.value.inRoom) rooms.post()
-        else if (_state.value.draft.trim().startsWith("/")) sessionControls.dispatch(_state.value.draft.trim())
+        else if (_state.value.draft.trim().startsWith("/")) dispatchNativeCommand(_state.value.draft.trim())
         else chat.send()
     }
     fun interrupt() = if (_state.value.inRoom) rooms.interrupt() else chat.interrupt()
@@ -833,6 +882,7 @@ class CompanionViewModel(
 
     // ---- host tools: HostToolsController ----
     fun refreshHostMetrics() = host.refreshHostMetrics()
+    fun setConnectionMode(mode: String) { chat.checkpointDraft(); host.setConnectionMode(mode) }
     fun loadCronJobs() = host.loadCronJobs()
     fun triggerCronJob(jobId: String) = host.triggerCronJob(jobId)
     fun toggleCronJob(jobId: String, currentEnabled: Boolean) = host.toggleCronJob(jobId, currentEnabled)
@@ -968,7 +1018,7 @@ class CompanionViewModel(
                             activeProfileId = active.id,
                             modelOverride = active.model,
                             sessions = SessionLists.normalize(cached),
-                            tab = MainTab.THREADS,
+                            tab = MainTab.BOTS,
                             gatewayHello = hello,
                             status = status,
                             hud = hud,
@@ -994,7 +1044,7 @@ class CompanionViewModel(
                         activeProfileId = active.id,
                         modelOverride = active.model,
                         sessions = sessions,
-                        tab = MainTab.THREADS,
+                        tab = MainTab.BOTS,
                         gatewayHello = hello,
                         status = status,
                         hud = hud,
@@ -1004,6 +1054,7 @@ class CompanionViewModel(
                 sync.startHud(origin)
                 sync.startWatch(origin, _state.value.activeProfileId ?: active.id)
                 deviceNode.bind(origin)
+                host.loadConnectionHealth()
                 rooms.refreshRooms()
                 rooms.refreshPeers()
                 sync.startWake()
@@ -1102,7 +1153,10 @@ class CompanionViewModel(
     }
 
     override fun onCleared() {
-        cancelDictation(); readAloud.stop(); voiceStream.shutdown()
+        clients.all().values.forEach { it.closeBotSockets() }
+        cancelDictation(); readAloud.stop()
+        if (voiceStream.isActive) { super.onCleared(); return }
+        voiceStream.shutdown()
         chat.cancelAll()
         if (sticky.stayConnected || deviceNode.state.value.arm != DeviceArm.DISARMED) {
             super.onCleared()

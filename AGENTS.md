@@ -1,5 +1,18 @@
 # Agent conventions — hermes-companion-app
 
+## UI design verification
+
+- Preserve the established cyberpunk design: neon cyan/violet accents, cut-corner chrome, angular panels, the signal signature and existing typography. Layout or density requests do not authorize replacing that visual style with rounded Material styling.
+- Use the existing Companion surfaces, colors, typography and controls for new screens and sheets.
+- Favor content density: conversation rosters use compact avatar rows with previews and whole-row opening. Avoid repeated headings, oversized toolbar/card padding, and separate open/edit button rows. Keep all touch targets at least 48 dp and allow large text to reflow.
+- Render and visually inspect affected full screens and open forms in dark and light themes before delivery. Include large-text checks; passing interaction tests alone is not a design review.
+- Check for unintended white/default Material surfaces, clipped controls and unreadable contrast, and fix them before presenting the result.
+- Use the shared SearchField for search, with symmetric outer margins and one internal padding owner. Do not reuse form fields for search.
+- In stacked forms, keep labels inside fields instead of repeating the label above an identical placeholder. Preserve a full 48 dp editable/accessibility target and allow large text to grow.
+- Main screens share PageToolbar; show connection context within it rather than adding a second header row. Bottom navigation items have equal height, aligned icon/label slots and equal visual emphasis; voice must not become an oversized central button.
+- Navigation is a compact horizontal floating bar, hidden inside every chat (ordinary chats, bots, native groups and Companion rooms). Chat surfaces retain Android's bottom safe area when the bar is hidden.
+- The inactive chat composer is one line with a 48 dp input target. Show editing tools only while the composer is active; grow with text and preserve the complete multiline draft when it collapses.
+
 ## hermes-companion skill ships with the plugin
 
 - Canonical skill path: `hermes-plugin/skills/hermes-companion/SKILL.md`

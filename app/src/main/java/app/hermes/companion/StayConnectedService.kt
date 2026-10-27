@@ -74,7 +74,7 @@ class StayConnectedService : Service() {
                     ?: app.sticky.lastGoodOrigin
                     ?: app.sticky.origin
                 if (!origin.isNullOrBlank()) runCatching { app.clients.forOrigin(origin).ping() }
-                if (app.sticky.keepA11yOn) CompanionAccessibilityService.ensureEnabled(applicationContext)
+                app.deviceNode.recoverAccessibility()
                 // Refresh subtitle (stream on/off · profile) periodically.
                 startForeground(ID, notice())
             }

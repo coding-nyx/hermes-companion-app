@@ -71,6 +71,8 @@ import app.hermes.companion.model.ModelCatalog
 import app.hermes.companion.model.ModelOption
 import app.hermes.companion.model.HermesUpdateStatus
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -145,6 +147,8 @@ class DashboardClient internal constructor(
     }
 
     private val rpcLock = Mutex()
+    private val botSocketLock = Mutex()
+    private val botSockets = ConcurrentHashMap<String, GatewaySocket>()
     private val deviceLock = Mutex()
     @Volatile private var rpc: GatewaySocket? = null
     @Volatile private var rpcKey: String? = null
@@ -156,6 +160,7 @@ class DashboardClient internal constructor(
     private val extensionLock = Mutex()
     private val extensionAvailability = ConcurrentHashMap<String, CompanionAvailability>()
     private val speechSupport = ConcurrentHashMap<Pair<String, String>, NativeSpeechSupport>()
+    private val audioApiBase = ConcurrentHashMap<String, String>()
     private val extensionHttp by lazy {
         this.http.newBuilder().connectTimeout(3, TimeUnit.SECONDS).readTimeout(3, TimeUnit.SECONDS)
             .callTimeout(4, TimeUnit.SECONDS).build()
@@ -228,12 +233,88 @@ class DashboardClient internal constructor(
                 hermesVersion = obj["hermes_version"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                 profilesDir = obj["profiles_dir"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                 drift = obj["drift"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                connectionSettings = obj["connection_settings"]?.jsonPrimitive?.booleanOrNull == true,
+                modeSource = obj["mode_source"]?.jsonPrimitive?.contentOrNull.orEmpty(),
             )
         }
 
+    suspend fun setConnectionMode(origin: String, mode: String, expectedMode: String) {
+        require(mode in setOf("proxy", "standalone") && expectedMode in setOf("proxy", "standalone"))
+        post(hostMachine(origin, "/companion/connection/mode"), buildJsonObject {
+            put("mode", mode); put("expected_mode", expectedMode)
+        }.toString()) { body ->
+            val result = DashboardJson.parseToJsonElement(body).jsonObject
+            if (result["ok"]?.jsonPrimitive?.booleanOrNull != true || result["mode"]?.jsonPrimitive?.contentOrNull != mode)
+                throw DashboardException("connection_mode", "The host did not confirm the new connection mode. Refresh and check before retrying.")
+        }
+    }
+
+    private fun audioPath(origin: String, path: String): String =
+        (audioApiBase[origin.trimEnd('/')] ?: "/api") + path.removePrefix("/api")
+
+    suspend fun audioSettings(origin: String, profileId: String): app.hermes.companion.model.HostVoiceSettings {
+        fun decode(body: String): app.hermes.companion.model.HostVoiceSettings {
+            val settings = parseAudioSettings(body)
+            val base = DashboardJson.parseToJsonElement(body).jsonObject.str("api_base")
+            // The host may only select its own known plugin namespace, never a URL.
+            if (base == "/api/plugins/hermes-companion") audioApiBase[origin.trimEnd('/')] = base
+            return settings
+        }
+        return try { get(hostRest(origin, audioPath(origin, "/api/audio/settings"), profileId), ::decode) }
+        catch (error: DashboardException) {
+            if (error.code !in setOf("http_404", "http_405")) throw error
+            get(hostRest(origin, "/api/plugins/hermes-companion/audio/settings", profileId), ::decode)
+        }
+    }
+
+    suspend fun audioVoiceCatalog(origin: String, profileId: String, provider: String): List<String> =
+        get(hostRest(origin, audioPath(origin, "/api/audio/settings/voices"), profileId, mapOf("provider" to provider))) { body ->
+            val obj = DashboardJson.parseToJsonElement(body).jsonObject
+            (obj["voices"] as? JsonArray).orEmpty().take(5000).map { it.jsonPrimitive.content }
+        }
+
+    suspend fun beginSpeechSnapshot(origin: String, profileId: String): String =
+        post(hostRest(origin, audioPath(origin, "/api/audio/settings/snapshot"), profileId), "{}") { body ->
+            val token = DashboardJson.parseToJsonElement(body).jsonObject.str("snapshot")
+            require(token.matches(Regex("[A-Za-z0-9_-]{32,128}"))) { "Invalid speech snapshot" }
+            token
+        }
+    suspend fun endSpeechSnapshot(origin: String, profileId: String, snapshot: String) {
+        require(snapshot.matches(Regex("[A-Za-z0-9_-]{32,128}")))
+        delete(hostRest(origin, audioPath(origin, "/api/audio/settings/snapshot/$snapshot"), profileId))
+    }
+    private fun speechSnapshotQuery(snapshot: String) = if (snapshot.isBlank()) emptyMap() else mapOf("voice_snapshot" to snapshot)
+
+    suspend fun saveAudioSettings(origin: String, profileId: String, changes: Map<String, String>, numeric: Set<String>): app.hermes.companion.model.HostVoiceSettings {
+        require(changes.isNotEmpty())
+        val values = JsonObject(changes.mapValues { (key, value) ->
+            if (key in numeric) JsonPrimitive(value.toDouble().also { require(it.isFinite()) }) else JsonPrimitive(value)
+        })
+        return patch(hostRest(origin, audioPath(origin, "/api/audio/settings"), profileId), JsonObject(mapOf("changes" to values)).toString(), ::parseAudioSettings)
+    }
+
+    private fun parseAudioSettings(body: String): app.hermes.companion.model.HostVoiceSettings {
+        if (body.trimStart().startsWith("<")) throw DashboardException("http_404", "Native audio settings are not supported on this host")
+        val obj = DashboardJson.parseToJsonElement(body).jsonObject
+        require(obj["ok"]?.jsonPrimitive?.booleanOrNull == true && obj["version"]?.jsonPrimitive?.intOrNull == 1) { "Unsupported host voice settings" }
+        val fields = (obj["fields"] as? JsonArray).orEmpty().map { value ->
+            val field = value.jsonObject
+            app.hermes.companion.model.VoiceSettingField(field.str("key"), field["value"]?.jsonPrimitive?.content.orEmpty(),
+                (field["options"] as? JsonArray).orEmpty().map { it.jsonPrimitive.content }, field.str("type") == "number")
+        }
+        val live = obj["live"] as? JsonObject ?: JsonObject(emptyMap())
+        val speech = obj["speech"] as? JsonObject ?: JsonObject(emptyMap())
+        return app.hermes.companion.model.HostVoiceSettings(fields,
+            NativeVoiceStatus(live.str("mode"), (live["available"] as? JsonPrimitive)?.booleanOrNull,
+                live.str("reason"), live.str("model"), live.str("voice")),
+            obj["streaming"]?.jsonPrimitive?.booleanOrNull == true, editable = true, snapshots = obj["snapshots"]?.jsonPrimitive?.booleanOrNull == true,
+            speechAvailable = speech["available"]?.jsonPrimitive?.booleanOrNull, speechReason = speech.str("reason"),
+            sttProvider = speech.str("stt_provider"), ttsProvider = speech.str("tts_provider"))
+    }
+
     /** Native audio APIs keep provider credentials on the host. Never query voice-config keys. */
     suspend fun voiceLiveStatus(origin: String, profileId: String): NativeVoiceStatus =
-        get(hostRest(origin, "/api/audio/voice-live/status", profileId)) { body ->
+        get(hostRest(origin, audioPath(origin, "/api/audio/voice-live/status"), profileId)) { body ->
             val obj = DashboardJson.parseToJsonElement(body).jsonObject
             NativeVoiceStatus(obj.str("mode"), (obj["available"] as? JsonPrimitive)?.booleanOrNull,
                 obj.str("reason"), obj.str("model"), obj.str("voice"))
@@ -241,14 +322,14 @@ class DashboardClient internal constructor(
 
     /** One SDP exchange; failures never replay creation or switch providers. */
     suspend fun createRealtimeSession(origin: String, profileId: String, sdp: String,
-        history: JsonArray = JsonArray(emptyList())): app.hermes.companion.model.NativeRealtimeAnswer {
+        history: JsonArray = JsonArray(emptyList()), snapshot: String = ""): app.hermes.companion.model.NativeRealtimeAnswer {
         require(profileId.isNotBlank())
         require(sdp.startsWith("v=0") && sdp.length <= 262_144 && sdp.contains("m=audio")) { "Valid audio SDP offer required" }
         require(history.size <= 200 && history.toString().length <= 1_000_000) { "Call history is too large" }
         val payload = kotlinx.serialization.json.buildJsonObject {
             put("sdp", JsonPrimitive(sdp)); put("history", history)
         }.toString()
-        return post(hostRest(origin, "/api/audio/voice-live/session", profileId), payload) { body ->
+        return post(hostRest(origin, audioPath(origin, "/api/audio/voice-live/session"), profileId, speechSnapshotQuery(snapshot)), payload) { body ->
             val obj = DashboardJson.parseToJsonElement(body).jsonObject
             val transport = obj["transport"] as? JsonObject
             val answer = (transport?.get("sdp") as? JsonPrimitive)?.contentOrNull.orEmpty()
@@ -260,7 +341,7 @@ class DashboardClient internal constructor(
         }
     }
 
-    suspend fun openSpeechStream(origin: String, profileId: String): NativeSpeechStream {
+    suspend fun openSpeechStream(origin: String, profileId: String, snapshot: String = ""): NativeSpeechStream {
         bindOrigin(origin)
         require(profileId.isNotBlank()) { "speech profile required" }
         // Match ensureRpc: gated hosts accept tickets; ungated loopback hosts accept their
@@ -270,7 +351,7 @@ class DashboardClient internal constructor(
                 ?: throw DashboardException("speech_stream_auth", "Authenticate the host before using speech")
             mapOf("token" to token)
         }
-        val url = hostRest(origin, "/api/audio/speak-stream", profileId, credential)
+        val url = hostRest(origin, audioPath(origin, "/api/audio/speak-stream"), profileId, credential + speechSnapshotQuery(snapshot))
         // A ticket and host credentials must never follow a proxy redirect to another origin.
         // A PCM reader may be backpressured longer than a ping interval. The speech coordinator
         // owns first-audio and post-finish idle deadlines, so this socket does not race them.
@@ -292,9 +373,9 @@ class DashboardClient internal constructor(
     fun speechStreamSupport(origin: String, profileId: String): NativeSpeechSupport =
         speechSupport[origin.trim().trimEnd('/') to profileId.trim()] ?: NativeSpeechSupport.UNKNOWN
 
-    suspend fun synthesizeSpeech(origin: String, profileId: String, text: String): SynthesizedSpeech {
+    suspend fun synthesizeSpeech(origin: String, profileId: String, text: String, snapshot: String = ""): SynthesizedSpeech {
         require(text.isNotBlank()) { "speech text required" }
-        return post(hostRest(origin, "/api/audio/speak", profileId), """{"text":${text.json()}}""") { body ->
+        return post(hostRest(origin, audioPath(origin, "/api/audio/speak"), profileId, speechSnapshotQuery(snapshot)), """{"text":${text.json()}}""") { body ->
             val obj = DashboardJson.parseToJsonElement(body).jsonObject
             val data = obj.str("data_url")
             val header = data.substringBefore(",")
@@ -310,11 +391,11 @@ class DashboardClient internal constructor(
         }
     }
 
-    suspend fun transcribeAudio(origin: String, profileId: String, bytes: ByteArray, mime: String): SpeechTranscript {
+    suspend fun transcribeAudio(origin: String, profileId: String, bytes: ByteArray, mime: String, snapshot: String = ""): SpeechTranscript {
         require(bytes.isNotEmpty() && bytes.size <= 25 * 1024 * 1024) { "recording must be between 1 byte and 25 MB" }
         require(mime.startsWith("audio/") && !mime.contains(';') && !mime.contains(',')) { "audio MIME type required" }
         val data = "data:$mime;base64," + java.util.Base64.getEncoder().encodeToString(bytes)
-        return post(hostRest(origin, "/api/audio/transcribe", profileId),
+        return post(hostRest(origin, audioPath(origin, "/api/audio/transcribe"), profileId, speechSnapshotQuery(snapshot)),
             """{"data_url":${data.json()},"mime_type":${mime.json()}}""") { body ->
             val obj = DashboardJson.parseToJsonElement(body).jsonObject
             if ((obj["ok"] as? JsonPrimitive)?.booleanOrNull != true) throw DashboardException("transcription_failed", obj.str("error").ifBlank { "Speech transcription failed" })
@@ -361,12 +442,14 @@ class DashboardClient internal constructor(
     }
 
     fun useLoopback() {
+        closeBotSockets()
         gated = false
         cookies.clear()
         speechSupport.clear()
     }
 
     fun useGated() {
+        closeBotSockets()
         gated = true
         sessionToken = null
         speechSupport.clear()
@@ -755,6 +838,25 @@ class DashboardClient internal constructor(
         runtimeSnapshots.clear()
     }
 
+    /** Bot/group operations never replace the operator chat's socket or its live-session map. */
+    internal suspend fun botRequest(origin: String, profile: String, method: String, params: JsonObject): JsonObject {
+        ProfileScope.requireProfileId(profile)
+        val socket = botSocketLock.withLock {
+            bindOrigin(origin)
+            botSockets[profile]?.takeIf { it.isOpen } ?: GatewaySocket(wsHttp).also { next ->
+                val ticket = if (gated) mintWsTicket(origin) else null
+                next.connect(hostWs(origin, profile, ticket, if (ticket == null) sessionToken else null))
+                botSockets.put(profile, next)?.close()
+            }
+        }
+        return socket.request(method, JsonObject(params + ("profile" to JsonPrimitive(profile))).toString())
+    }
+
+    fun closeBotSockets() {
+        botSockets.values.forEach { it.close() }
+        botSockets.clear()
+    }
+
     suspend fun createSession(
         origin: String,
         profileId: String,
@@ -960,6 +1062,9 @@ class DashboardClient internal constructor(
         socket.request("session.interrupt", """{"session_id":${live.json()},"profile":${profileId.json()}}""")
     }
 
+    private fun voiceFields(voice: app.hermes.companion.model.VoiceTurnMetadata?): String =
+        if (voice == null) "" else ",\"surface\":${voice.surface.json()},\"voice_context\":${voice.context.takeLast(6000).json()}"
+
     fun streamTurn(
         origin: String,
         sessionId: String,
@@ -973,6 +1078,7 @@ class DashboardClient internal constructor(
          * explicit acknowledgments and durable-row reconciliation rather than guessing support.
          */
         clientId: String = "",
+        voice: app.hermes.companion.model.VoiceTurnMetadata? = null,
     ): Flow<ChatEvent> {
         bindOrigin(origin)
         val socket = rpc
@@ -980,12 +1086,12 @@ class DashboardClient internal constructor(
             if (socket == null || !socket.isOpen) {
                 return flow { throw DashboardException("rpc_required", "rewind needs live gateway") }
             }
-            return streamTurnRpc(socket, sessionId, profileId, text, rewind, model, partsJson, clientId)
+            return streamTurnRpc(socket, sessionId, profileId, text, rewind, model, partsJson, clientId, voice)
         }
         if (socket != null && socket.isOpen) {
-            return streamTurnRpc(socket, sessionId, profileId, text, model = model, partsJson = partsJson, clientId = clientId)
+            return streamTurnRpc(socket, sessionId, profileId, text, model = model, partsJson = partsJson, clientId = clientId, voice = voice)
         }
-        return streamTurnSse(origin, sessionId, profileId, text, model, partsJson, clientId)
+        return streamTurnSse(origin, sessionId, profileId, text, model, partsJson, clientId, voice)
     }
 
     private fun streamTurnSse(
@@ -996,10 +1102,12 @@ class DashboardClient internal constructor(
         model: String? = null,
         partsJson: String = "",
         clientId: String = "",
+        voice: app.hermes.companion.model.VoiceTurnMetadata? = null,
     ): Flow<ChatEvent> = flow {
         val url = hostRest(origin, "/api/sessions/$sessionId/chat/stream", profileId)
         val idField = if (clientId.isBlank()) "" else ",\"client_id\":${clientId.json()}"
-        val payload = """{"input":${text.json()},"profile":${profileId.json()}${modelField(model)}$idField$partsJson}"""
+        val voiceFields = voiceFields(voice)
+        val payload = """{"input":${text.json()},"profile":${profileId.json()}${modelField(model)}$idField$partsJson$voiceFields}"""
         val request = Request.Builder()
             .url(url)
             .header("Accept", "text/event-stream")
@@ -1034,6 +1142,7 @@ class DashboardClient internal constructor(
         model: String? = null,
         partsJson: String = "",
         clientId: String = "",
+        voice: app.hermes.companion.model.VoiceTurnMetadata? = null,
     ): Flow<ChatEvent> = callbackFlow {
         if (liveByStored[sessionId] == null) {
             resumeSession(sessionId, profileId)
@@ -1060,11 +1169,12 @@ class DashboardClient internal constructor(
                 val legacyFields = if (socket.hello?.instanceId == "companion-standalone") {
                     modelField(model) + partsJson + if (clientId.isBlank()) "" else ""","client_id":${clientId.json()}"""
                 } else ""
+                val voiceFields = voiceFields(voice)
                 val result = socket.request(
                     "prompt.submit",
                     // Native Hermes forbids unknown params. Models belong to the session;
                     // images/files are staged through native attachment RPCs before submit.
-                    """{"session_id":${bound.json()},"text":${text.json()},"profile":${profileId.json()}$extra$legacyFields}""",
+                    """{"session_id":${bound.json()},"text":${text.json()},"profile":${profileId.json()}$extra$legacyFields$voiceFields}""",
                     timeoutMs = 180_000,
                 )
                 val status = result.str("status").ifBlank { "streaming" }
@@ -1766,7 +1876,9 @@ class DashboardClient internal constructor(
     private fun httpError(code: Int, body: String, url: String): DashboardException {
         val err = runCatching {
             val obj = DashboardJson.parseToJsonElement(body).jsonObject
-            (obj["error"] as? JsonPrimitive)?.contentOrNull ?: (obj["detail"] as? JsonPrimitive)?.contentOrNull
+            if (url.endsWith("/companion/connection/mode")) (obj["message"] as? JsonPrimitive)?.contentOrNull
+                ?: (obj["error"] as? JsonPrimitive)?.contentOrNull
+            else (obj["error"] as? JsonPrimitive)?.contentOrNull ?: (obj["detail"] as? JsonPrimitive)?.contentOrNull
         }.getOrNull()
         if (code == 502 && err == "dashboard_unreachable") {
             val host = url.substringAfter("://").substringBefore("/").substringBefore(':')

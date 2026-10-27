@@ -1,5 +1,13 @@
 package app.hermes.companion.chat
 
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.background
@@ -15,7 +23,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.TextButton
@@ -82,8 +89,10 @@ fun MarkdownComposer(
     onExpand: (() -> Unit)? = null,
     expanded: Boolean = false,
     tagPrefix: String = "chat",
+    onEditingChange: (Boolean) -> Unit = {},
+    placeholder: String = "Message…",
 ) {
-    var field by remember { mutableStateOf(TextFieldValue(value)) }
+    var field by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(value) {
@@ -94,123 +103,95 @@ fun MarkdownComposer(
         field = TextFieldValue(out.text, TextRange(out.selectionStart, out.selectionEnd))
         onValueChange(out.text)
     }
-    val shape = CutCornerShape(topEnd = 12.dp, bottomStart = 12.dp)
-    Column(modifier.fillMaxWidth().clip(shape).background(CompanionColor.VoidSurface)
-        .border(1.dp, CompanionColor.LineStrong, shape).padding(4.dp)) {
-        if (!compactLayout) FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(0.dp),
-            verticalArrangement = Arrangement.spacedBy(0.dp)) {
-            FormatChip("B", "$tagPrefix.fmt.bold") { format(MarkdownWrap::bold) }
-            FormatChip("I", "$tagPrefix.fmt.italic") { format(MarkdownWrap::italic) }
-            FormatChip("`", "$tagPrefix.fmt.code") { format(MarkdownWrap::code) }
-            FormatChip("-", "$tagPrefix.fmt.list") { format(MarkdownWrap::bullet) }
-            if (onExpand != null) IconButton(onClick = { focusManager.clearFocus(); keyboard?.hide(); onExpand() },
-                modifier = Modifier.size(48.dp).testTag("chat.expand").semantics { contentDescription = "Expand draft" }) {
-                ComposerActionIcon(ComposerIcon.EXPAND, CompanionColor.TextDim)
-            }
-            if (onOpenModelSettings != null) {
-                TextButton(onClick = { focusManager.clearFocus(); keyboard?.hide(); onOpenModelSettings() },
-                    enabled = modelSettingsEnabled, modifier = Modifier.heightIn(min = 48.dp).testTag("chat.model.settings")
-                        .semantics { contentDescription = "Model settings for this conversation" }) {
-                    ComposerActionIcon(ComposerIcon.SETTINGS, if (modelSettingsEnabled) CompanionColor.Signal else CompanionColor.TextMute)
-                    Spacer(Modifier.width(6.dp))
-                    Text("Model", style = CompanionType.Label)
-                }
-                if (onOpenReasoningSettings != null) TextButton(
-                    onClick = { focusManager.clearFocus(); keyboard?.hide(); onOpenReasoningSettings() },
-                    enabled = modelSettingsEnabled, modifier = Modifier.heightIn(min = 48.dp).testTag("chat.reasoning.settings")
-                        .semantics { contentDescription = "Reasoning settings for this conversation" }) {
-                    ComposerActionIcon(ComposerIcon.REASONING, if (modelSettingsEnabled) CompanionColor.Accent else CompanionColor.TextMute)
-                    Spacer(Modifier.width(6.dp))
-                    Text("Reasoning", style = CompanionType.Label)
-                }
-            }
+    var focused by remember { mutableStateOf(false) }
+    var formatting by remember { mutableStateOf(false) }
+    var controls by remember { mutableStateOf(false) }
+    var hadKeyboard by remember { mutableStateOf(false) }
+    val imeVisible = WindowInsets.isImeVisible
+    LaunchedEffect(imeVisible) {
+        if (imeVisible && focused) hadKeyboard = true
+        else if (!imeVisible && hadKeyboard && !expanded && !formatting && !controls) { hadKeyboard = false; focusManager.clearFocus() }
+    }
+    val editing = focused || expanded || formatting || controls
+    LaunchedEffect(editing) { onEditingChange(editing) }
+    val shape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 12.dp, bottomStart = 12.dp)
+    Column(modifier.fillMaxWidth().testTag("$tagPrefix.composer").clip(shape).background(CompanionColor.VoidSurface)
+        .border(1.dp, if (editing) CompanionColor.Signal else CompanionColor.LineStrong, shape).padding(4.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+            BasicTextField(
+                value = field,
+                onValueChange = { field = it; onValueChange(it.text) },
+                modifier = Modifier.weight(1f)
+                    .heightIn(min = if (expanded) 144.dp else 48.dp, max = if (expanded) 480.dp else if (editing) 144.dp else androidx.compose.ui.unit.Dp.Infinity)
+                    .onFocusChanged { focused = it.isFocused }
+                    .onPreviewKeyEvent { ev ->
+                        val enter = ev.key == Key.Enter || ev.key == Key.NumPadEnter
+                        if (enter && ev.type == KeyEventType.KeyDown && (ev.isShiftPressed || ev.isCtrlPressed)) {
+                            if (field.text.isNotBlank()) onSend()
+                            true
+                        } else false
+                    }
+                    .testTag("$tagPrefix.draft"),
+                textStyle = CompanionType.Body.copy(color = CompanionColor.Text),
+                cursorBrush = SolidColor(CompanionColor.Signal),
+                singleLine = !editing,
+                minLines = 1,
+                maxLines = if (expanded) 30 else if (editing) 6 else 1,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences,
+                    keyboardType = KeyboardType.Text, imeAction = ImeAction.Default),
+                visualTransformation = MarkdownVisual,
+                decorationBox = { inner ->
+                    Box(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), contentAlignment = if (expanded) Alignment.TopStart else Alignment.CenterStart) {
+                        if (field.text.isEmpty()) Text(placeholder, style = CompanionType.Body.copy(color = CompanionColor.TextMute), maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        inner()
+                    }
+                },
+            )
+            if (!editing) trailingControls?.invoke()
         }
-        if (!compactLayout) Hairline()
-        Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (compactLayout) Column {
-                Row {
-                    FormatChip("B", "$tagPrefix.fmt.bold") { format(MarkdownWrap::bold) }
-                    FormatChip("I", "$tagPrefix.fmt.italic") { format(MarkdownWrap::italic) }
-                }
-                Row {
-                    FormatChip("`", "$tagPrefix.fmt.code") { format(MarkdownWrap::code) }
-                    FormatChip("-", "$tagPrefix.fmt.list") { format(MarkdownWrap::bullet) }
-                }
-            }
-            leadingControls?.invoke()
-            Column {
-            if (compactLayout && onOpenModelSettings != null) {
-                IconButton(onClick = { focusManager.clearFocus(); keyboard?.hide(); onOpenModelSettings() },
-                    enabled = modelSettingsEnabled, modifier = Modifier.size(48.dp).testTag("chat.model.settings")
-                        .semantics { contentDescription = "Model settings for this conversation" }) {
-                    ComposerActionIcon(ComposerIcon.SETTINGS, CompanionColor.TextDim)
-                }
-                IconButton(onClick = { focusManager.clearFocus(); keyboard?.hide(); onOpenReasoningSettings?.invoke() },
-                    enabled = modelSettingsEnabled, modifier = Modifier.size(48.dp).testTag("chat.reasoning.settings")
-                        .semantics { contentDescription = "Reasoning settings for this conversation" }) {
-                    ComposerActionIcon(ComposerIcon.REASONING, CompanionColor.TextDim)
-                }
-            }
-            }
-        BasicTextField(
-            value = field,
-            onValueChange = {
-                field = it
-                onValueChange(it.text)
-            },
-            modifier = Modifier
-                .weight(1f)
-                .heightIn(min = if (expanded) 240.dp else 102.dp, max = if (expanded) 480.dp else 156.dp)
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-                // Hardware keyboards: Shift/Ctrl+Enter sends, plain Enter stays a newline.
-                .onPreviewKeyEvent { ev ->
-                    val enter = ev.key == Key.Enter || ev.key == Key.NumPadEnter
-                    if (enter && ev.type == KeyEventType.KeyDown && (ev.isShiftPressed || ev.isCtrlPressed)) {
-                        if (field.text.isNotBlank()) onSend()
-                        true
-                    } else {
-                        false
+        if (editing) {
+            Hairline()
+            Row(Modifier.fillMaxWidth().testTag("$tagPrefix.tools"),
+                verticalAlignment = Alignment.CenterVertically) {
+                leadingControls?.invoke()
+                Box {
+                    IconButton(onClick = { formatting = true }, modifier = Modifier.size(48.dp).testTag("$tagPrefix.format")
+                        .semantics { contentDescription = "Text formatting" }) {
+                        ComposerActionIcon(ComposerIcon.CODE, CompanionColor.TextDim)
+                    }
+                    DropdownMenu(formatting, { formatting = false }, containerColor = CompanionColor.VoidElevated) {
+                        listOf("Bold" to "bold", "Italic" to "italic", "Inline code" to "code", "Bullet list" to "list").forEach { (label, key) ->
+                            DropdownMenuItem(text = { Text(label) }, modifier = Modifier.testTag("$tagPrefix.fmt.$key"), onClick = {
+                                formatting = false
+                                format(when (key) { "bold" -> MarkdownWrap::bold; "italic" -> MarkdownWrap::italic; "code" -> MarkdownWrap::code; else -> MarkdownWrap::bullet })
+                            })
+                        }
                     }
                 }
-                .testTag("$tagPrefix.draft"),
-            textStyle = CompanionType.Body.copy(color = CompanionColor.Text),
-            cursorBrush = SolidColor(CompanionColor.Signal),
-            singleLine = false,
-            minLines = 1,
-            maxLines = if (expanded) 30 else 8,
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.Sentences,
-                keyboardType = KeyboardType.Text,
-                imeAction = ImeAction.Default,
-            ),
-            visualTransformation = MarkdownVisual,
-            decorationBox = { inner ->
-                if (field.text.isEmpty()) {
-                    Text(
-                        text = "Message Hermes…",
-                        style = CompanionType.Body.copy(color = CompanionColor.TextMute),
-                    )
+                if (onOpenModelSettings != null || onExpand != null) Box {
+                    IconButton(onClick = { controls = true }, modifier = Modifier.size(48.dp).testTag("$tagPrefix.controls")
+                        .semantics { contentDescription = "Conversation controls" }) {
+                        ComposerActionIcon(ComposerIcon.SETTINGS, CompanionColor.TextDim)
+                    }
+                    DropdownMenu(controls, { controls = false }, containerColor = CompanionColor.VoidElevated) {
+                        if (onOpenModelSettings != null) DropdownMenuItem(text = { Text("Model") },
+                            enabled = modelSettingsEnabled, modifier = Modifier.testTag("$tagPrefix.model.settings"), onClick = {
+                                controls = false; focusManager.clearFocus(); keyboard?.hide(); onOpenModelSettings()
+                            })
+                        if (onOpenReasoningSettings != null) DropdownMenuItem(text = { Text("Reasoning") },
+                            enabled = modelSettingsEnabled, modifier = Modifier.testTag("$tagPrefix.reasoning.settings"), onClick = {
+                                controls = false; focusManager.clearFocus(); keyboard?.hide(); onOpenReasoningSettings()
+                            })
+                        if (onExpand != null) DropdownMenuItem(text = { Text("Expand draft") },
+                            modifier = Modifier.testTag("$tagPrefix.expand"), onClick = {
+                                controls = false; focusManager.clearFocus(); keyboard?.hide(); onExpand()
+                            })
+                    }
                 }
-                inner()
-            },
-        )
-            trailingControls?.invoke()
-        }
-    }
-}
-
-@Composable
-private fun FormatChip(label: String, tag: String, onClick: () -> Unit) {
-    TextButton(onClick = onClick, modifier = Modifier.testTag(tag).size(48.dp).semantics {
-        contentDescription = when(label) { "B" -> "Bold"; "I" -> "Italic"; "`" -> "Inline code"; else -> "Bullet list" }
-    }, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
-        when(label) {
-            "`" -> ComposerActionIcon(ComposerIcon.CODE, CompanionColor.TextDim)
-            "-" -> ComposerActionIcon(ComposerIcon.LIST, CompanionColor.TextDim)
-            else -> Text(label, style = CompanionType.Label.copy(color = CompanionColor.TextDim,
-                fontWeight = if (label == "B") FontWeight.Bold else FontWeight.Normal,
-                fontStyle = if (label == "I") FontStyle.Italic else FontStyle.Normal))
+                Spacer(Modifier.weight(1f))
+                trailingControls?.invoke()
+            }
         }
     }
 }

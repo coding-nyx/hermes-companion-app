@@ -1,6 +1,8 @@
 package app.hermes.companion.voice
 
 interface SpeechInput {
+    /** An app-owned capture loop may resume after a noise-only transcription. */
+    val resumesCaptureAfterProcessing: Boolean get() = false
     val terminalErrors: Boolean get() = false
     /** True when the input signals actual microphone readiness through onStateChange(true). */
     val reportsReadiness: Boolean get() = false

@@ -35,11 +35,12 @@ class ParityMigrationTest {
             old.version = 6
         }
         val db = Room.databaseBuilder(context, CompanionDatabase::class.java, name)
-            .addMigrations(CompanionDatabase.MIGRATION_6_7).build()
+            .addMigrations(CompanionDatabase.MIGRATION_6_7, CompanionDatabase.MIGRATION_7_8).build()
         try {
             val item = OutboxStore(db).pending("host", "coder").single()
             assertEquals("do not lose this message", item.text)
             assertNull(item.baselineUserIds)
+            assertNull(item.voice)
             val session = TranscriptCache(db).sessions("host", "coder").single()
             assertEquals("keep this thread", session.title)
             assertFalse(session.pinned)

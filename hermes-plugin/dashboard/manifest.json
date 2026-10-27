@@ -1,0 +1,9 @@
+{
+  "name": "hermes-companion",
+  "title": "Companion voice",
+  "description": "Profile speech settings and continuous voice transport for Companion",
+  "api": "api.py",
+  "entry": "noop.js",
+  "tab": {"hidden": true},
+  "version": "1.0.0"
+}

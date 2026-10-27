@@ -6,8 +6,8 @@ data class NativeRealtimeAnswer(val sessionId: String, val sdp: String)
 enum class NativeCallPhase { IDLE, CONNECTING, CONNECTED, DISCONNECTED, ENDED, FAILED }
 sealed interface NativeLiveEvent {
     data class Started(val id: String?) : NativeLiveEvent
-    data class Caption(val role: String, val delta: String) : NativeLiveEvent
-    data class Delegation(val id: String) : NativeLiveEvent
+    data class Caption(val role: String, val delta: String, val startMs: Long = 0, val endMs: Long = 0, val eventId: String = "") : NativeLiveEvent
+    data class Delegation(val id: String, val offsetMs: Long = Long.MAX_VALUE) : NativeLiveEvent
     data class Error(val code: String?, val message: String) : NativeLiveEvent
     data class Closed(val reason: String?) : NativeLiveEvent
 }

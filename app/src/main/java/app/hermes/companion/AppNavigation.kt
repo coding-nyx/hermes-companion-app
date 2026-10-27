@@ -1,6 +1,7 @@
 package app.hermes.companion
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -36,7 +37,7 @@ import app.hermes.companion.model.DeviceArm
 import app.hermes.companion.model.HudState
 
 internal enum class NavigationDestination(val label: String, val tab: MainTab?) {
-    CHATS("Chats", MainTab.THREADS), GATEWAY("Gateway", MainTab.GATEWAY),
+    BOTS("Bots", MainTab.BOTS), CHATS("Chats", MainTab.THREADS),
     DEVICE("Device", MainTab.DEVICE), MORE("More", null),
 }
 
@@ -47,84 +48,76 @@ internal fun navigationDestination(tab: MainTab, inChat: Boolean): NavigationDes
 @Composable
 internal fun AppNavigationBar(state: CompanionState, inChat: Boolean, onTab: (MainTab) -> Unit,
     onMore: () -> Unit, onVoice: () -> Unit = {}, onDictate: () -> Unit = {}) {
-    val selected = navigationDestination(state.tab, inChat)
-    val largeText = androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.5f
-    Column(Modifier.fillMaxWidth().background(CompanionColor.Void).navigationBarsPadding().testTag("navigation.bar")) {
-        HorizontalDivider(color = CompanionColor.Line)
-        Box(Modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
-        Row(Modifier.fillMaxWidth().selectableGroup(), verticalAlignment = Alignment.Bottom) {
-            // Keep Voice centered. At large text sizes the selected destination keeps its
-            // readable label; the others retain their accessible names and 48dp targets.
-            Row(Modifier.weight(2f), verticalAlignment = Alignment.Bottom) {
-                NavigationDestination.entries.take(2).forEach { destination ->
-                    NavigationItem(state, destination, selected, onTab, onMore,
-                        Modifier.weight(1f),
-                        showLabel = !largeText || destination == selected)
-                }
+    if (inChat) return
+    val selected = navigationDestination(state.tab, false)
+    val shape = androidx.compose.foundation.shape.CutCornerShape(topEnd = 14.dp, bottomStart = 14.dp)
+    Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Row(Modifier.fillMaxWidth().clip(shape).background(CompanionColor.VoidElevated)
+            .border(1.dp, CompanionColor.LineStrong, shape).padding(4.dp).selectableGroup().testTag("navigation.bar"),
+            verticalAlignment = Alignment.CenterVertically) {
+            NavigationDestination.entries.take(2).forEach { destination ->
+                NavigationItem(state, destination, selected, onTab, onMore, Modifier.weight(1f))
             }
-            VoiceNavigationAction(state.isVoiceStreamActive, onVoice, Modifier.weight(1f), onDictate = onDictate, showLabel = !largeText)
-            Row(Modifier.weight(2f), verticalAlignment = Alignment.Bottom) {
-                NavigationDestination.entries.drop(2).forEach { destination ->
-                    NavigationItem(state, destination, selected, onTab, onMore,
-                        Modifier.weight(1f),
-                        showLabel = !largeText || destination == selected)
-                }
+            VoiceNavigationAction(state.isVoiceStreamActive, onVoice, Modifier.weight(1f), onDictate = onDictate,
+                resume = state.voiceCallPhase == app.hermes.companion.model.NativeCallPhase.FAILED && state.openSession != null)
+            NavigationDestination.entries.drop(2).forEach { destination ->
+                NavigationItem(state, destination, selected, onTab, onMore, Modifier.weight(1f))
             }
-        }
         }
     }
 }
 
 @Composable
 private fun NavigationItem(state: CompanionState, destination: NavigationDestination, selected: NavigationDestination,
-    onTab: (MainTab) -> Unit, onMore: () -> Unit, modifier: Modifier, horizontal: Boolean = false, showLabel: Boolean = true) {
+    onTab: (MainTab) -> Unit, onMore: () -> Unit, modifier: Modifier, showLabel: Boolean = true) {
     val active = destination == selected
     val color = if (active) CompanionColor.Signal else CompanionColor.TextDim
     val status = when (destination) {
         NavigationDestination.CHATS -> if (state.visibleSessions.any { it.unread } || state.unreadRooms.isNotEmpty()) "Unread conversations" else null
         NavigationDestination.DEVICE -> if (state.arm != DeviceArm.DISARMED) "Hands armed" else null
-        NavigationDestination.GATEWAY -> if (state.hud.gateway == HudState.OFF) "Check host status" else null
         else -> null
     }
-    val itemModifier = modifier.heightIn(min = if (horizontal) 56.dp else 64.dp)
+    Column(modifier.height(if (androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.5f) 60.dp else 48.dp).clip(androidx.compose.foundation.shape.CutCornerShape(topEnd = 6.dp, bottomStart = 6.dp))
+        .background(if (active) CompanionColor.SignalDim else Color.Transparent)
         .testTag(destination.tab?.let { "nav.${it.name.lowercase()}" } ?: "nav.more")
-        .clip(RoundedCornerShape(16.dp))
         .selectable(active, role = Role.Tab, onClick = { destination.tab?.let(onTab) ?: onMore() })
-        .semantics { contentDescription = destination.label; if (status != null) stateDescription = status }
-    val content: @Composable () -> Unit = {
-        Box(Modifier.size(if (horizontal) 40.dp else 46.dp, 28.dp)
-            .clip(androidx.compose.foundation.shape.CutCornerShape(topEnd = 7.dp, bottomStart = 7.dp))
-            .background(if (active) CompanionColor.SignalDim else Color.Transparent)
-            , contentAlignment = Alignment.Center) {
-            NavigationIcon(destination, color)
-            if (status != null) Box(Modifier.align(Alignment.TopEnd).padding(3.dp).size(6.dp)
-                .background(if (destination == NavigationDestination.CHATS) CompanionColor.Signal else CompanionColor.Warn, RoundedCornerShape(3.dp)))
-        }
-        if (showLabel) Text(destination.label, style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp, letterSpacing = 0.sp, lineHeight = 18.sp), color = color,
-            maxLines = 2, softWrap = true, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        .semantics { contentDescription = destination.label; if (status != null) stateDescription = status },
+        verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        NavigationIconSlot(active, status != null, if (destination == NavigationDestination.CHATS) CompanionColor.Signal else CompanionColor.Warn) { NavigationIcon(destination, color) }
+        NavigationLabel(destination.label, color, showLabel)
     }
-    if (horizontal) Row(itemModifier, verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally)) { content() }
-    else Column(itemModifier.padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
-        horizontalAlignment = Alignment.CenterHorizontally) { content() }
+}
+
+@Composable
+private fun NavigationIconSlot(active: Boolean, dot: Boolean = false, dotColor: Color = CompanionColor.Signal, content: @Composable () -> Unit) {
+    Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) {
+        content()
+        if (dot) Box(Modifier.align(Alignment.TopEnd).padding(top = 1.dp).size(4.dp).background(dotColor, CircleShape))
+    }
+}
+
+@Composable
+private fun NavigationLabel(label: String, color: Color, visible: Boolean) {
+    // Reserving the same label slot keeps all five icon baselines aligned at large text.
+    Box(Modifier.height(if (androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.5f) 28.dp else 16.dp), contentAlignment = Alignment.Center) {
+        if (visible) Text(label, style = MaterialTheme.typography.labelMedium.copy(
+            fontSize = if (androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.5f) 10.sp else 10.sp,
+            lineHeight = 14.sp, letterSpacing = 0.sp), color = color, maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+    }
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun VoiceNavigationAction(active: Boolean, onClick: () -> Unit, modifier: Modifier, expanded: Boolean = false, showLabel: Boolean = true, onDictate: () -> Unit = {}) {
-    val action = modifier.heightIn(min = 72.dp).clip(RoundedCornerShape(18.dp))
-        .combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onDictate, onLongClickLabel = "Dictate message").testTag("nav.voice")
-        .semantics { contentDescription = if (active) "Open voice controls" else "Start voice conversation" }
-    val icon: @Composable () -> Unit = {
-        Box(Modifier.size(54.dp).clip(androidx.compose.foundation.shape.CutCornerShape(topEnd = 13.dp, bottomStart = 13.dp)).background(CompanionColor.Signal), contentAlignment = Alignment.Center) {
-            VoiceControlIcon(VoiceControlGlyph.WAVE, CompanionColor.Void)
-        }
-    }
-    if (expanded) Row(action.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)) { icon(); Text("Voice", color = CompanionColor.Signal) }
-    else Column(action, verticalArrangement = Arrangement.spacedBy(4.dp, if (showLabel) Alignment.Bottom else Alignment.CenterVertically), horizontalAlignment = Alignment.CenterHorizontally) {
-        icon(); if (showLabel) Text("Voice", style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp, letterSpacing = 0.sp), color = CompanionColor.Signal)
+private fun VoiceNavigationAction(active: Boolean, onClick: () -> Unit, modifier: Modifier, showLabel: Boolean = true, onDictate: () -> Unit = {}, resume: Boolean = false) {
+    val color = if (active) CompanionColor.Signal else CompanionColor.TextDim
+    Column(modifier.height(if (androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.5f) 60.dp else 48.dp).clip(androidx.compose.foundation.shape.CutCornerShape(topEnd = 6.dp, bottomStart = 6.dp))
+        .background(if (active) CompanionColor.SignalDim else Color.Transparent)
+        .combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onDictate, onLongClickLabel = "Dictate message")
+        .testTag("nav.voice").semantics { contentDescription = if (active) "Open voice controls" else if (resume) "Resume voice conversation" else "Start voice conversation" },
+        verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        NavigationIconSlot(active, dot = active) { VoiceControlIcon(VoiceControlGlyph.WAVE, color) }
+        NavigationLabel(if (resume) "Resume" else "Voice", color, showLabel)
     }
 }
 
@@ -146,13 +139,12 @@ private fun NavigationIcon(destination: NavigationDestination, color: Color) {
                     drawLine(color, Offset(7f, 8f), Offset(17f, 8f), 1.8f, StrokeCap.Round)
                     drawLine(color, Offset(7f, 13f), Offset(14f, 13f), 1.8f, StrokeCap.Round)
                 }
-                NavigationDestination.GATEWAY -> {
-                    listOf(3f, 14f).forEach { y ->
-                        drawRoundRect(color, Offset(3f, y), Size(18f, 7f), CornerRadius(1.5f), style = stroke)
-                        drawCircle(color, 1f, Offset(7f, y + 3.5f))
-                        drawLine(color, Offset(12f, y + 3.5f), Offset(17f, y + 3.5f), 1.8f, StrokeCap.Round)
-                    }
-                    drawLine(color, Offset(12f, 10f), Offset(12f, 14f), 1.8f, StrokeCap.Round)
+                NavigationDestination.BOTS -> {
+                    drawRoundRect(color, Offset(4f, 7f), Size(16f, 13f), CornerRadius(4f), style = stroke)
+                    drawLine(color, Offset(12f, 3f), Offset(12f, 7f), 1.8f, StrokeCap.Round)
+                    drawCircle(color, 1.4f, Offset(12f, 3f))
+                    drawCircle(color, 1.4f, Offset(8.5f, 12f)); drawCircle(color, 1.4f, Offset(15.5f, 12f))
+                    drawLine(color, Offset(9f, 16f), Offset(15f, 16f), 1.8f, StrokeCap.Round)
                 }
                 NavigationDestination.DEVICE -> {
                     drawRoundRect(color, Offset(6f, 2f), Size(12f, 20f), CornerRadius(3f), style = stroke)
@@ -166,6 +158,7 @@ private fun NavigationIcon(destination: NavigationDestination, color: Color) {
 
 internal data class MoreDestination(val tab: MainTab, val label: String, val description: String)
 internal val moreDestinations = listOf(
+    MoreDestination(MainTab.GATEWAY, "Gateways", "Connections, models and host services"),
     MoreDestination(MainTab.REVIEW, "Code review", "Changes, files and commits"),
     MoreDestination(MainTab.REMINDERS, "Schedules", "Scheduled jobs and reminders"),
     MoreDestination(MainTab.CONSOLE, "Coding agents", "Agent terminals and coding sessions"),

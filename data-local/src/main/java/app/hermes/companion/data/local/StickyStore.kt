@@ -10,6 +10,9 @@ import app.hermes.companion.domain.WakePolicy
  */
 class StickyStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("companion.sticky", Context.MODE_PRIVATE)
+    var voicePacingMs: Int
+        get() = prefs.getInt("voice_pacing_ms", 900).takeIf { it in setOf(600, 900, 1400) } ?: 900
+        set(value) { require(value in setOf(600, 900, 1400)); prefs.edit().putInt("voice_pacing_ms", value).apply() }
 
     /** Explicit phone-wide speech choice. An unset choice takes the rollout default. */
     var speechBackend: String?
@@ -32,11 +35,11 @@ class StickyStore(context: Context) {
         set(value) { prefs.edit().putString(KEY_PROFILE, value).apply() }
 
     fun profileFor(origin: String): String? =
-        prefs.getString(KEY_PROFILE + "." + HostKeys.of(origin), null) ?: profileId
+        prefs.getString(KEY_PROFILE + "." + HostKeys.exact(origin), null) ?: profileId
 
     fun setProfile(origin: String, id: String?) {
         prefs.edit()
-            .putString(KEY_PROFILE + "." + HostKeys.of(origin), id)
+            .putString(KEY_PROFILE + "." + HostKeys.exact(origin), id)
             .putString(KEY_PROFILE, id)
             .apply()
     }

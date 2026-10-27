@@ -5,6 +5,9 @@ package app.hermes.companion.data.local
  * Lower-cased, default ports dropped, trailing slash and paths removed.
  */
 object HostKeys {
+    /** Exact dashboard ownership for credentials and new profile settings. Legacy authority keys are never adopted by a proxy path. */
+    fun exact(origin: String): String = app.hermes.companion.domain.WakePolicy.topicOwnerKey(origin).orEmpty()
+
     fun of(origin: String): String {
         val trimmed = origin.trim()
         if (trimmed.isBlank()) return ""
