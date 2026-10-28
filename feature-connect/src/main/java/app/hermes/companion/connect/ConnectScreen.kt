@@ -73,6 +73,7 @@ fun ConnectScreen(
     gateways: List<GatewayChoice> = emptyList(),
     onSelectGateway: (GatewayChoice) -> Unit = {},
     onForgetGateway: (GatewayChoice) -> Unit = {},
+    onBackendConnections: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
@@ -105,7 +106,7 @@ fun ConnectScreen(
             ) {
                 RobotMark(size = 56.dp, awake = true)
                 Spacer(Modifier.height(CompanionSpace.Md))
-                Text(text = "Connect to Hermes", style = CompanionType.Display)
+                Text(text = "Companion", style = CompanionType.Display)
                 Spacer(Modifier.height(CompanionSpace.Md))
                 Hairline(Modifier.width(96.dp))
                 FetchPane(
@@ -125,9 +126,11 @@ fun ConnectScreen(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+        app.hermes.companion.design.ActionButton("Connect another agent host",onBackendConnections,modifier=Modifier.fillMaxWidth().testTag("connect.backends"))
+        Spacer(Modifier.height(CompanionSpace.Md))
         RobotMark(size = 56.dp, awake = false)
         Spacer(Modifier.height(CompanionSpace.Md))
-        Text(text = "Connect to Hermes", style = CompanionType.Display)
+        Text(text = "Companion", style = CompanionType.Display)
         Spacer(Modifier.height(CompanionSpace.Xs))
         SignalSignature(label = "YOUR AGENT. YOUR HOST.")
         Spacer(Modifier.height(CompanionSpace.Md))

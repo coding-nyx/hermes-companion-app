@@ -16,6 +16,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":core-backend"))
     implementation(project(":core-model"))
     implementation(project(":domain"))
     implementation(libs.okhttp)

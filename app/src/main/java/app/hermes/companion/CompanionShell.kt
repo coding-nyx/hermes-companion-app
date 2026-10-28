@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Text
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -225,6 +226,7 @@ fun CompanionShell(
     onSelectGateway: (SavedGateway) -> Unit = {},
     onAddGateway: (String, String) -> Unit = { _, _ -> },
     onConnectionMode: (String) -> Unit = {},
+    onBackendConnections: () -> Unit = {},
     onCheckUpdate: () -> Unit = {},
     onApplyUpdate: () -> Unit = {},
     onToggleAttach: () -> Unit = {},
@@ -251,6 +253,7 @@ fun CompanionShell(
             error = state.error,
             onOriginChange = onOriginChange,
             onConnect = onConnect,
+            onBackendConnections = onBackendConnections,
             onPairLink = onPairLink,
             authRequired = state.authRequired,
             username = state.username,
@@ -332,6 +335,7 @@ fun CompanionShell(
         if ((!compactTyping || !inChat) && state.tab != MainTab.BOTS) {
         Header(
             state = state,
+            onBackendConnections = onBackendConnections,
             inChat = inChat,
             onCloseChat = onCloseChat,
             onOpenSettings = { showSettingsSheet = true },
@@ -549,7 +553,7 @@ fun CompanionShell(
                     onDisband = botActions.disband, onApprove = botActions.approve, onRetry = botActions.retry,
                     onRecover = botActions.recover, onSchedules = { onTab(MainTab.REMINDERS) },
                     onGateways = { onTab(MainTab.GATEWAY) }, modifier = body,
-                    onHostSwitch = { showHostSheet = true }, onSettings = { showSettingsSheet = true },
+                    onHostSwitch = { showHostSheet = true }, onSettings = { showSettingsSheet = true }, onConnections = onBackendConnections,
                     onChats = { onTab(MainTab.THREADS) })
                 MainTab.THREADS -> ThreadsScreen(
                     showToolbar = false,
@@ -907,6 +911,7 @@ private fun Header(
     onOpenSettings: () -> Unit = {}, onSessionActions: () -> Unit = {},
     onNewRoom: () -> Unit = {}, onRefreshConversations: () -> Unit = {}, onNewChat: () -> Unit = {},
     onHost: () -> Unit = {}, onAgent: () -> Unit = {},
+    onBackendConnections: () -> Unit = {},
 ) {
     var options by remember { mutableStateOf(false) }
     LaunchedEffect(inChat, state.tab) { options = false }
@@ -936,7 +941,8 @@ private fun Header(
                     app.hermes.companion.design.ControlIcon(app.hermes.companion.design.ControlGlyph.MORE)
                 }
                 androidx.compose.material3.DropdownMenu(options, { options = false }, containerColor = CompanionColor.VoidElevated) {
-                    androidx.compose.material3.DropdownMenuItem(text = { Text("New chat") }, onClick = { options = false; onNewChat() },
+                    androidx.compose.material3.DropdownMenuItem(text = { Text("Connections") }, onClick = { options = false; onBackendConnections() }, modifier = Modifier.testTag("header.connections"))
+                    DropdownMenuItem(text = { Text("New chat") }, onClick = { options = false; onNewChat() },
                         enabled = !state.loading && !state.creatingThread && state.activeProfileId != null, modifier = Modifier.testTag("header.newchat"))
                     if (state.tab == MainTab.THREADS && !inChat) {
                         if (state.companionAvailability == app.hermes.companion.model.CompanionAvailability.AVAILABLE)

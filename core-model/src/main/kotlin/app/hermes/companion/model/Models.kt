@@ -221,6 +221,8 @@ data class ApprovalPrompt(
     val kind: String = "approval",
     val command: String,
     val choices: List<String> = listOf("once", "deny"),
+    /** Native option identifiers are submitted unchanged; labels are presentation only. */
+    val choiceLabels: Map<String, String> = emptyMap(),
     /** Room turns: the participant that raised it. Null in a single-agent thread. */
     val speaker: String? = null,
 )

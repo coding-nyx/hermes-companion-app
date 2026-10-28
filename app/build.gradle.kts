@@ -116,6 +116,8 @@ android {
 }
 
 dependencies {
+    implementation(project(":core-backend"))
+    implementation(libs.androidx.security.crypto)
     implementation("com.google.firebase:firebase-messaging:25.0.1")
     implementation("io.github.webrtc-sdk:android:150.7871.01")
     implementation(project(":core-voice"))

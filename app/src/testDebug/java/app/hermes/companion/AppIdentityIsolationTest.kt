@@ -18,7 +18,7 @@ class AppIdentityIsolationTest {
 
     @Test fun applicationIdentityAndLauncherLabelMatchTheSelectedBuild() {
         assertEquals(BuildConfig.APPLICATION_ID, app.packageName)
-        val expected = if (BuildConfig.APPLICATION_ID.endsWith(".preview")) "Hermes Preview" else "Hermes"
+        val expected = if (BuildConfig.APPLICATION_ID.endsWith(".preview")) "Companion Prototype" else "Companion"
         assertEquals(expected, app.packageManager.getApplicationLabel(app.applicationInfo).toString())
     }
 

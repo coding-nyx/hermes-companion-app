@@ -180,7 +180,7 @@ class DeviceNodeArmingTest {
     @Test fun deniedExplicitOffKeepsTruthfulStateAndManualOnNeverArms() = runTest {
         val app = testApp()
         shadowOf(app).denyPermissions(Manifest.permission.WRITE_SECURE_SETTINGS)
-        val configured = "$other:app.hermes.companion/.device.CompanionAccessibilityService"
+        val configured = "$other:${app.packageName}/${CompanionAccessibilityService::class.java.name}"
         Settings.Secure.putString(app.contentResolver, key, configured)
         val node = coordinator(app, this)
         assertFalse(node.turnAccessibilityOff())

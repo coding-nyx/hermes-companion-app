@@ -151,6 +151,12 @@ fun ChatScreen(
     onMention: (String) -> Unit = {},
     profiles: List<ProfileRef> = emptyList(),
     assistantName: String = "Agent",
+    sendAvailable: Boolean = true,
+    attachmentsAvailable: Boolean = true,
+    modelsAvailable: Boolean = true,
+    voiceAvailable: Boolean = true,
+    readAloudAvailable: Boolean = true,
+    commandsAvailable: Boolean = true,
     /** Room v2 (A22.10): floor state, participants, actions. Null outside a room. */
     room: RoomRef? = null,
     roomCandidates: List<Pair<String, String>> = emptyList(),
@@ -311,7 +317,7 @@ fun ChatScreen(
                         MessageRole.TOOL -> Box(Modifier.padding(start = AgentRailInset)) {
                             ToolRow(message, onFetchMedia, onOpenMedia)
                         }
-                        MessageRole.ASSISTANT -> if (message.reasoning) ReasoningRow(message) else AssistantRow(message, onFetchMedia, onOpenMedia, participants, profiles, assistantName, onReadAloud, readAloudMessageId)
+                        MessageRole.ASSISTANT -> if (message.reasoning) ReasoningRow(message) else AssistantRow(message, onFetchMedia, onOpenMedia, participants, profiles, assistantName, onReadAloud, readAloudMessageId, readAloudAvailable)
                     }
                 }
             }
@@ -350,7 +356,9 @@ fun ChatScreen(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = CompanionSpace.Md, bottom = CompanionSpace.Md)
-
+                    .background(CompanionColor.VoidElevated, androidx.compose.foundation.shape.CutCornerShape(8.dp))
+                    .border(1.dp, CompanionColor.LineStrong, androidx.compose.foundation.shape.CutCornerShape(8.dp))
+                    .heightIn(min = 48.dp)
                     .clickable {
                         followTail = true
                         scope.launch {
@@ -529,22 +537,22 @@ fun ChatScreen(
             value = draft,
             placeholder = "Message $assistantName…",
             onValueChange = onDraftChange,
-            onSend = { if (!submitting && !creatingThread) onSend() },
+            onSend = { if (!submitting && !creatingThread && sendAvailable) onSend() },
             modifier = Modifier.padding(horizontal = 8.dp, vertical = if (compactComposer) 4.dp else 8.dp),
-            onOpenModelSettings = if (!roomMode) onOpenModelPicker else null,
-            onOpenReasoningSettings = if (!roomMode) (onOpenReasoningPicker ?: onOpenModelPicker) else null,
+            onOpenModelSettings = if (!roomMode && modelsAvailable) onOpenModelPicker else null,
+            onOpenReasoningSettings = if (!roomMode && modelsAvailable) (onOpenReasoningPicker ?: onOpenModelPicker) else null,
             modelSettingsEnabled = !creatingThread && app.hermes.companion.domain.DraftThread.isPersisted(threadId),
             compactLayout = compactComposer,
             onEditingChange = { composerActive = it },
             onExpand = { expandedDraft = true },
             leadingControls = {
-            if (!roomMode) {
+            if (!roomMode && (attachmentsAvailable || commandsAvailable)) {
                 Row {
-                    ComposerButton("Add attachment", "chat.attach", onToggleAttach, foreground = CompanionColor.TextDim, border = Color.Transparent) { tint ->
+                    if (attachmentsAvailable) ComposerButton("Add attachment", "chat.attach", onToggleAttach, foreground = CompanionColor.TextDim, border = Color.Transparent) { tint ->
                         ComposerActionIcon(ComposerIcon.ADD, tint)
                     }
                     val commandsActive = slashOpen || draft.startsWith("/")
-                    ComposerButton(
+                    if (commandsAvailable) ComposerButton(
                         if (slashOpen) "Hide commands" else "Show commands",
                         "chat.slash", { slashOpen = !slashOpen },
                         foreground = if (commandsActive) CompanionColor.Warn else CompanionColor.TextDim,
@@ -556,7 +564,7 @@ fun ChatScreen(
             },
             trailingControls = {
             Row(verticalAlignment = Alignment.Bottom) {
-                if (!roomMode && composerActive) {
+                if (!roomMode && composerActive && voiceAvailable) {
                     ComposerButton(
                         if (isListeningVoice) "Stop dictation" else "Dictate message",
                         "chat.voice", onVoiceClick,
@@ -582,7 +590,7 @@ fun ChatScreen(
                 }
                 ComposerButton(
                     label, "chat.send", if (interrupting) onInterrupt else onSend,
-                    enabled = !busy,
+                    enabled = !busy && (sendAvailable || interrupting),
                     foreground = if (interrupting) CompanionColor.Warn else CompanionColor.Void,
                     background = if (interrupting) CompanionColor.Warn.copy(alpha = 0.2f) else CompanionColor.Signal,
                     border = if (interrupting) CompanionColor.Warn else CompanionColor.Signal,
@@ -736,6 +744,7 @@ private fun AssistantRow(
     assistantName: String,
     onReadAloud: (ChatMessage) -> Unit,
     readAloudMessageId: String?,
+    readAloudAvailable: Boolean,
 ) {
     val label = Rooms.speakerLabel(message.speaker, participants, profiles, assistantName)
     val clipboard = LocalClipboardManager.current
@@ -772,7 +781,7 @@ private fun AssistantRow(
                         modifier = Modifier.size(48.dp).testTag("chat.copy.${message.id}").semantics { contentDescription = "Copy answer" }) {
                         ComposerActionIcon(ComposerIcon.COPY, CompanionColor.TextDim)
                     }
-                    IconButton(onClick = { onReadAloud(message) },
+                    if (readAloudAvailable) IconButton(onClick = { onReadAloud(message) },
                         modifier = Modifier.size(48.dp).testTag("chat.read.${message.id}").semantics {
                             contentDescription = if (readAloudMessageId == message.id) "Stop reading aloud" else "Read answer aloud"
                         }) {
@@ -917,7 +926,7 @@ private fun ApprovalStrip(prompt: ApprovalPrompt, onApproval: (String) -> Unit, 
             prompt.choices.forEach { choice ->
                 val deny = choice.equals("deny", ignoreCase = true) ||
                     choice.equals("reject", ignoreCase = true)
-                val label = when {
+                val label = prompt.choiceLabels[choice] ?: when {
                     deny -> "DENY"
                     choice.equals("once", ignoreCase = true) ||
                         choice.equals("allow", ignoreCase = true) ||

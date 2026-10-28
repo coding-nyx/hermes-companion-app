@@ -2,9 +2,11 @@
   <img src="docs/assets/readme-overview.svg" alt="Hermes Companion — Your self-hosted agent, on Android." width="100%" />
 </p>
 
-# Hermes Companion
+# Companion
 
 A native Android companion for a self-hosted [Hermes Agent](https://hermes-agent.nousresearch.com/). Browse threads, chat with profiles, use agent rooms and explicitly arm supported phone-control tools. The agent runs on your host; this app is its mobile interface.
+
+This branch contains the **Companion multi-agent prototype**: explicit Hermes, OpenClaw and Codync connections, a shared bot/chat workspace and an isolated interactive sample. See the [prototype guide, capability matrix and rollout gates](docs/companion-prototype.md). Live mixed-runtime rooms and OpenClaw/Codync phone tools remain later rollout stages.
 
 [Setup](#setup) · [Build](#build-from-source) · [Protocol docs](#documentation) · [Related projects](#related-projects)
 
@@ -54,7 +56,7 @@ The redesign adds a cyan/violet component system, static-by-default glitch accen
 
 Native completion and approval alerts are local notifications for known sessions on the connected host/profile, not durable push when Android stops the app. Optional ntfy relay subscriptions reconnect and replay safely. Existing topic users must re-save their topic for the exact host address, including any proxy path. See the [gateway integration audit](docs/design/gateway-integration-audit.md).
 
-The evaluation APK uses **Hermes Preview** (`app.hermes.companion.preview`) so it can coexist with the existing app. It has separate data, permissions and pairing, with no automatic migration. Keep the existing app installed; shared Hermes links may show an Android chooser. The preview is debug-signed, not a production update.
+The evaluation APK uses **Companion Prototype** (`app.hermes.companion.preview`) so it can coexist with the existing app. It has separate data, permissions and pairing, with no automatic migration. Keep the existing app installed; shared Hermes links may show an Android chooser. The preview is debug-signed, not a production update.
 
 ### Previous grouped interface checkpoint
 

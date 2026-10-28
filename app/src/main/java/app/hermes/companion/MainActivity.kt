@@ -1,5 +1,6 @@
 package app.hermes.companion
 
+import app.hermes.companion.backend.BackendWorkspaceScreen
 import android.Manifest
 import android.app.KeyguardManager
 import android.content.Intent
@@ -85,6 +86,7 @@ class MainActivity : FragmentActivity() {
             CompanionTheme {
                 val vm: CompanionViewModel = viewModel(factory = CompanionViewModel.factory(app))
                 val state by vm.state.collectAsStateWithLifecycle()
+                val backendState by vm.backendWorkspace.state.collectAsStateWithLifecycle()
                 val reconnect by reconnectNonce.collectAsStateWithLifecycle()
                 val overlay = remember { LiveOverlay(app) }
                 // Activity-result pickers briefly ON_STOP the activity; skip biometric lock while outstanding.
@@ -244,7 +246,7 @@ class MainActivity : FragmentActivity() {
                 LaunchedEffect(state.appLocked) {
                     if (state.appLocked) {
                         gate.authenticate(
-                            title = "Unlock Hermes",
+                            title = "Unlock Companion",
                             onSuccess = vm::unlock,
                             onFail = { msg -> if (msg.isNotBlank()) vm.noteError(msg) },
                         )
@@ -252,7 +254,9 @@ class MainActivity : FragmentActivity() {
                 }
 
                 Box(Modifier.fillMaxSize()) {
-                CompanionShell(
+                if (backendState.visible) BackendWorkspaceScreen(backendState,vm.backendWorkspace,
+                    onExit = { if (state.origin == null) finish() else vm.backendWorkspace.hide() },onHermesTools = vm::openHermesControls)
+                else CompanionShell(
                     state = state,
                     onOriginChange = vm::onOriginChange,
                     onUsernameChange = vm::onUsernameChange,
@@ -425,6 +429,7 @@ class MainActivity : FragmentActivity() {
                     onSelectGateway = vm::selectGateway,
                     onAddGateway = vm::addSavedGateway,
                     onConnectionMode = vm::setConnectionMode,
+                    onBackendConnections = vm::showBackendConnections,
                     onCheckUpdate = vm::checkUpdates,
                     onApplyUpdate = vm::applyUpdate,
                     onReadAloud = vm::readMessageAloud,
@@ -509,7 +514,7 @@ class MainActivity : FragmentActivity() {
                     BiometricLockOverlay(
                         onUnlock = {
                             gate.authenticate(
-                                title = "Unlock Hermes",
+                                title = "Unlock Companion",
                                 onSuccess = vm::unlock,
                                 onFail = { msg -> if (msg.isNotBlank()) vm.noteError(msg) },
                             )

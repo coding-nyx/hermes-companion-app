@@ -194,7 +194,7 @@ class DeskActivity : FragmentActivity() {
         val binding = vm.state.value.binding ?: return
         vm.stopVoice()
         try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(WakePolicy.deepLink(binding.session, binding.profile, binding.origin))).setPackage("app.hermes.companion")) }
-        catch (_: ActivityNotFoundException) { vm.coordinator.error("Install Hermes Companion to open this conversation there") }
+        catch (_: ActivityNotFoundException) { vm.coordinator.error("Install Companion to open this conversation there") }
     }
     override fun onStart() { super.onStart(); foregroundVisible = true }
     override fun onStop() {

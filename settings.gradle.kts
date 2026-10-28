@@ -38,3 +38,5 @@ include(":feature-device")
 include(":core-voice")
 include(":feature-desk")
 include(":desk-app")
+
+include(":core-backend")

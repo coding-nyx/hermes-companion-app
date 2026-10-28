@@ -47,6 +47,7 @@ fun BotsScreen(
     modifier: Modifier = Modifier,
     onHostSwitch: () -> Unit = onGateways, onSettings: () -> Unit = {},
     onChats: () -> Unit = {},
+    onConnections: (() -> Unit)? = null,
 ) {
     var editing by remember(state.owner) { mutableStateOf<NativeBot?>(null) }
     var createBot by remember(state.owner) { mutableStateOf(false) }
@@ -83,6 +84,7 @@ fun BotsScreen(
                         if (state.selected == null) {
                             DropdownMenuItem(text = { Text(if (showHidden) "Hide hidden bots" else "Show hidden bots") }, onClick = { options = false; showHidden = !showHidden })
                             DropdownMenuItem(text = { Text("Routines") }, onClick = { options = false; onSchedules() })
+                            if (onConnections != null) DropdownMenuItem(text = { Text("Connections") }, onClick = { options = false; onConnections() }, modifier = Modifier.testTag("bots.connections"))
                             DropdownMenuItem(text = { Text("Manage gateways") }, onClick = { options = false; onGateways() })
                             DropdownMenuItem(text = { Text("Settings") }, onClick = { options = false; onSettings() }, modifier = Modifier.testTag("header.settings"))
                         } else {

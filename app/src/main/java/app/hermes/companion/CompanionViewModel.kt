@@ -216,7 +216,38 @@ class CompanionViewModel(
         mention = bots::mention, rename = bots::rename, stop = bots::stop, disband = bots::disband,
         approve = bots::approve, retry = bots::retry, recover = bots::recover)
 
+    private val backendVault = app.hermes.companion.backend.BackendVault(runtime)
+    val backendWorkspace = app.companion.backend.BackendCoordinator(viewModelScope, backendVault,
+        app.companion.backend.BackendFactory { connection, secret, pairing ->
+            when (connection.runtime) {
+                app.companion.backend.AgentRuntime.HERMES -> {
+                    val old = operatorCreds.load(connection.endpoint)
+                    val credentials = app.companion.backend.AgentCredentials(secret.seed, secret.token.ifBlank { old?.sessionToken.orEmpty() },
+                        secret.password.ifBlank { old?.password.orEmpty() }, secret.deviceToken, secret.username.ifBlank { old?.username.orEmpty() })
+                    app.hermes.companion.data.remote.HermesAgentBackend(connection, clients, credentials,
+                        deviceCreds.load(connection.endpoint)?.let { "${it.deviceId}:${it.credential}" })
+                }
+                app.companion.backend.AgentRuntime.OPENCLAW -> app.companion.backend.OpenClawBackend(connection, secret) { token ->
+                    val current = backendVault.credentials(connection)
+                    backendVault.credentials(connection, app.companion.backend.AgentCredentials(current.seed,current.token,current.password,token,current.username))
+                }
+                app.companion.backend.AgentRuntime.CODYNC -> app.companion.backend.codync.CodyncBackend(connection, secret, pairing)
+            }
+        })
+    fun showBackendConnections() {
+        cancelDictation(); readAloud.stop(); voiceStream.stopStream()
+        backendWorkspace.show()
+    }
+    fun openHermesControls(origin: String) { backendWorkspace.hide(); connect(origin) }
+
     init {
+        if (!backendWorkspace.restore() && initialOrigin.isNullOrBlank()) backendWorkspace.show()
+        for (gateway in operatorCreds.loadGateways()) if (gateway.kind == "hermes") {
+            runCatching {
+                val connection=app.companion.backend.AgentConnection.create(app.companion.backend.AgentRuntime.HERMES,gateway.origin,gateway.name)
+                if(backendVault.connections().none { it.owner==connection.owner }) backendVault.save(connection)
+            }
+        }
         val appOwner = runtime
         chat.onSessionDeleted = { origin, profile, session ->
             kotlinx.coroutines.withContext(Dispatchers.IO) { appOwner.voiceJournal.remove(origin, profile, session) }
@@ -1159,6 +1190,7 @@ class CompanionViewModel(
     }
 
     override fun onCleared() {
+        backendWorkspace.close()
         clients.all().values.forEach { it.closeBotSockets() }
         cancelDictation(); readAloud.stop()
         if (voiceStream.isActive) { super.onCleared(); return }
