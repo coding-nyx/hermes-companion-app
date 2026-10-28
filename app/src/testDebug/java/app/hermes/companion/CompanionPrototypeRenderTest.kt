@@ -72,6 +72,9 @@ class CompanionPrototypeRenderTest {
         compose.onNodeWithTag("chat.draft").performClick().performTextInput("A complete\nmultiline draft")
         listOf("chat.attach","chat.slash","chat.voice","chat.models").forEach {compose.onNodeWithTag(it).assertDoesNotExist()}
         capture("$name-chat-editing")
+        compose.onNodeWithTag("chat.draft").performTextReplacement("/arm")
+        compose.onNodeWithTag("chat.slash.bar").assertDoesNotExist()
+        compose.onNodeWithTag("chat.draft").performTextReplacement("A complete\nmultiline draft")
         compose.onNodeWithTag("backend.chat.back").performClick()
         compose.onNodeWithTag("backend.bot.hermes:coder").performScrollTo().performClick()
         compose.waitUntil(5000) {c.state.value.thread?.botId=="hermes:coder"}

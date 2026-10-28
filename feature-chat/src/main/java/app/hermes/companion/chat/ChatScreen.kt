@@ -157,6 +157,7 @@ fun ChatScreen(
     voiceAvailable: Boolean = true,
     readAloudAvailable: Boolean = true,
     commandsAvailable: Boolean = true,
+    mentionsAvailable: Boolean = true,
     /** Room v2 (A22.10): floor state, participants, actions. Null outside a room. */
     room: RoomRef? = null,
     roomCandidates: List<Pair<String, String>> = emptyList(),
@@ -447,7 +448,7 @@ fun ChatScreen(
                 }
             }
         }
-        if (roomMode) {
+        if (roomMode && mentionsAvailable) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -492,7 +493,7 @@ fun ChatScreen(
             emptyList()
         }
 
-        if (filteredSlash.isNotEmpty()) {
+        if (commandsAvailable && filteredSlash.isNotEmpty()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

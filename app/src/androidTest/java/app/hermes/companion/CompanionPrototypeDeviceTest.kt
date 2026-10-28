@@ -32,15 +32,35 @@ class CompanionPrototypeDeviceTest {
     @get:Rule val compose=createAndroidComposeRule<MainActivity>()
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
     private var coordinator:BackendCoordinator?=null
-    @After fun close() {coordinator?.close();scope.cancel()}
+    private val originalSystemConfiguration=Configuration(android.content.res.Resources.getSystem().configuration)
+    @After fun close() {
+        coordinator?.close();scope.cancel()
+        // Companion's static palette reads this process's system Resources; never change OS settings.
+        val resources=android.content.res.Resources.getSystem()
+        @Suppress("DEPRECATION") resources.updateConfiguration(originalSystemConfiguration,resources.displayMetrics)
+    }
     private fun ready() {
         val i=InstrumentationRegistry.getInstrumentation()
-        assertFalse("Unlock the S22 before UI validation",i.targetContext.getSystemService(KeyguardManager::class.java).isKeyguardLocked)
-        i.runOnMainSync {compose.activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)}
+        i.runOnMainSync {
+            compose.activity.setShowWhenLocked(false)
+            compose.activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        val keyguard=i.targetContext.getSystemService(KeyguardManager::class.java)
+        runBlocking {
+            val deadline=System.nanoTime()+90_000_000_000L
+            while(keyguard.isKeyguardLocked && System.nanoTime()<deadline) delay(100)
+        }
+        assertFalse("Unlock the S22 before UI validation",keyguard.isKeyguardLocked)
     }
     private fun screenshot(name:String) {
         compose.waitForIdle();val i=InstrumentationRegistry.getInstrumentation()
+        i.waitForIdleSync();Thread.sleep(600);i.waitForIdleSync()
+        if(name.endsWith("-chat-editing")) {
+            val send=compose.onNodeWithTag("chat.send").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            assertTrue("Send target must stay fully visible after the keyboard settles",send.height>=48*i.targetContext.resources.displayMetrics.density-1)
+        }
         val bitmap=i.uiAutomation.takeScreenshot() ?: error("No device screenshot")
+        if(name.startsWith("light-")) assertTrue("Light theme must be rendered in the captured frame",android.graphics.Color.luminance(bitmap.getPixel(3,bitmap.height/2))>0.35f)
         val file=File(i.targetContext.filesDir,"prototype-device/$name.png");file.parentFile!!.mkdirs()
         file.outputStream().use {bitmap.compress(Bitmap.CompressFormat.PNG,100,it)}
     }
@@ -61,7 +81,14 @@ class CompanionPrototypeDeviceTest {
         compose.onNodeWithTag("backend.sample").performScrollTo().performClick()
         compose.waitUntil(5000) {c.state.value.bots.size==6}
         for(mode in listOf("dark","light","large")) {
-            i.runOnMainSync {variant=mode};compose.waitForIdle()
+            i.runOnMainSync {
+                val resources=android.content.res.Resources.getSystem()
+                val configuration=Configuration(resources.configuration).apply {uiMode=(uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or if(mode=="light") Configuration.UI_MODE_NIGHT_NO else Configuration.UI_MODE_NIGHT_YES}
+                @Suppress("DEPRECATION") resources.updateConfiguration(configuration,resources.displayMetrics)
+                val appearance=android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                compose.activity.window.insetsController?.setSystemBarsAppearance(if(mode=="light") appearance else 0,appearance)
+                variant=mode
+            };compose.waitForIdle()
             compose.onNodeWithTag("navigation.bar").assertIsDisplayed();screenshot("$mode-bots")
             compose.onNodeWithTag("backend.new").performClick();compose.onNodeWithTag("backend.new.group").performClick()
             compose.onNodeWithTag("backend.pick.hermes:coder").performScrollTo().performClick()
@@ -71,7 +98,10 @@ class CompanionPrototypeDeviceTest {
             compose.waitUntil(5000) {c.state.value.thread!=null}
             assertEquals("Coder, Research",c.state.value.thread!!.title)
             compose.onNodeWithTag("navigation.bar").assertDoesNotExist()
+            compose.onNodeWithTag("chat.mentions").assertDoesNotExist()
+            if(mode!="large") compose.onNodeWithTag("chat.draft").assertHeightIsEqualTo(48.dp)
             compose.onNodeWithTag("chat.draft").performClick().performTextInput("Complete\nmultiline draft")
+            compose.onNodeWithTag("chat.send").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
             compose.onNodeWithTag("chat.voice").assertDoesNotExist();compose.onNodeWithTag("chat.attach").assertDoesNotExist();screenshot("$mode-chat-editing")
             i.runOnMainSync {compose.activity.window.insetsController?.hide(android.view.WindowInsets.Type.ime())}
             compose.onNodeWithTag("backend.chat.back").performClick()

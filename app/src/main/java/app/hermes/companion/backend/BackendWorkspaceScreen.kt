@@ -55,7 +55,7 @@ fun BackendWorkspaceScreen(state: BackendWorkspaceState,coordinator: BackendCoor
                 threadId="${connection.owner}:${thread.id}",assistantName=state.bots.find { it.id==thread.botId }?.name ?: thread.title,
                 profiles=state.bots.map {ProfileRef(it.id,it.name,it.name.take(3).uppercase())}+state.bots.flatMap { it.memberLabels.map { (id,name)->ProfileRef(id,name,name.take(3).uppercase()) } },
                 participants=if(thread.group) state.bots.find {it.id==thread.botId}?.members.orEmpty().map {RoomParticipant(it,it.take(3).uppercase())} else emptyList(),
-                attachmentsAvailable=false,modelsAvailable=false,voiceAvailable=false,readAloudAvailable=false,commandsAvailable=false,
+                attachmentsAvailable=false,modelsAvailable=false,voiceAvailable=false,readAloudAvailable=false,commandsAvailable=false,mentionsAvailable=false,
                 modifier=Modifier.weight(1f))
         } else {
             state.error?.let { StatusStrip(it,modifier=Modifier.padding(horizontal=16.dp)) }

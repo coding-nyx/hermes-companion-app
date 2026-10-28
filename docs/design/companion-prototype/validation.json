@@ -16,17 +16,30 @@
     ],
     "agentPromptsSent": 0
   },
-  "s22": "pending current wireless ADB address",
+  "s22": {
+    "model": "SM-S901E",
+    "android": 16,
+    "api": 36,
+    "testsPassed": 2,
+    "testsFailed": 0,
+    "seconds": 21.023,
+    "installedApkHashVerified": true,
+    "lightThemePixelsChecked": true,
+    "settledKeyboardSendTargetChecked": true,
+    "inactiveGroupInputDp": 48,
+    "hands": "disarmed",
+    "openClawRoute": "ADB reverse to localhost:18789"
+  },
   "codyncLive": "pending host",
   "screenshots": "docs/design/companion-prototype",
   "artifacts": {
     "companion-prototype-arm64-debug.apk": {
-      "sha256": "af1449aca0cb4bae971cc274828de3f2156bdf69fe5dd0accc93b42ccb199914",
-      "bytes": 60933524
+      "sha256": "b3e59540c477aa87694a97ad2bafccf1e27fb08e7ab886a4b6c8f7e3cd210a0a",
+      "bytes": 60933584
     },
     "companion-prototype-arm64-tests.apk": {
-      "sha256": "0881648cc0a1e64de00d5e2792b54cd1ab6ac480349b7f0397534a38a968391a",
-      "bytes": 3681862
+      "sha256": "a1c1214d99ac68a01d56051e99c0a75698ad8a85e085207ec6f11b3fd20212f8",
+      "bytes": 3684646
     }
   },
   "unitResults": {
