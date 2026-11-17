@@ -116,6 +116,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":hands-client"))
     implementation(project(":core-backend"))
     implementation(libs.androidx.security.crypto)
     implementation("com.google.firebase:firebase-messaging:25.0.1")

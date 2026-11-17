@@ -12,10 +12,24 @@ TTL_SEC = 30
 
 ALLOWLIST = frozenset(
     {
+        "device.accessibility.status",
+        "device.accessibility.enable",
+        "device.accessibility.disable",
+        "device.accessibility.services",
+        "device.accessibility.service.set",
+        "device.secure_settings.list",
+        "device.secure_settings.set",
+        "device.agent_screen.start",
+        "device.agent_screen.status",
+        "device.agent_screen.stop",
+        "device.files.access",
+        "device.files.enable",
+        "device.files",
         "device.noop",
         "device.snapshot",
         "device.click",
         "device.type",
+        "device.secure_entry",
         "device.swipe",
         "device.scroll",
         "device.press",
@@ -25,6 +39,11 @@ ALLOWLIST = frozenset(
         "device.screenshot",
         "device.arm",
         "device.disarm",
+        "device.status",
+        "device.arm.renew",
+        "device.display.keep_awake",
+        "device.display.brightness.get",
+        "device.display.brightness.set",
         "device.notifications",
     }
 )

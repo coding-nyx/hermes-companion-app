@@ -9,13 +9,16 @@ object DeviceLanePolicy {
     const val TICKET_PREFIX = "hermes-mobile-control-ticket."
     const val TICKET_TTL_MS = 30_000L
     const val PROTOCOL_VERSION = 1
-    const val IDLE_DISARM_MS = 300_000L
+    const val IDLE_DISARM_MS = 3_600_000L
+    const val MIN_HOLD_SECONDS = 30L
+    const val MAX_HOLD_SECONDS = 7_200L
 
     val CAPABILITIES = listOf(
         "device.noop",
         "device.snapshot",
         "device.click",
         "device.type",
+        "device.secure_entry",
         "device.swipe",
         "device.scroll",
         "device.press",
@@ -24,8 +27,26 @@ object DeviceLanePolicy {
         "device.wait",
         "device.screenshot",
         "device.arm",
+        "device.arm.renew",
+        "device.agent_screen.start",
+        "device.agent_screen.status",
+        "device.agent_screen.stop",
+        "device.status",
+        "device.display.keep_awake",
+        "device.display.brightness.get",
+        "device.display.brightness.set",
         "device.disarm",
         "device.notifications",
+        "device.files.access",
+        "device.files.enable",
+        "device.files",
+        "device.accessibility.status",
+        "device.accessibility.enable",
+        "device.accessibility.disable",
+        "device.accessibility.services",
+        "device.accessibility.service.set",
+        "device.secure_settings.list",
+        "device.secure_settings.set",
         // L0 (direct API) tools — do not require a11y and are not scoped to the foreground app.
         "device.audio.volume.get",
         "device.audio.volume.set",
@@ -86,6 +107,21 @@ object DeviceLanePolicy {
      * lane policy; passive reads may also be allowed while disarmed.
      */
     val L0_NO_A11Y: Set<String> = setOf(
+        "device.agent_screen.start",
+        "device.agent_screen.status",
+        "device.arm.renew",
+        "device.status",
+        "device.display.brightness.get",
+        "device.display.brightness.set",
+        "device.accessibility.status",
+        "device.accessibility.enable",
+        "device.accessibility.services",
+        "device.accessibility.service.set",
+        "device.secure_settings.list",
+        "device.secure_settings.set",
+        "device.files.access",
+        "device.files.enable",
+        "device.files",
         "device.audio.volume.get",
         "device.audio.volume.set",
         "device.audio.ringer",
@@ -136,6 +172,11 @@ object DeviceLanePolicy {
      * (e.g. health checks, listing sessions). Destructive ones still require ARM.
      */
     val L0_PASSIVE: Set<String> = setOf(
+        "device.agent_screen.status",
+        "device.status",
+        "device.display.brightness.get",
+        "device.accessibility.status",
+        "device.files.access",
         "device.audio.volume.get",
         "device.media.sessions",
         "device.media.now_playing",
@@ -255,12 +296,18 @@ object DeviceLanePolicy {
         lastRefs: Set<String> = emptySet(),
         targetPackage: String? = null,
         extraProtected: Set<String> = emptySet(),
+        privateEntryActive: Boolean = false,
+        secureEntryAction: String? = null,
+        keepAwakeReadOrStop: Boolean = false,
     ): String? {
         if (action !in CAPABILITIES) return "capability_denied"
-        if (action == "device.disarm") return null
+        if (action == "device.disarm" || action == "device.accessibility.disable" || action == "device.agent_screen.stop") return null
+        val secureMetadata = action == "device.secure_entry" && secureEntryAction in setOf("status", "cancel")
+        if (privateEntryActive && !secureMetadata && action != "device.status" && action != "device.agent_screen.status" && !keepAwakeReadOrStop) return "privacy_active"
+        if (secureMetadata) return null
         // Arming never depends on accessibility: an L0-only session is legitimate. Per-action
         // capability checks below still refuse the L1 lane with `a11y_unavailable`.
-        if (action == "device.arm") return null
+        if (action == "device.arm" || action == "device.display.keep_awake") return null
         val l0 = action in L0_NO_A11Y
         if (l0) {
             // L0 actions don't need a11y and don't check the foreground app — they're
@@ -302,7 +349,7 @@ object DeviceLanePolicy {
         }
     }
 
-    private val REF_ACTIONS = setOf("device.click", "device.type", "device.swipe", "device.scroll")
+    private val REF_ACTIONS = setOf("device.click", "device.type", "device.swipe", "device.scroll", "device.secure_entry")
 
     private fun q(value: String): String = buildString {
         append('"')

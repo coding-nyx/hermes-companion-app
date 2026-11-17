@@ -56,6 +56,9 @@ class CompanionNotificationListener : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
+        DevicePrivacy.initialize(this)
+        if (DevicePrivacy.active) return
+        val privacyEpoch = DevicePrivacy.epoch.get()
         if (sbn == null) return
         if (!NotifStreamBus.streamEnabled) return
         val pkg = sbn.packageName.orEmpty()
@@ -76,12 +79,13 @@ class CompanionNotificationListener : NotificationListenerService() {
         if (!NotificationCapturePolicy.selected(pkg, NotifStreamBus.allowedApps, n.category.orEmpty(), NotifStreamBus.includeCalls)) return
         if ((n.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
         val extras = n.extras
-        val title = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty().take(240)
+        val title = DevicePrivacy.sanitize(extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()).take(240)
         val text = sequenceOf(
             extras?.getCharSequence(Notification.EXTRA_TEXT),
             extras?.getCharSequence(Notification.EXTRA_BIG_TEXT),
             extras?.getCharSequence(Notification.EXTRA_SUB_TEXT),
-        ).mapNotNull { it?.toString()?.takeIf { s -> s.isNotBlank() } }.firstOrNull().orEmpty().take(480)
+        ).mapNotNull { it?.toString()?.takeIf { s -> s.isNotBlank() } }.firstOrNull().orEmpty()
+            .let(DevicePrivacy::sanitize).take(480)
         val content = NotificationCapturePolicy.content(title, text, if (n.visibility == Notification.VISIBILITY_SECRET) "metadata" else mode)
         val category = n.category.orEmpty()
         val rawKey = sbn.key ?: "$pkg:${sbn.id}:${sbn.postTime}"
@@ -95,12 +99,13 @@ class CompanionNotificationListener : NotificationListenerService() {
         // Register only what we actually stream, so the action tools inherit the same
         // protected-package and denylist filtering the stream applies above.
         sbn.key?.let { NotifStreamBus.rememberKey(key, it) }
+        if (DevicePrivacy.active || privacyEpoch != DevicePrivacy.epoch.get()) return
         NotifStreamBus.emit(
             NotifStreamEvent(
                 key = key,
                 packageName = pkg,
-                title = content.first,
-                text = content.second,
+                title = DevicePrivacy.sanitize(content.first),
+                text = DevicePrivacy.sanitize(content.second),
                 consentVersion = generation,
                 contentMode = mode,
                 category = category,

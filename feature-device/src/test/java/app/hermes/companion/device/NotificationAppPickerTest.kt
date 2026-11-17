@@ -82,7 +82,7 @@ class NotificationAppPickerTest {
         assertEquals(0, starts)
     }
 
-    @Test fun selectedAppsAndRouteCannotEnableWithoutAndroidAccess() {
+    @Test fun selectedAppsAndRouteCannotEnableWithoutHandsConnection() {
         var starts = 0
         rule.setContent { CompanionTheme {
             DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "assistant", error = null,
@@ -92,7 +92,8 @@ class NotificationAppPickerTest {
         } }
         rule.onNodeWithTag("device.stream.open").performScrollTo().performClick()
         rule.onNodeWithTag("device.stream").assertIsNotEnabled()
-        rule.onNodeWithText("Allow notification access before starting sharing").assertIsDisplayed()
+        rule.onNodeWithTag("device.hands.status").assertTextContains("Connect Hands to enable mobile tools")
+        rule.onNodeWithTag("device.nls.enable").assertDoesNotExist()
         assertEquals(0, starts)
     }
 
@@ -100,14 +101,14 @@ class NotificationAppPickerTest {
         var starts = 0
         rule.setContent { CompanionTheme {
             DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "assistant", error = null,
-                nlsBound = true, notifStreamOrigin = "https://gateway.example", notifStreamProfile = "assistant",
+                externalHands = true, nlsBound = true, notifStreamOrigin = "https://gateway.example", notifStreamProfile = "assistant",
                 notifStreamApps = setOf("com.example.calendar"), onPair = {}, onCancel = {}, onRevoke = {},
                 onToggleNotifStream = { starts++ })
         } }
         rule.onNodeWithTag("device.stream.open").performScrollTo().performClick()
-        rule.onNodeWithTag("device.stream").performClick()
+        rule.onNodeWithTag("device.stream").performScrollTo().performClick()
         assertEquals(0, starts)
-        rule.onNodeWithText("Start notification sharing?").assertIsDisplayed()
+        rule.onNodeWithText("Forward notifications from Hands?").assertIsDisplayed()
         capture("notification-sharing-confirmation")
         rule.onNodeWithTag("device.stream.confirm").performClick()
         assertEquals(1, starts)

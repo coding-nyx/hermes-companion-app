@@ -8,6 +8,34 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DeviceLanePolicyTest {
+    @Test fun displayHoldsAreIndependentButBrightnessWritesAndRenewalNeedConsent() {
+        assertNull(DeviceLanePolicy.reject(DeviceArm.DISARMED, false, "device.display.keep_awake",
+            foregroundApp = "com.private.app", extraProtected = setOf("com.private.app")))
+        assertNull(DeviceLanePolicy.reject(DeviceArm.DISARMED, false, "device.status"))
+        assertNull(DeviceLanePolicy.reject(DeviceArm.DISARMED, false, "device.display.brightness.get"))
+        for (action in listOf("device.display.brightness.set", "device.arm.renew", "device.click")) {
+            assertEquals(action, "disarmed", DeviceLanePolicy.reject(DeviceArm.DISARMED, false, action))
+        }
+        assertNull(DeviceLanePolicy.reject(DeviceArm.ARMED, false, "device.arm.renew"))
+        assertNull(DeviceLanePolicy.reject(DeviceArm.ARMED, false, "device.display.brightness.set"))
+    }
+
+    @Test fun privacyAllowsOnlyDisplayStatusAndStoppingAnExistingHold() {
+        assertNull(DeviceLanePolicy.reject(DeviceArm.DISARMED, false, "device.status", privateEntryActive = true))
+        assertEquals("privacy_active", DeviceLanePolicy.reject(DeviceArm.DISARMED, false,
+            "device.display.keep_awake", privateEntryActive = true))
+        assertNull(DeviceLanePolicy.reject(DeviceArm.DISARMED, false, "device.display.keep_awake",
+            privateEntryActive = true, keepAwakeReadOrStop = true))
+        assertEquals("privacy_active", DeviceLanePolicy.reject(DeviceArm.ARMED, false,
+            "device.display.brightness.get", privateEntryActive = true))
+    }
+    @Test fun accessibilityOffIsAnUnarmedStopAndOnRequiresConsentWithoutAccessibility() {
+        assertNull(DeviceLanePolicy.reject(DeviceArm.DISARMED, false, "device.accessibility.disable",
+            foregroundApp = "com.private.app", extraProtected = setOf("com.private.app")))
+        assertNull(DeviceLanePolicy.reject(DeviceArm.DISARMED, false, "device.accessibility.status"))
+        assertEquals("disarmed", DeviceLanePolicy.reject(DeviceArm.DISARMED, false, "device.accessibility.enable"))
+        assertNull(DeviceLanePolicy.reject(DeviceArm.ARMED, false, "device.accessibility.enable"))
+    }
     @Test
     fun ticketNeverInWsUrl() {
         val url = DeviceLanePolicy.wsUrl("http://host:9119")

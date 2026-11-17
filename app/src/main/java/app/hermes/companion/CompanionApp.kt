@@ -22,6 +22,9 @@ class CompanionApp : Application() {
     val voiceJournal by lazy { app.hermes.companion.data.local.VoiceJournal.encrypted(this) }
     val nativeBotOperations by lazy { app.hermes.companion.data.local.NativeBotOperationStore.encrypted(this) }
     /** One DashboardClient per host (A8.5): token, cookies and sockets never cross hosts. */
+    val handsClient by lazy {
+        app.hermes.hands.client.HandsClient(app.hermes.hands.client.EncryptedHandsConnectionStore(this))
+    }
     val clients: HostClientPool = HostClientPool { DashboardClient() }
     fun clientFor(origin: String): DashboardClient = clients.forOrigin(origin)
     lateinit var sticky: StickyStore

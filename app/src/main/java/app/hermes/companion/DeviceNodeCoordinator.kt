@@ -1,67 +1,30 @@
 package app.hermes.companion
 
-import android.os.Build
-
 import android.content.Intent
-import android.util.Base64
+import android.os.Build
 import androidx.core.content.ContextCompat
 import app.hermes.companion.data.local.DeviceCredStore
-import app.hermes.companion.data.local.NotificationOutboxStore
 import app.hermes.companion.data.local.StickyStore
 import app.hermes.companion.data.remote.DashboardClient
 import app.hermes.companion.data.remote.DashboardException
 import app.hermes.companion.data.remote.HostClientPool
-import app.hermes.companion.device.CompanionAccessibilityService
-import app.hermes.companion.device.DirectToolbox
-import app.hermes.companion.device.HandsBridge
-import app.hermes.companion.device.IntentToolbox
-import app.hermes.companion.device.HandsService
-import app.hermes.companion.device.NotifActions
-import app.hermes.companion.device.NotifStreamBus
-import app.hermes.companion.device.SpeechToolbox
-import app.hermes.companion.device.SystemToolbox
-import app.hermes.companion.device.NotifStreamEvent
-import app.hermes.companion.device.StopStreamReceiver
-import app.hermes.companion.device.TelephonyToolbox
-import app.hermes.companion.domain.NotificationDeliveryPolicy
-import app.hermes.companion.domain.NotificationCapturePolicy
-import app.hermes.companion.domain.NotificationStreamPolicy
-import app.hermes.companion.domain.WakePolicy
-import app.hermes.companion.domain.CompactTree
-import app.hermes.companion.domain.DeviceArming
-import app.hermes.companion.domain.DeviceAudit
-import app.hermes.companion.domain.DeviceAuditRow
-import app.hermes.companion.domain.DeviceGestures
-import app.hermes.companion.domain.JsonText
-import app.hermes.companion.domain.DeviceLanePolicy
-import app.hermes.companion.domain.JsonArgs
-import app.hermes.companion.domain.OriginPolicy
-import app.hermes.companion.domain.PairingPolicy
-import app.hermes.companion.domain.SwipeSpec
-import app.hermes.companion.model.DeviceArm
-import app.hermes.companion.model.DeviceCommand
-import app.hermes.companion.model.DeviceCred
-import app.hermes.companion.model.DeviceResult
-import app.hermes.companion.model.PairingPhase
-import app.hermes.companion.model.ScreenSafeArea
-import app.hermes.companion.model.SnapshotNode
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import app.hermes.companion.domain.*
+import app.hermes.companion.model.*
+import app.hermes.hands.client.HandsClient
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import org.json.JSONObject
 
-/** Everything the phone knows about itself as a device node. Mirrored into the UI by the ViewModel. */
 data class DeviceNodeState(
+    val externalHands: Boolean = false,
+    val externalHandsReachable: Boolean = false,
+    val externalHandsArmed: Boolean = false,
+    val externalHandsBackend: String = "",
+    val externalHandsTarget: String = "",
+    val externalHandsA11y: Boolean = false,
+    val externalHandsPrivacy: Boolean = false,
+    val externalHandsScreenControl: Boolean = false,
+    val externalHandsError: String? = null,
     val pairingPhase: PairingPhase = PairingPhase.IDLE,
     val pairingCode: String = "",
     val deviceId: String? = null,
@@ -92,154 +55,152 @@ data class DeviceNodeState(
     val notifLastAgeMs: Long? = null,
 )
 
-/**
- * Application-scoped device node (A7.4).
- *
- * Owns arming, the idle auto-disarm timer, the kill-switch foreground service, the device WSS
- * lane, command policy + execution, the audit line and pairing. All of it runs in the app scope,
- * so an armed phone still auto-disarms after [DeviceLanePolicy.IDLE_DISARM_MS] when MainActivity
- * and its ViewModel are long gone. The phone is the source of truth: Hermes can never re-arm.
- */
+/** Host transport only. All Android control, permissions and personal data belong to Hands. */
 class DeviceNodeCoordinator(
     private val app: CompanionApp,
     private val clients: HostClientPool,
     private val deviceCreds: DeviceCredStore,
     private val sticky: StickyStore,
     private val scope: CoroutineScope,
+    private val handsClient: HandsClient = app.handsClient,
 ) {
-    private val _state = MutableStateFlow(
-        DeviceNodeState(
-            protectedCustom = sticky.protectedPackages.sorted(),
-            pairedHosts = deviceCreds.loadAll().map { it.origin },
-            notifStreamEnabled = sticky.notifStreamEnabled,
-            notifStreamApps = sticky.notifStreamApps,
-            notifStreamContent = sticky.notifStreamContent,
-            notifStreamRetentionMinutes = sticky.notifStreamRetentionMinutes,
-            notifStreamCalls = sticky.notifStreamCalls,
-            notifStreamOrigin = sticky.notifStreamTargetOrigin(),
-            notifStreamProfile = sticky.notifStreamTargetOrigin()?.let { sticky.notifStreamProfileFor(it) },
-            nlsBound = NotifStreamBus.listenerBound,
-        ),
-    )
+    private val _state = MutableStateFlow(DeviceNodeState(
+        pairedHosts = deviceCreds.loadAll().map { it.origin },
+        notifStreamEnabled = sticky.notifStreamEnabled,
+        notifStreamOrigin = sticky.notifStreamTargetOrigin(),
+        notifStreamProfile = sticky.notifStreamTargetOrigin()?.let(sticky::notifStreamProfileFor)))
     val state: StateFlow<DeviceNodeState> = _state
-
-    /** Pairing failures and the like; the UI surfaces them in its shared error slot. */
     private val _errors = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val errors: SharedFlow<String> = _errors
-
-    @Volatile
-    private var origin: String? = null
+    @Volatile private var origin: String? = null
     private val lanes = mutableMapOf<String, Job>()
-    private fun client(origin: String): DashboardClient = clients.forOrigin(origin)
-    private var idleJob: Job? = null
+    private val owners = mutableMapOf<String, MutableSet<String>>()
     private var pairJob: Job? = null
-    /**
-     * Set when a command changed the stream config and therefore owes a lane re-registration.
-     * The refresh tears down and reopens the lane, which would kill the response path for the
-     * very command that asked for it — so [handleCommand] runs it *after* the reply is sent.
-     */
-    private var pendingLaneRefresh = false
-    private var lastRefs: Set<String> = emptySet()
-    private var lastNodes: List<SnapshotNode> = emptyList()
-    private val rateHits = mutableListOf<Long>()
-    private var auditRows: List<DeviceAuditRow> = emptyList()
-    private data class PendingNotification(val event: NotifStreamEvent, val origin: String, val profile: String, val deviceId: String, val credentialHash: String, val deliveryId: String = java.util.UUID.randomUUID().toString(), var lastAttemptMs: Long = 0L, var persisted: Boolean = false)
-    private val outbox = NotificationOutboxStore(app)
-    private data class OutboxSnapshot(val version: Long, val json: String?, val ids: Set<String>)
-    private val outboxWrites = kotlinx.coroutines.channels.Channel<OutboxSnapshot>(kotlinx.coroutines.channels.Channel.CONFLATED)
-    private var lastStreamError = ""
-    private var deliveredCount = 0
-    private var droppedCount = 0
-    private var expiredCount = 0
-    private var overflowCount = 0
-    private var rejectedCount = 0
-    private val pendingNotifs = ArrayDeque<PendingNotification>()
-    private val pendingNotifCap = 128
-    private fun streamTtlMs() = sticky.notifStreamRetentionMinutes * 60_000L
-    private var lastNotifAtMs: Long? = null
-
+    private var idleJob: Job? = null
+    private fun client(origin: String): DashboardClient = clients.forOrigin(origin)
+    private val notifications = HandsNotificationRelay(app, handsClient, clients, deviceCreds, sticky, scope) { status ->
+        _state.update { it.copy(notifStreamApps = status.apps, notifStreamContent = status.content,
+            notifStreamRetentionMinutes = status.retentionMinutes, notifStreamCalls = status.includeCalls,
+            nlsBound = status.nlsBound, notifStreamDelivery = status.message, notifLastAgeMs = status.lastAgeMs) }
+    }
     init {
-        // Volume chord, notification tap (DisarmReceiver) and HandsService teardown all land here.
-        HandsBridge.onDisarm = { disarm() }
-        CompanionAccessibilityService.onConnectionChanged = { refreshAccessibilityState() }
-        refreshAccessibilityState()
-        syncNotifBusConfig(invalidate = false)
-        scope.launch(Dispatchers.IO) {
-            for (snapshot in outboxWrites) {
-                try {
-                    if (snapshot.json == null) outbox.clear() else outbox.write(snapshot.json)
-                    withContext(Dispatchers.Main.immediate) {
-                        if (snapshot.version == sticky.notifStreamConsentVersion) {
-                            pendingNotifs.filter { it.deliveryId in snapshot.ids }.forEach { it.persisted = true }
-                            val target = sticky.notifStreamTargetOrigin()
-                            val profile = target?.let { sticky.notifStreamProfileFor(it) }
-                            val cred = target?.let { deviceCreds.load(it) }
-                            if (target != null && profile != null && cred != null) flushPending(target, cred.deviceId, profile)
-                        }
-                    }
-                } catch (_: Exception) {
-                    withContext(Dispatchers.Main.immediate) {
-                        if (snapshot.version == sticky.notifStreamConsentVersion) {
-                            setNotifStreamEnabled(false)
-                            _state.update { it.copy(notifStreamDelivery = "Paused: encrypted queue storage unavailable") }
-                        }
-                    }
-                }
-            }
-        }
         scope.launch {
-            while (isActive) {
-                delay(5_000)
-                val captureOverflow = NotifStreamBus.droppedBeforeQueue.getAndSet(0).toInt()
-                droppedCount += captureOverflow; overflowCount += captureOverflow
-                val before = pendingNotifs.size
-                pendingNotifs.removeAll { !sticky.notifStreamEnabled || !NotificationCapturePolicy.fresh(it.event.capturedAtMs, System.currentTimeMillis(), streamTtlMs()) }
-                if (before != pendingNotifs.size) { droppedCount += before - pendingNotifs.size; expiredCount += before - pendingNotifs.size; persistOutbox() }
-                _state.update { it.copy(nlsBound = NotifStreamBus.listenerBound) }
-                if (!sticky.notifStreamEnabled) continue
-                val target = sticky.notifStreamTargetOrigin() ?: continue
-                val profile = sticky.notifStreamProfileFor(target) ?: continue
-                val cred = deviceCreds.load(target) ?: continue
-                if (sticky.notifStreamEnabled) startLane(target)
-                flushPending(target, cred.deviceId, profile)
+            handsClient.state.collect { hands ->
+                val old = _state.value
+                _state.update { it.copy(externalHands = hands.configured, externalHandsReachable = hands.reachable,
+                    externalHandsArmed = hands.armed, externalHandsBackend = hands.backend,
+                    externalHandsTarget = hands.target, externalHandsA11y = hands.a11yBound,
+                    externalHandsPrivacy = hands.privacyActive, externalHandsError = hands.error,
+                    externalHandsScreenControl = hands.screenControlAvailable,
+                    a11yBound = hands.a11yBound, arm = if (hands.armed) DeviceArm.ARMED else DeviceArm.DISARMED,
+                    protectedCustom = hands.protectedPackages.sorted()) }
+                if (old.externalHandsArmed != hands.armed || old.externalHandsPrivacy != hands.privacyActive ||
+                    old.externalHandsReachable != hands.reachable || old.a11yBound != hands.a11yBound ||
+                    old.externalHandsScreenControl != hands.screenControlAvailable ||
+                    old.protectedCustom.toSet() != hands.protectedPackages) publishPrivacyStatus()
+                if (old.externalHands != hands.configured) refreshLaneRegistrations()
             }
         }
-        StopStreamReceiver.onStopStream = { setNotifStreamEnabled(false) }
-        // Open lanes at process start, not on UI bind.
-        //
-        // `startAllLanes()` used to be reachable only from `bind()`, whose sole caller is the
-        // ViewModel — so a process revived in the background by StayConnectedService (START_STICKY)
-        // held no lane at all, and the phone was unreachable until a human opened the app. Observed
-        // on the S22: correct build installed and the process alive, yet the host saw no lane for
-        // ~34 minutes until MainActivity was launched.
-        //
-        // Gated on the same opt-in that starts StayConnectedService, so a phone the user has not
-        // asked to stay connected keeps the old lazy behaviour instead of dialling every paired
-        // host on every transient process start. Safe with respect to arming: a fresh process is
-        // DISARMED, and the idle timer and kill-switch notification only exist once armed, so this
-        // cannot leave a UI-less lane sitting armed.
-        if (sticky.stayConnected) startAllLanes()
-        else if (sticky.notifStreamEnabled) sticky.notifStreamTargetOrigin()?.let { startLane(it) }
-        scope.launch {
-            restoreOutbox()
-            NotifStreamBus.events.collect { ev ->
-                forwardNotif(ev)
-            }
-        }
-        scope.launch {
-            while (isActive) {
-                delay(2_000)
-                refreshAccessibilityState()
-                val bound = NotifStreamBus.listenerBound
-                if (bound != _state.value.nlsBound) {
-                    _state.update { it.copy(nlsBound = bound) }
-                    pushStreamStatus()
-                }
-            }
-        }
+        notifications.start()
+        if (sticky.stayConnected || sticky.notifStreamEnabled) startAllLanes()
     }
 
-    /** Every paired host keeps its lane, so Hermes on lab can still move the phone while hub is active. */
+    suspend fun connectExternalHands(token: String, endpoint: String) {
+        runCatching { handsClient.connect(token, endpoint) }.onFailure {
+            _errors.tryEmit("Open Hands and approve Companion again.")
+        }.onSuccess { connected ->
+            if (!connected) _errors.tryEmit("Stop the active controller in Hands before reconnecting.")
+            else refreshLaneRegistrations()
+        }
+    }
+    fun disconnectExternalHands() { scope.launch {
+        if (!handsClient.stopAll() || !handsClient.disconnect()) _errors.tryEmit("Open Hands and stop control before disconnecting.")
+        else { notifications.invalidateRoute(); refreshLaneRegistrations() }
+    } }
+    fun refreshExternalHands() { if (handsClient.state.value.configured) scope.launch { handsClient.refresh() } }
+
+    fun arm(directOnly: Boolean = false, durationSeconds: Long = 3600, leaseId: String = java.util.UUID.randomUUID().toString()) {
+        _errors.tryEmit("Open Hands to allow a session. The agent then acquires its own holder.")
+    }
+    fun disarm() { scope.launch {
+        if (handsClient.state.value.configured && !handsClient.stopAll()) _errors.tryEmit("Open Hands to stop control.")
+    } }
+    fun recoverAccessibility() = refreshExternalHands()
+    fun refreshAccessibilityState() = refreshExternalHands()
+    fun setA11yBound(bound: Boolean) = refreshExternalHands()
+    fun turnAccessibilityOn(): Boolean { openHands(); return false }
+    fun turnAccessibilityOff(): Boolean { disarm(); openHands(); return false }
+    fun pauseForPrivateEntry() = disarm()
+    fun addProtectedPackage(raw: String) = openHands()
+    fun removeProtectedPackage(pkg: String) = openHands()
+    fun setKeepAwake(enabled: Boolean, durationSeconds: Long = 3600): JSONObject =
+        throw IllegalStateException("hands_required")
+    fun keepAwakeStatus(): JSONObject = JSONObject(handsClient.state.value.keepAwakeJson)
+    fun renewArm(leaseId: String): JSONObject = throw IllegalStateException("hands_required")
+    fun releaseArmLease(leaseId: String): JSONObject = throw IllegalStateException("hands_required")
+    fun deviceStatus(): JSONObject = JSONObject().put("owner", "hands")
+        .put("available", handsClient.state.value.reachable).put("armed", handsClient.state.value.armed)
+        .put("privacy_active", handsClient.state.value.privacyActive)
+    private fun openHands() {
+        runCatching { app.startActivity(Intent().setClassName("app.hermes.hands", "app.hermes.hands.MainActivity")
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.onFailure { _errors.tryEmit("Install and open Hands.") }
+    }
+    private fun syncHands(armed: Boolean) = Unit
+    fun publishPrivacyStatus() {
+        val fields = deviceReadinessFields()
+        deviceCreds.loadAll().forEach { cred -> clients.existing(cred.origin)?.sendDeviceStatus(cred.deviceId, fields) }
+    }
+    private fun deviceReadinessFields(): String {
+        val h = handsClient.state.value
+        return JSONObject().put("armed", h.armed).put("a11y_bound", h.a11yBound)
+            .put("screen_control_available", h.screenControlAvailable)
+            .put("privacy_active", h.privacyActive).put("control_owner", "hands")
+            .put("hands_reachable", h.reachable).put("protected_packages", org.json.JSONArray(h.protectedPackages.sorted()))
+            .toString().removePrefix("{").removeSuffix("}").let { "," + it }
+    }
+    private fun laneCapabilities(): List<String> = handsClient.state.value.capabilities.toList()
+    private fun releaseLaneHolders(key: String) {
+        val ids = synchronized(owners) { owners.remove(key)?.toList().orEmpty() }
+        ids.forEach { id -> scope.launch { handsClient.releaseController(id) } }
+    }
+
+    fun setNotifStreamEnabled(enabled: Boolean, deferLaneRefresh: Boolean = false) {
+        notifications.invalidateRoute()
+        if (enabled && (sticky.notifStreamTargetOrigin() == null || sticky.notifStreamTargetOrigin()?.let(sticky::notifStreamProfileFor).isNullOrBlank())) {
+            _errors.tryEmit("Choose a notification gateway and profile first."); return
+        }
+        sticky.notifStreamConsentVersion++
+        sticky.notifStreamEnabled = enabled
+        if (enabled) notifications.start()
+        _state.update { it.copy(notifStreamEnabled = enabled) }
+        syncStayForStream()
+        if (!deferLaneRefresh) refreshLaneRegistrations()
+    }
+    fun setNotifStreamTarget(origin: String?, profileId: String?, deferLaneRefresh: Boolean = false) {
+        val selected = origin?.trim()?.takeIf { value -> deviceCreds.loadAll().any { deviceLaneKey(it.origin) == deviceLaneKey(value) } }
+        notifications.invalidateRoute()
+        sticky.notifStreamEnabled = false
+        sticky.notifStreamConsentVersion++
+        sticky.notifStreamOrigin = selected
+        if (selected != null) sticky.setNotifStreamProfile(selected, profileId?.trim()?.takeIf { it.isNotBlank() })
+        _state.update { it.copy(notifStreamEnabled = false, notifStreamOrigin = selected,
+            notifStreamProfile = selected?.let(sticky::notifStreamProfileFor)) }
+        syncStayForStream()
+        if (!deferLaneRefresh) refreshLaneRegistrations()
+    }
+    fun setNotifStreamApp(pkg: String, selected: Boolean) = openHands()
+    fun setNotifStreamContent(mode: String) = openHands()
+    fun setNotifStreamRetention(minutes: Int) = openHands()
+    fun toggleNotifStreamCalls() = openHands()
+    fun pauseForBackgroundLimit() { notifications.pause(); setNotifStreamEnabled(false) }
+    private fun syncStayForStream() {
+        if (sticky.notifStreamEnabled || sticky.stayConnected) runCatching {
+            ContextCompat.startForegroundService(app, Intent(app, StayConnectedService::class.java))
+        } else runCatching { app.stopService(Intent(app, StayConnectedService::class.java)) }
+    }
+    private fun pushStreamStatus() = publishPrivacyStatus()
+    private fun flushPending(origin: String, deviceId: String, profile: String) = Unit
+
     fun startAllLanes() {
         deviceCreds.loadAll().forEach { startLane(it.origin) }
     }
@@ -269,447 +230,17 @@ class DeviceNodeCoordinator(
             )
         }
         startAllLanes()
-        if (_state.value.arm != DeviceArm.DISARMED) syncHands(armed = true)
     }
 
     /** Chat UI lifetime must not stop the explicitly consented background notification lane. */
     fun unbind() {
+        if (sticky.stayConnected) { origin = null; return }
         val streamTarget = if (sticky.notifStreamEnabled) sticky.notifStreamTargetOrigin() else null
         lanes.keys.toList().filter { it != streamTarget?.let(::deviceLaneKey) }.forEach { stopLane(it) }
         if (streamTarget != null) startLane(streamTarget)
         origin = null
     }
 
-    // ---- arming -----------------------------------------------------------------------------
-
-    private val armLock = Any()
-    private var armJob: Job? = null
-
-    fun arm() = synchronized(armLock) {
-        if (CompanionAccessibilityService.explicitlyOff(app)) {
-            _errors.tryEmit("Hermes accessibility is switched off. Use TURN ON in Device before ARM.")
-            return@synchronized
-        }
-        if (_state.value.arm != DeviceArm.DISARMED || armJob?.isActive == true) return@synchronized
-        _state.update { it.copy(armPending = true) }
-        armJob = scope.launch {
-            val automatic = CompanionAccessibilityService.canWriteSecureSettings(app)
-            if (automatic) {
-                val enabled = synchronized(armLock) { isActive && CompanionAccessibilityService.ensureEnabled(app) }
-                val connected = enabled && withTimeoutOrNull(5_000) {
-                    while (!CompanionAccessibilityService.bound) delay(50)
-                    true
-                } == true
-                if (!connected) {
-                    synchronized(armLock) {
-                        if (isActive) {
-                            disarm()
-                            _errors.tryEmit("Accessibility did not connect. Enable Hermes in Android Accessibility settings, then retry ARM.")
-                        }
-                    }
-                    return@launch
-                }
-            } else if (!CompanionAccessibilityService.bound) {
-                _errors.tryEmit("Armed with direct tools only. Enable Hermes in Android Accessibility settings for screen control.")
-            }
-            synchronized(armLock) {
-                if (!isActive) return@synchronized
-                _state.update { it.copy(arm = DeviceArming.arm(it.arm), armPending = false, a11yBound = CompanionAccessibilityService.bound) }
-                bumpIdle()
-                syncHands(armed = true)
-            }
-        }
-    }
-
-    internal suspend fun awaitArm() { armJob?.join() }
-
-    private fun revokeArm() {
-        armJob?.cancel()
-        armJob = null
-        idleJob?.cancel()
-        idleJob = null
-        _state.update { it.copy(arm = DeviceArming.disarm(), armPending = false) }
-        syncHands(armed = false)
-    }
-
-    /** Explicit local OFF is durable and cannot be undone by remote ARM or keep-on. */
-    fun turnAccessibilityOff(): Boolean = synchronized(armLock) {
-        CompanionAccessibilityService.setExplicitlyOff(app, true)
-        revokeArm()
-        val requested = CompanionAccessibilityService.requestOff(app)
-        refreshAccessibilityState()
-        if (!requested) _errors.tryEmit("Hermes is disarmed. Disable Hermes in Android Accessibility settings to switch the service off.")
-        requested
-    }
-
-    /** ON enables the service only, never command consent. false means open Android Settings. */
-    fun turnAccessibilityOn(): Boolean = synchronized(armLock) {
-        CompanionAccessibilityService.setExplicitlyOff(app, false)
-        val requested = CompanionAccessibilityService.ensureEnabled(app) || CompanionAccessibilityService.bound
-        refreshAccessibilityState()
-        requested
-    }
-
-    fun refreshAccessibilityState() {
-        _state.update { it.copy(
-            a11yBound = CompanionAccessibilityService.bound,
-            a11yListed = CompanionAccessibilityService.listed(app),
-            a11yOffRequested = CompanionAccessibilityService.explicitlyOff(app),
-        ) }
-    }
-
-    fun disarm() = synchronized(armLock) {
-        // Revoke command consent before touching settings, even when permission was revoked.
-        revokeArm()
-        if (CompanionAccessibilityService.canWriteSecureSettings(app)) {
-            if (!CompanionAccessibilityService.disable(app)) {
-                runCatching { CompanionAccessibilityService.instance?.disableSelf() }
-                _errors.tryEmit("Disarmed. Could not update accessibility settings; switch Hermes off in Android Accessibility settings.")
-            }
-        } else if (CompanionAccessibilityService.bound) {
-            _errors.tryEmit("Disarmed. To switch off the service, disable Hermes in Android Accessibility settings.")
-        }
-    }
-
-    /** Recovery must never undo DISARM, including background keep-alive and Activity resume. */
-    fun recoverAccessibility() = synchronized(armLock) {
-        if (!CompanionAccessibilityService.explicitlyOff(app) && _state.value.arm != DeviceArm.DISARMED && sticky.keepA11yOn && !CompanionAccessibilityService.bound) {
-            CompanionAccessibilityService.ensureEnabled(app)
-        }
-    }
-
-    fun setA11yBound(bound: Boolean) {
-        recoverAccessibility()
-        refreshAccessibilityState()
-        _state.update { st ->
-            st.copy(
-                a11yBound = CompanionAccessibilityService.bound,
-                foregroundApp = CompanionAccessibilityService.foregroundApp,
-            )
-        }
-    }
-
-    private fun bumpIdle() {
-        idleJob?.cancel()
-        idleJob = scope.launch {
-            delay(DeviceLanePolicy.IDLE_DISARM_MS)
-            disarm()
-        }
-    }
-
-    /**
-     * Kill-switch notification follows the arm state, whether or not an Activity is alive, and names
-     * the hosts whose lanes are live (falling back to the paired hosts) — A8.5.
-     */
-    private fun syncHands(armed: Boolean) {
-        if (armed) {
-            val st = _state.value
-            val hosts = (st.openLanes.ifEmpty { st.pairedHosts.toSet() }).map { app.hostName(it) }.filter { it.isNotBlank() }
-            runCatching { ContextCompat.startForegroundService(app, HandsService.start(app, hosts)) }
-        } else {
-            runCatching { app.stopService(Intent(app, HandsService::class.java)) }
-        }
-    }
-
-    // ---- protected packages -----------------------------------------------------------------
-
-    fun addProtectedPackage(raw: String) {
-        val pkg = DeviceLanePolicy.normalizePackage(raw)
-        if (pkg == null) {
-            _state.update { it.copy(protectedError = "not a package id") }
-            return
-        }
-        if (sticky.protectedPackages.contains(pkg)) {
-            _state.update { it.copy(protectedError = "already in blocklist") }
-            return
-        }
-        val next = (sticky.protectedPackages + pkg).toSortedSet()
-        setNotifStreamEnabled(false, deferLaneRefresh = true)
-        sticky.protectedPackages = next
-        _state.update { it.copy(protectedCustom = next.toList(), protectedError = null) }
-        syncNotifBusConfig()
-        refreshLaneRegistrations()
-    }
-
-    fun removeProtectedPackage(pkg: String) {
-        val next = (sticky.protectedPackages - pkg).toSortedSet()
-        setNotifStreamEnabled(false, deferLaneRefresh = true)
-        sticky.protectedPackages = next
-        _state.update { it.copy(protectedCustom = next.toList(), protectedError = null) }
-        syncNotifBusConfig()
-        refreshLaneRegistrations()
-    }
-
-
-    // ---- notification stream (A13.2) --------------------------------------------------------
-
-    /**
-     * @param deferLaneRefresh when true, record that lanes need re-registering instead of doing
-     *   it now. Command handlers pass true so their reply is not lost with the bounced lane.
-     */
-    fun setNotifStreamEnabled(enabled: Boolean, deferLaneRefresh: Boolean = false) {
-        val target = sticky.notifStreamTargetOrigin()
-        if (enabled && (target == null || sticky.notifStreamProfileFor(target).isNullOrBlank() || sticky.notifStreamApps.isEmpty() || deviceCreds.load(target) == null)) {
-            _errors.tryEmit("Choose apps, a paired gateway and a profile before sharing.")
-            return
-        }
-        if (enabled) StayConnectedService.backgroundTimedOut = false // explicit phone UI consent
-        sticky.notifStreamEnabled = enabled
-        syncNotifBusConfig()
-        val origin = sticky.notifStreamTargetOrigin()
-        _state.update {
-            it.copy(
-                notifStreamEnabled = enabled,
-                notifStreamOrigin = origin,
-                notifStreamProfile = origin?.let { o -> sticky.notifStreamProfileFor(o) },
-                nlsBound = NotifStreamBus.listenerBound,
-            )
-        }
-        syncStayForStream()
-        if (deferLaneRefresh) pendingLaneRefresh = true else refreshLaneRegistrations()
-        pushStreamStatus()
-        StayConnectedService.refresh(app)
-    }
-
-    fun pauseForBackgroundLimit() {
-        droppedCount += pendingNotifs.size
-        sticky.notifStreamEnabled = false
-        syncNotifBusConfig()
-        _state.update { it.copy(notifStreamEnabled = false,
-            notifStreamDelivery = "Paused: Android background-service time limit reached. Open the app and confirm sharing again.") }
-    }
-
-    fun setNotifStreamTarget(origin: String?, profileId: String?, deferLaneRefresh: Boolean = false) {
-        // Any route edit pauses collection and discards old-route events; resume needs UI consent.
-        setNotifStreamEnabled(false, deferLaneRefresh = true)
-        val cleanOrigin = origin?.trim()?.takeIf { it.isNotBlank() }
-        sticky.notifStreamOrigin = cleanOrigin
-        val target = sticky.notifStreamTargetOrigin()
-        if (target != null) {
-            sticky.setNotifStreamProfile(target, profileId)
-        }
-        _state.update {
-            it.copy(
-                notifStreamOrigin = target,
-                notifStreamProfile = target?.let { o -> sticky.notifStreamProfileFor(o) },
-            )
-        }
-        syncStayForStream()
-        if (deferLaneRefresh) pendingLaneRefresh = true else refreshLaneRegistrations()
-        pushStreamStatus()
-        StayConnectedService.refresh(app)
-    }
-
-
-    fun setNotifStreamApp(pkg: String, selected: Boolean) {
-        if (!Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+").matches(pkg)) return
-        setNotifStreamEnabled(false, deferLaneRefresh = true)
-        sticky.notifStreamApps = if (selected) sticky.notifStreamApps + pkg else sticky.notifStreamApps - pkg
-        refreshStreamChoices()
-    }
-
-    fun setNotifStreamContent(mode: String) {
-        if (mode !in setOf("metadata", "title", "full")) return
-        setNotifStreamEnabled(false, deferLaneRefresh = true)
-        sticky.notifStreamContent = mode
-        refreshStreamChoices()
-    }
-
-    fun setNotifStreamRetention(minutes: Int) {
-        if (minutes !in setOf(2, 15, 60)) return
-        setNotifStreamEnabled(false, deferLaneRefresh = true)
-        sticky.notifStreamRetentionMinutes = minutes
-        refreshStreamChoices()
-    }
-
-    fun toggleNotifStreamCalls() {
-        setNotifStreamEnabled(false, deferLaneRefresh = true)
-        sticky.notifStreamCalls = !sticky.notifStreamCalls
-        refreshStreamChoices()
-    }
-
-    private fun refreshStreamChoices() {
-        syncNotifBusConfig()
-        _state.update { it.copy(notifStreamApps = sticky.notifStreamApps, notifStreamContent = sticky.notifStreamContent, notifStreamRetentionMinutes = sticky.notifStreamRetentionMinutes, notifStreamCalls = sticky.notifStreamCalls) }
-        refreshLaneRegistrations()
-    }
-
-    private fun syncNotifBusConfig(invalidate: Boolean = true) {
-        if (invalidate) {
-            sticky.notifStreamConsentVersion = sticky.notifStreamConsentVersion + 1
-            pendingNotifs.clear()
-            outboxWrites.trySend(OutboxSnapshot(sticky.notifStreamConsentVersion, null, emptySet()))
-        }
-        NotifStreamBus.configure(
-            enabled = sticky.notifStreamEnabled,
-            protectedPackages = sticky.protectedPackages,
-            selfPackageName = app.packageName,
-            apps = sticky.notifStreamApps,
-            content = sticky.notifStreamContent,
-            calls = sticky.notifStreamCalls,
-            version = sticky.notifStreamConsentVersion,
-        )
-    }
-
-    /** Keep an FGS alive while stream is on even if stay-connected is off. */
-    private fun syncStayForStream() {
-        val need = (sticky.notifStreamEnabled || sticky.stayConnected) && !StayConnectedService.backgroundTimedOut
-        val intent = Intent(app, StayConnectedService::class.java)
-        if (need) {
-            runCatching { ContextCompat.startForegroundService(app, intent) }
-        } else if (!sticky.stayConnected) {
-            runCatching { app.stopService(intent) }
-        }
-    }
-
-    private fun laneCapabilities(): List<String> {
-        val base = DeviceLanePolicy.CAPABILITIES.toMutableList()
-        if (!sticky.notifStreamEnabled) {
-            base.remove("device.notifications")
-        } else if ("device.notifications" !in base) {
-            base.add("device.notifications")
-        }
-        return base
-    }
-
-    private fun streamEventAllowed(ev: NotifStreamEvent): Boolean =
-        sticky.notifStreamEnabled &&
-            ev.consentVersion == NotifStreamBus.consentVersion &&
-            NotificationCapturePolicy.fresh(ev.capturedAtMs, System.currentTimeMillis(), streamTtlMs()) &&
-            NotificationCapturePolicy.selected(ev.packageName, sticky.notifStreamApps, ev.category, sticky.notifStreamCalls) &&
-            NotificationStreamPolicy.shouldForward(ev.packageName, sticky.protectedPackages, app.packageName)
-
-    private fun forwardNotif(ev: NotifStreamEvent) {
-        if (!streamEventAllowed(ev)) return
-        val target = sticky.notifStreamTargetOrigin() ?: return
-        val profile = sticky.notifStreamProfileFor(target) ?: return
-        val cred = deviceCreds.load(target) ?: return
-        val now = System.currentTimeMillis()
-        lastNotifAtMs = now
-        while (pendingNotifs.size >= pendingNotifCap) { pendingNotifs.removeFirst(); droppedCount++; overflowCount++ }
-        pendingNotifs.addLast(PendingNotification(ev, target, profile, cred.deviceId, credentialHash(cred)))
-        if (!persistOutbox()) return
-        flushPending(target, cred.deviceId, profile)
-    }
-
-    private fun credentialHash(cred: DeviceCred): String = java.security.MessageDigest.getInstance("SHA-256")
-        .digest(cred.credential.toByteArray()).joinToString("") { "%02x".format(it) }
-
-    private fun persistOutbox(): Boolean {
-        val rows = org.json.JSONArray()
-        pendingNotifs.forEach { q ->
-            rows.put(org.json.JSONObject().put("origin", q.origin).put("profile", q.profile).put("device", q.deviceId)
-                .put("credential_hash", q.credentialHash).put("delivery_id", q.deliveryId)
-                .put("event", org.json.JSONObject(buildNotifJson(q)).put("post_time", q.event.postTimeMs)
-                    .put("captured_at", q.event.capturedAtMs).put("version", q.event.consentVersion)))
-        }
-        // Conflation keeps only the latest complete snapshot. Single IO consumer preserves
-        // ordering; new events are not transmitted until that snapshot is durable.
-        return outboxWrites.trySend(OutboxSnapshot(sticky.notifStreamConsentVersion,
-            if (pendingNotifs.isEmpty()) null else rows.toString(), pendingNotifs.map { it.deliveryId }.toSet())).isSuccess
-    }
-
-    private suspend fun restoreOutbox() {
-        try {
-            if (!sticky.notifStreamEnabled) { persistOutbox(); return }
-            val generation = sticky.notifStreamConsentVersion
-            val raw = withContext(Dispatchers.IO) { outbox.read() }
-            if (generation != sticky.notifStreamConsentVersion || !sticky.notifStreamEnabled) return
-            val rows = org.json.JSONArray(raw ?: "[]")
-            for (i in 0 until minOf(rows.length(), pendingNotifCap)) {
-                val q = rows.getJSONObject(i); val e = q.getJSONObject("event")
-                val ev = NotifStreamEvent(e.getString("key"), e.getString("package"), e.getString("title"), e.getString("text"),
-                    e.getString("category"), e.getBoolean("ongoing"), e.getBoolean("clearable"), e.getLong("post_time"),
-                    e.getLong("version"), e.getLong("captured_at"), e.getString("content_mode"))
-                if (NotificationCapturePolicy.fresh(ev.capturedAtMs, System.currentTimeMillis(), streamTtlMs()) && ev.consentVersion == sticky.notifStreamConsentVersion)
-                    pendingNotifs.addLast(PendingNotification(ev, q.getString("origin"), q.getString("profile"), q.getString("device"), q.getString("credential_hash"), q.getString("delivery_id"), persisted = true))
-            }
-            persistOutbox()
-        } catch (_: Exception) {
-            pendingNotifs.clear(); persistOutbox()
-            _state.update { it.copy(notifStreamDelivery = "Old encrypted queue could not be restored") }
-        }
-    }
-
-    private fun flushPending(origin: String, deviceId: String, profile: String) {
-        if (!sticky.notifStreamEnabled) return
-        if (DirectToolbox.nlsStatus(app)["nls_bound"] != true) {
-            // A temporary service disconnect is not revocation. The secure setting is.
-            droppedCount += pendingNotifs.size
-            setNotifStreamEnabled(false)
-            _state.update { it.copy(notifStreamDelivery = "Paused: notification access was revoked; queue discarded") }
-            return
-        }
-        val target = sticky.notifStreamTargetOrigin() ?: return
-        if (WakePolicy.topicOwnerKey(origin) != WakePolicy.topicOwnerKey(target) || sticky.notifStreamProfileFor(target) != profile) return
-        val client = clients.existing(origin)
-        val cred = deviceCreds.load(origin)
-        val before = pendingNotifs.size
-        pendingNotifs.removeAll { q ->
-            val invalid = !streamEventAllowed(q.event) || cred == null || !NotificationDeliveryPolicy.sameScope(q.origin, q.profile, q.deviceId, q.credentialHash,
-                    origin, profile, deviceId, credentialHash(cred))
-            if (invalid) {
-                droppedCount++
-                if (!NotificationCapturePolicy.fresh(q.event.capturedAtMs, System.currentTimeMillis(), streamTtlMs())) expiredCount++
-            }
-            invalid
-        }
-        if (pendingNotifs.size != before) persistOutbox()
-        if (client == null || !client.deviceLaneOpen()) {
-            _state.update { it.copy(notifStreamDelivery = "Offline · ${pendingNotifs.size} queued · $droppedCount expired/dropped") }
-            return
-        }
-        if (!client.passiveNotificationStreamSupported()) {
-            droppedCount += pendingNotifs.size
-            setNotifStreamEnabled(false)
-            _state.update { it.copy(notifStreamDelivery = "Paused: update the gateway extension for private streaming · $droppedCount discarded") }
-            return
-        }
-        val now = System.currentTimeMillis()
-        val countBeforeAck = pendingNotifs.size
-        val iterator = pendingNotifs.iterator()
-        while (iterator.hasNext()) {
-            val queued = iterator.next()
-            val action = NotificationDeliveryPolicy.next(queued.persisted, client.consumeNotificationAcknowledgment(queued.deliveryId), queued.lastAttemptMs, now)
-            if (action == NotificationDeliveryPolicy.Action.WAIT_FOR_STORAGE) continue
-            if (action == NotificationDeliveryPolicy.Action.ACKNOWLEDGED) {
-                iterator.remove(); deliveredCount++; continue
-            }
-            val rejection = client.consumeNotificationRejection(queued.deliveryId)
-            if (rejection != null) {
-                lastStreamError = when (rejection) {
-                    "policy_blocked" -> "gateway policy blocked an event"
-                    "dedupe_capacity" -> "gateway inbox busy"
-                    else -> "gateway rejected an event"
-                }
-                if (rejection != "dedupe_capacity") { iterator.remove(); droppedCount++; rejectedCount++; continue }
-            }
-            if (action == NotificationDeliveryPolicy.Action.WAIT_FOR_RETRY) continue
-            queued.lastAttemptMs = now
-            if (!client.sendDeviceEvent("notification", deviceId, profile, queued.event.postTimeMs, buildNotifJson(queued))) break
-        }
-        if (pendingNotifs.size != countBeforeAck) persistOutbox()
-        _state.update { it.copy(notifLastAgeMs = lastNotifAtMs?.let { now - it }, nlsBound = NotifStreamBus.listenerBound,
-            notifStreamDelivery = "$deliveredCount acknowledged · ${pendingNotifs.size} queued · $droppedCount discarded ($expiredCount expired, $overflowCount overflow, $rejectedCount rejected)" + if (lastStreamError.isBlank()) "" else " · Last issue: $lastStreamError") }
-    }
-
-    private fun buildNotifJson(q: PendingNotification): String {
-        val ev = q.event
-        return """{"delivery_id":${jsonQuote(q.deliveryId)},"key":${jsonQuote(ev.key)},"package":${jsonQuote(ev.packageName)},"title":${jsonQuote(ev.title)},"text":${jsonQuote(ev.text)},"category":${jsonQuote(ev.category)},"ongoing":${ev.ongoing},"clearable":${ev.clearable},"passive":true,"content_mode":${jsonQuote(ev.contentMode)}}"""
-    }
-
-    private fun pushStreamStatus() {
-        val target = sticky.notifStreamTargetOrigin() ?: return
-        val cred = deviceCreds.load(target) ?: return
-        val client = clients.existing(target) ?: return
-        if (!client.deviceLaneOpen()) return
-        val fields =
-            ""","notifications_stream":${sticky.notifStreamEnabled},"notifications_listener_bound":${NotifStreamBus.listenerBound}"""
-        client.sendDeviceStatus(cred.deviceId, fields)
-    }
-
-
-    /** Friendly label for this phone on the bound host (A6.7). */
     fun renameDeviceLabel(name: String) {
         val origin = origin ?: return
         val id = _state.value.deviceId ?: return
@@ -978,11 +509,12 @@ class DeviceNodeCoordinator(
                         model = Build.MODEL.orEmpty(),
                         manufacturer = Build.MANUFACTURER.orEmpty(),
                         osVersion = "Android ${Build.VERSION.RELEASE}",
-                        protectedPackages = sticky.protectedPackages,
+                        protectedPackages = _state.value.protectedCustom.toSet(),
                         capabilities = laneCapabilities(),
                         // Room wake (A22.5): the relay pings this topic when a room needs the operator.
                         wakeTopic = sticky.ntfyTopicFor(laneOrigin).orEmpty(),
                     )
+                    client(laneOrigin).sendDeviceStatus(cred.deviceId, deviceReadinessFields())
                     // After lane is up, push stream status + flush buffered notifs for this target.
                     if (WakePolicy.topicOwnerKey(laneOrigin) == WakePolicy.topicOwnerKey(sticky.notifStreamTargetOrigin().orEmpty())) {
                         pushStreamStatus()
@@ -996,6 +528,7 @@ class DeviceNodeCoordinator(
                     dispatchArmCommands(
                         client(laneOrigin).deviceCommands(),
                         armBusy = { command -> client(laneOrigin).replyDevice(DeviceLanePolicy.fail(command.commandId, "arm_pending")) },
+                        filesBusy = { command -> client(laneOrigin).replyDevice(DeviceLanePolicy.fail(command.commandId, "file_busy")) },
                         handle = { handleCommand(laneOrigin, it) },
                     )
                 } catch (c: CancellationException) {
@@ -1031,6 +564,7 @@ class DeviceNodeCoordinator(
     }
 
     private fun markLane(key: String, open: Boolean) {
+        if (!open) releaseLaneHolders(key)
         _state.update {
             val lanesNow = if (open) it.openLanes + key else it.openLanes - key
             it.copy(
@@ -1047,828 +581,51 @@ class DeviceNodeCoordinator(
         val key = deviceLaneKey(laneOrigin)
         lanes.remove(key)?.cancel()
         clients.existing(laneOrigin)?.closeDeviceLane()
-        lastRefs = emptySet()
-        lastNodes = emptyList()
         markLane(key, open = false)
     }
 
+    internal suspend fun forwardExternalCommand(laneOrigin: String, command: DeviceCommand): DeviceResult? {
+        val cred = deviceCreds.load(laneOrigin)
+        if (cred == null || (command.deviceId.isNotBlank() && command.deviceId != cred.deviceId))
+            return DeviceLanePolicy.fail(command.commandId, "unauthorized")
+        if (!handsClient.state.value.configured)
+            return DeviceLanePolicy.fail(command.commandId, "hands_required", "Connect Hands in the Companion Device tab.")
+        val profile = command.profile.ifBlank { cred.profileId }
+        val args = runCatching { JSONObject(command.argumentsJson) }.getOrElse {
+            return DeviceLanePolicy.fail(command.commandId, "bad_args")
+        }
+        val notificationCommand = command.action.startsWith("device.notifications.") && command.action !in setOf(
+            "device.notifications.nls", "device.notifications.nls.status", "device.notifications.nls.enable",
+            "device.notifications.enable", "device.notifications.status")
+        val notificationConsent = sticky.notifStreamConsentVersion
+        fun notificationRouteApproved(): Boolean {
+            val target = sticky.notifStreamTargetOrigin()
+            return sticky.notifStreamEnabled && target != null && deviceLaneKey(target) == deviceLaneKey(laneOrigin) &&
+                sticky.notifStreamProfileFor(target) == profile
+        }
+        if (notificationCommand) {
+            val target = sticky.notifStreamTargetOrigin()
+                ?: return DeviceLanePolicy.fail(command.commandId, "notification_scope_mismatch")
+            val sink = sticky.notifStreamProfileFor(target)
+            if (!notificationRouteApproved())
+                return DeviceLanePolicy.fail(command.commandId, "notification_scope_mismatch", "Enable notification forwarding for this gateway/profile in Companion.")
+            if ((args.has("origin") && deviceLaneKey(args.optString("origin")) != deviceLaneKey(target)) ||
+                (args.has("profile") && args.optString("profile") != sink))
+                return DeviceLanePolicy.fail(command.commandId, "notification_scope_mismatch")
+            args.remove("origin"); args.remove("profile")
+        }
+        val owner = HandsClient.controllerId(deviceLaneKey(laneOrigin), profile)
+        synchronized(owners) { owners.getOrPut(deviceLaneKey(laneOrigin)) { linkedSetOf() }.add(owner) }
+        val reply = handsClient.command(command.action, args.toString(), owner)
+        if (notificationCommand && (sticky.notifStreamConsentVersion != notificationConsent || !notificationRouteApproved()))
+            return DeviceLanePolicy.fail(command.commandId, "notification_scope_mismatch", "Notification forwarding approval changed before delivery.")
+        return DeviceResult(command.commandId, reply.ok, reply.resultJson, reply.errorCode, reply.message)
+    }
     private suspend fun handleCommand(laneOrigin: String, command: DeviceCommand) {
-        val st = _state.value
-        val args = command.argumentsJson
-        val ref = jsonField(args, "ref") ?: jsonField(args, "from_ref")
-        val target = jsonField(args, "package")
-        val fg = CompanionAccessibilityService.foregroundApp
-        // Read the binding live, like foregroundApp above. `_state.a11yBound` is only
-        // refreshed while MainActivity is observing the setting, so a grant revoked while the
-        // app sits in the background leaves it stale — and a stale `true` let the L1 lane
-        // through to return an empty tree with ok:true instead of refusing a11y_unavailable.
-        val a11yLive = CompanionAccessibilityService.bound
-        if (!DeviceGestures.allowRate(System.currentTimeMillis(), rateHits)) {
-            noteAudit(command.action, fg, false, "rate_limited")
-            client(laneOrigin).replyDevice(DeviceLanePolicy.fail(command.commandId, "rate_limited"))
-            return
-        }
-        val code = DeviceLanePolicy.reject(
-            arm = st.arm,
-            a11yBound = a11yLive,
-            action = command.action,
-            foregroundApp = fg,
-            ref = ref,
-            lastRefs = lastRefs,
-            targetPackage = target,
-            extraProtected = st.protectedCustom.toSet(),
-        )
-        if (code != null) {
-            noteAudit(command.action, target ?: fg, false, code)
-            client(laneOrigin).replyDevice(DeviceLanePolicy.fail(command.commandId, code))
-            return
-        }
-        bumpIdle()
-        val exec = DeviceArming.beginExec(st.arm)
-        if (exec != st.arm) _state.update { it.copy(arm = exec, foregroundApp = fg) }
-        val result = if (command.action == "device.arm" || command.action == "device.disarm") {
-            // Start/cancel on the lane's Main context before yielding to another command.
-            execute(command)
-        } else withContext(Dispatchers.Default) {
-            runCatching { execute(command) }.getOrElse { t ->
-                DeviceLanePolicy.fail(command.commandId, "timeout", t.message ?: "command failed")
-            }
-        }
-        noteAudit(command.action, target ?: fg, result.ok, result.errorCode)
+        val result = checkNotNull(forwardExternalCommand(laneOrigin, command))
         client(laneOrigin).replyDevice(result)
-        // Only now is it safe to bounce the lane: the reply has already gone out. Refreshing
-        // inside execute() made every stream.set look like a timeout to the caller even though
-        // it had applied.
-        if (pendingLaneRefresh) {
-            pendingLaneRefresh = false
-            refreshLaneRegistrations()
-        }
-        _state.update {
-            it.copy(
-                arm = DeviceArming.endExec(it.arm),
-                foregroundApp = CompanionAccessibilityService.foregroundApp,
-            )
-        }
+        _state.update { it.copy(lastAudit = "${command.action}: ${if (result.ok) "ok" else result.errorCode}") }
     }
-
-    private suspend fun execute(command: DeviceCommand): DeviceResult {
-        val service = CompanionAccessibilityService.instance
-        val args = command.argumentsJson
-        return when (command.action) {
-            "device.noop" -> DeviceLanePolicy.ok(command.commandId)
-            "device.snapshot" -> {
-                val (app, nodes) = service?.snapshot() ?: ("" to emptyList())
-                lastNodes = CompactTree.clip(nodes)
-                lastRefs = CompactTree.refsOf(lastNodes)
-                val (w, h) = service?.displaySize() ?: (0 to 0)
-                val safeArea = service?.safeArea() ?: ScreenSafeArea()
-                DeviceLanePolicy.ok(
-                    command.commandId,
-                    CompactTree.json(lastNodes, app = app, width = w, height = h, safeArea = safeArea),
-                )
-            }
-            "device.click" -> {
-                val id = jsonField(args, "ref")
-                val query = jsonField(args, "text")
-                if (lastNodes.isEmpty() && (!id.isNullOrBlank() || !query.isNullOrBlank())) {
-                    val (_, nodes) = service?.snapshot() ?: ("" to emptyList())
-                    lastNodes = CompactTree.clip(nodes)
-                    lastRefs = CompactTree.refsOf(lastNodes)
-                }
-                val node = when {
-                    !id.isNullOrBlank() -> lastNodes.find { it.ref == id }
-                    !query.isNullOrBlank() -> CompactTree.findClickable(lastNodes, query)
-                    else -> null
-                }
-                val xy = jsonXy(args) ?: run {
-                    val x = jsonNumber(args, "x")
-                    val y = jsonNumber(args, "y")
-                    if (x != null && y != null) x to y else null
-                }
-                val safeArea = service?.safeArea() ?: ScreenSafeArea()
-                val (w, h) = service?.displaySize() ?: (0 to 0)
-                if (xy != null) {
-                    val (x, y) = xy
-                    if ((safeArea.top > 0 && y < safeArea.top) ||
-                        (safeArea.bottom > 0 && h > 0 && y > (h - safeArea.bottom)) ||
-                        (safeArea.left > 0 && x < safeArea.left) ||
-                        (safeArea.right > 0 && w > 0 && x > (w - safeArea.right))
-                    ) {
-                        return DeviceLanePolicy.fail(command.commandId, "safe_area_violation", "click within system safe area")
-                    }
-                }
-                val ok = when {
-                    node != null -> service?.click(node) == true
-                    xy != null -> service?.clickAt(xy.first, xy.second) == true
-                    else -> false
-                }
-                if (ok) DeviceLanePolicy.ok(
-                    command.commandId,
-                    """{"clicked":${jsonQuote(node?.ref ?: id ?: "${xy?.first},${xy?.second}")}}""",
-                )
-                else {
-                    val code = when {
-                        !id.isNullOrBlank() -> "stale_ref"
-                        !query.isNullOrBlank() -> "no_match"
-                        xy != null -> "click_failed"
-                        else -> "stale_ref"
-                    }
-                    val message = when (code) {
-                        "stale_ref" -> "ref is not from the last snapshot — snapshot again"
-                        "no_match" -> "no unique clickable node matching '$query'"
-                        else -> "click did not land"
-                    }
-                    DeviceLanePolicy.fail(command.commandId, code, message)
-                }
-            }
-            "device.type" -> {
-                val text = jsonField(args, "text").orEmpty()
-                val ok = service?.type(text) == true
-                if (ok) DeviceLanePolicy.ok(command.commandId)
-                else DeviceLanePolicy.fail(
-                    command.commandId,
-                    "no_focus",
-                    "no focused field — click an input, then mobile_type",
-                )
-            }
-            "device.press" -> {
-                val key = jsonField(args, "key").orEmpty()
-                val ok = service?.press(key) == true
-                if (ok) DeviceLanePolicy.ok(command.commandId, """{"key":${jsonQuote(key)}}""")
-                else DeviceLanePolicy.fail(command.commandId, "a11y_unavailable")
-            }
-            "device.swipe" -> {
-                val spec = swipeSpec(args, service) ?: return DeviceLanePolicy.fail(command.commandId, "stale_ref")
-                val ok = service?.swipe(spec) == true
-                if (ok) DeviceLanePolicy.ok(command.commandId)
-                else DeviceLanePolicy.fail(command.commandId, "a11y_unavailable")
-            }
-            "device.scroll" -> {
-                val direction = jsonField(args, "direction").orEmpty()
-                val id = jsonField(args, "ref")
-                val node = lastNodes.find { it.ref == id }
-                val (cx, cy) = if (node != null && node.bounds.size >= 4) {
-                    (node.bounds[0] + node.bounds[2]) / 2f to (node.bounds[1] + node.bounds[3]) / 2f
-                } else {
-                    val (w, h) = service?.displaySize() ?: (1080 to 2400)
-                    w / 2f to h / 2f
-                }
-                val spec = DeviceGestures.scroll(direction, cx, cy)
-                    ?: return DeviceLanePolicy.fail(command.commandId, "stale_ref")
-                val ok = service?.swipe(spec) == true
-                if (ok) DeviceLanePolicy.ok(command.commandId, """{"direction":${jsonQuote(direction)}}""")
-                else DeviceLanePolicy.fail(command.commandId, "a11y_unavailable")
-            }
-            "device.open_app" -> {
-                val pkg = jsonField(args, "package").orEmpty()
-                val ok = pkg.isNotBlank() && service?.openApp(pkg) == true
-                if (ok) DeviceLanePolicy.ok(command.commandId, """{"package":${jsonQuote(pkg)}}""")
-                else DeviceLanePolicy.fail(command.commandId, "stale_ref", "app not launchable")
-            }
-            "device.apps" -> {
-                val rows = service?.apps().orEmpty().joinToString(",") { (pkg, label) ->
-                    """{"package":${jsonQuote(pkg)},"label":${jsonQuote(label)}}"""
-                }
-                DeviceLanePolicy.ok(command.commandId, """{"apps":[$rows]}""")
-            }
-            "device.wait" -> {
-                val ms = DeviceGestures.waitMs(jsonLong(args, "ms") ?: 0L)
-                delay(ms)
-                DeviceLanePolicy.ok(command.commandId, """{"ms":$ms}""")
-            }
-            "device.arm" -> {
-                withContext(Dispatchers.Main.immediate) {
-                    arm()
-                    awaitArm()
-                }
-                val armedState = _state.value
-                if (armedState.arm == DeviceArm.DISARMED) {
-                    DeviceLanePolicy.fail(command.commandId, "arm_failed", "the phone refused to arm")
-                } else {
-                    // Report which lanes this session actually has, so the agent does not plan a
-                    // snapshot it cannot run. L0 works with or without accessibility; L1 needs it.
-                    val a11y = CompanionAccessibilityService.bound
-                    val lanes = if (a11y) "l0+l1" else "l0"
-                    DeviceLanePolicy.ok(
-                        command.commandId,
-                        """{"armed":true,"a11y_bound":$a11y,"lanes":${jsonQuote(lanes)}}""",
-                    )
-                }
-            }
-            "device.disarm" -> {
-                disarm()
-                DeviceLanePolicy.ok(command.commandId, """{"armed":false}""")
-            }
-            "device.screenshot" -> {
-                val maxEdge = (jsonLong(args, "max_edge")?.toInt() ?: DeviceGestures.SCREENSHOT_MAX_PX)
-                    .coerceIn(64, DeviceGestures.SCREENSHOT_MAX_PX)
-                val shot = service?.screenshotPng(maxEdge)
-                    ?: return DeviceLanePolicy.fail(command.commandId, "timeout", "screenshot failed")
-                val b64 = Base64.encodeToString(shot.first, Base64.NO_WRAP)
-                DeviceLanePolicy.ok(
-                    command.commandId,
-                    """{"mime":"image/png","w":${shot.second},"h":${shot.third},"png_b64":"$b64"}""",
-                )
-            }
-            // ---------- L0 (direct API) tools ----------
-            "device.audio.volume.get" -> {
-                val stream = jsonField(args, "stream")
-                val rows = DirectToolbox.audioVolumeGet(app, stream)
-                if (rows.isEmpty() && !stream.isNullOrBlank()) {
-                    return DeviceLanePolicy.fail(command.commandId, "invalid_stream", "unknown stream '$stream'")
-                }
-                val payload = rows.joinToString(",") { row ->
-                    val sName = (row["stream"] as? String) ?: ""
-                    val cVal = (row["current"] as? Int) ?: 0
-                    val mVal = (row["max"] as? Int) ?: 0
-                    """{"stream":${jsonQuote(sName)},"current":$cVal,"max":$mVal}"""
-                }
-                DeviceLanePolicy.ok(command.commandId, """{"streams":[$payload]}""")
-            }
-            "device.audio.volume.set" -> {
-                val stream = jsonField(args, "stream").orEmpty()
-                val level = jsonLong(args, "level")?.toInt()
-                val step = jsonLong(args, "step")?.toInt()
-                if (stream.isBlank()) {
-                    return DeviceLanePolicy.fail(command.commandId, "missing_stream", "stream required")
-                }
-                if (level == null && step == null) {
-                    return DeviceLanePolicy.fail(command.commandId, "missing_level", "level or step required")
-                }
-                val row = DirectToolbox.audioVolumeSet(app, stream, level, step)
-                    ?: return DeviceLanePolicy.fail(command.commandId, "invalid_stream", "unknown stream '$stream'")
-                val sName = (row["stream"] as? String) ?: stream
-                val cVal = (row["current"] as? Int) ?: 0
-                val mVal = (row["max"] as? Int) ?: 0
-                DeviceLanePolicy.ok(
-                    command.commandId,
-                    """{"stream":${jsonQuote(sName)},"current":$cVal,"max":$mVal}""",
-                )
-            }
-            "device.audio.ringer" -> {
-                val mode = jsonField(args, "mode")
-                if (mode.isNullOrBlank()) {
-                    val cur = DirectToolbox.ringerGet(app)
-                    return DeviceLanePolicy.ok(command.commandId, """{"mode":${jsonQuote(cur)}}""")
-                }
-                val out = DirectToolbox.ringerSet(app, mode)
-                    ?: return DeviceLanePolicy.fail(command.commandId, "invalid_mode", "use normal|vibrate|silent")
-                if (out.startsWith("denied")) {
-                    return DeviceLanePolicy.fail(
-                        command.commandId,
-                        "policy_denied",
-                        "grant Do Not Disturb access in Settings to allow silent",
-                    )
-                }
-                DeviceLanePolicy.ok(command.commandId, """{"mode":${jsonQuote(out)}}""")
-            }
-            "device.media.sessions" -> {
-                val rows = DirectToolbox.mediaSessions(app)
-                if (rows.isEmpty() && !NotifStreamBus.listenerBound) {
-                    return DeviceLanePolicy.fail(
-                        command.commandId,
-                        "nls_unavailable",
-                        "grant notification access in Settings, then retry",
-                    )
-                }
-                val payload = rows.joinToString(",") { row ->
-                    val pkg = (row["package"] as? String) ?: ""
-                    val active = (row["is_active"] as? Boolean) ?: false
-                    val state = (row["playback_state"] as? String) ?: "none"
-                    """{"package":${jsonQuote(pkg)},"is_active":$active,"playback_state":${jsonQuote(state)}}"""
-                }
-                DeviceLanePolicy.ok(command.commandId, """{"sessions":[$payload]}""")
-            }
-            "device.media.now_playing" -> {
-                val handle = jsonField(args, "session_id").orEmpty()
-                if (handle.isBlank()) {
-                    return DeviceLanePolicy.fail(command.commandId, "missing_session", "session_id required")
-                }
-                val row = DirectToolbox.mediaNowPlaying(app, handle)
-                    ?: return DeviceLanePolicy.fail(
-                        command.commandId,
-                        "no_session",
-                        "no active session for '$handle'",
-                    )
-                val keys = listOf("title", "artist", "album", "duration_ms")
-                val body = keys.joinToString(",") { k ->
-                    val v = row[k]
-                    if (v is String) "\"$k\":${jsonQuote(v)}"
-                    else if (v is Long) "\"$k\":$v"
-                    else "\"$k\":${v ?: "null"}"
-                }
-                DeviceLanePolicy.ok(command.commandId, """{"package":${jsonQuote(handle)},$body}""")
-            }
-            "device.media.control" -> {
-                val handle = jsonField(args, "session_id").orEmpty()
-                val action = jsonField(args, "action").orEmpty()
-                if (handle.isBlank() || action.isBlank()) {
-                    return DeviceLanePolicy.fail(
-                        command.commandId,
-                        "missing_args",
-                        "session_id and action required",
-                    )
-                }
-                val pos = jsonLong(args, "position_ms")
-                val out = DirectToolbox.mediaControl(app, handle, action, pos)
-                val ok = (out["ok"] as? Boolean) ?: false
-                if (!ok) {
-                    return DeviceLanePolicy.fail(
-                        command.commandId,
-                        (out["error"] as? String) ?: "control_failed",
-                        "media control failed",
-                    )
-                }
-                DeviceLanePolicy.ok(
-                    command.commandId,
-                    """{"package":${jsonQuote(handle)},"action":${jsonQuote(action)}}""",
-                )
-            }
-            "device.clipboard.get" -> {
-                // Blocked is not the same as empty: Android 10+ withholds the clip from any
-                // app that is neither focused nor the default IME, which is Companion's normal
-                // state. Report that as a distinct error so the agent falls back to reading the
-                // focused field over the a11y lane instead of trusting an empty string.
-                when (val read = DirectToolbox.clipboardGet(app)) {
-                    is DirectToolbox.ClipRead.Text ->
-                        DeviceLanePolicy.ok(command.commandId, """{"text":${jsonQuote(read.text)}}""")
-                    is DirectToolbox.ClipRead.Empty ->
-                        DeviceLanePolicy.ok(command.commandId, """{"text":""}""")
-                    is DirectToolbox.ClipRead.NotText ->
-                        DeviceLanePolicy.fail(
-                            command.commandId,
-                            "clipboard_not_text",
-                            read.mime ?: "clip has no text/plain item",
-                        )
-                    is DirectToolbox.ClipRead.Blocked ->
-                        DeviceLanePolicy.fail(
-                            command.commandId,
-                            "clipboard_read_blocked",
-                            "Android 10+ blocks clipboard reads unless the app is focused or the default IME",
-                        )
-                }
-            }
-            "device.clipboard.set" -> {
-                val text = jsonField(args, "text").orEmpty()
-                val ok = DirectToolbox.clipboardSet(app, text)
-                if (!ok) return DeviceLanePolicy.fail(command.commandId, "clipboard_failed")
-                DeviceLanePolicy.ok(command.commandId, """{"length":${text.length}}""")
-            }
-            "device.device.info" -> {
-                val info = DirectToolbox.deviceInfo(app)
-                val body = info.entries.joinToString(",") { (k, v) ->
-                    if (v is String) "\"$k\":${jsonQuote(v)}"
-                    else "\"$k\":$v"
-                }
-                DeviceLanePolicy.ok(command.commandId, "{$body}")
-            }
-            // ---------- Stream + NLS controls (L0) ----------
-            "device.notifications.nls" -> {
-                val n = DirectToolbox.nlsStatus(app)
-                val body = n.entries.joinToString(",") { (k, v) ->
-                    if (v is String) "\"$k\":${jsonQuote(v)}"
-                    else "\"$k\":$v"
-                }
-                DeviceLanePolicy.ok(command.commandId, "{$body}")
-            }
-            "device.notifications.nls.enable" -> {
-                val n = DirectToolbox.nlsEnable(app)
-                val body = n.entries.joinToString(",") { (k, v) ->
-                    if (v is String) "\"$k\":${jsonQuote(v)}"
-                    else "\"$k\":$v"
-                }
-                DeviceLanePolicy.ok(command.commandId, "{$body}")
-            }
-            "device.notifications.stream" -> {
-                val target = sticky.notifStreamTargetOrigin()
-                val profile = target?.let { sticky.notifStreamProfileFor(it) }
-                DeviceLanePolicy.ok(
-                    command.commandId,
-                    "{" +
-                        "\"enabled\":${sticky.notifStreamEnabled}," +
-                        "\"origin\":${jsonQuote(sticky.notifStreamOrigin.orEmpty())}," +
-                        "\"target_origin\":${jsonQuote(target.orEmpty())}," +
-                        "\"profile\":${jsonQuote(profile.orEmpty())}," +
-                        "\"nls_bound\":${NotifStreamBus.listenerBound}" +
-                    "}",
-                )
-            }
-            "device.sms.list", "device.calls.log", "device.contacts.search" -> {
-                // One shape for the three provider reads: run off the main thread, render rows,
-                // and turn a missing grant into a named permission_denied rather than an empty
-                // list an agent would read as "you have no messages".
-                val limit = jsonLong(args, "limit")?.toInt() ?: 20
-                runCatching {
-                    when (command.action) {
-                        "device.sms.list" -> "messages" to TelephonyToolbox.smsList(
-                            app,
-                            limit = limit,
-                            address = jsonField(args, "address"),
-                            query = jsonField(args, "query"),
-                            sinceMs = jsonLong(args, "since_ms"),
-                            box = jsonField(args, "box"),
-                        )
-                        "device.calls.log" -> "calls" to TelephonyToolbox.callLog(
-                            app,
-                            limit = limit,
-                            type = jsonField(args, "type"),
-                            sinceMs = jsonLong(args, "since_ms"),
-                        )
-                        else -> "contacts" to TelephonyToolbox.contactsSearch(
-                            app,
-                            query = jsonField(args, "query"),
-                            limit = limit,
-                        )
-                    }
-                }.fold(
-                    onSuccess = { (key, rows) ->
-                        val body = rows.joinToString(",") { row -> jsonObject(row) }
-                        DeviceLanePolicy.ok(command.commandId, """{"$key":[$body],"count":${rows.size}}""")
-                    },
-                    onFailure = { t ->
-                        DeviceLanePolicy.fail(
-                            command.commandId,
-                            TelephonyToolbox.errorCode(t),
-                            TelephonyToolbox.errorMessage(t),
-                        )
-                    },
-                )
-            }
-            // L2 intent handoffs: alarm, timer, play-from-search, calendar insert, share,
-            // settings deep link, uninstall. Args are read through a typed accessor over the
-            // flat argument map.
-            "device.alarm.set", "device.timer.set", "device.media.play_search",
-            "device.calendar.add", "device.share", "device.settings.open",
-            "device.apps.uninstall" -> {
-                val typed = IntentToolbox.Args { key -> jsonField(args, key) ?: JsonArgs.numberArg(args, key) }
-                runCatching { IntentToolbox.launchTask(app, command.action, typed) }.fold(
-                    onSuccess = { info -> DeviceLanePolicy.ok(command.commandId, jsonObject(info)) },
-                    onFailure = { t ->
-                        DeviceLanePolicy.fail(
-                            command.commandId,
-                            IntentToolbox.errorCode(t),
-                            t.message ?: "handoff failed",
-                        )
-                    },
-                )
-            }
-            // L0 read surfaces. Each raises a named failure rather than returning empty data.
-            "device.calendar.list", "device.location.last", "device.battery",
-            "device.power.state", "device.thermal", "device.apps.usage",
-            "device.audio.dnd", "device.audio.dnd.set" -> {
-                runCatching {
-                    when (command.action) {
-                        "device.calendar.list" -> "events" to SystemToolbox.calendarList(
-                            app,
-                            fromMs = jsonLong(args, "from_ms"),
-                            toMs = jsonLong(args, "to_ms"),
-                            limit = jsonLong(args, "limit")?.toInt() ?: 20,
-                        )
-                        "device.apps.usage" -> "apps" to SystemToolbox.appUsage(
-                            app,
-                            sinceMs = jsonLong(args, "since_ms"),
-                            limit = jsonLong(args, "limit")?.toInt() ?: 20,
-                        )
-                        "device.location.last" -> null to SystemToolbox.locationLast(app)
-                        "device.battery" -> null to SystemToolbox.battery(app)
-                        "device.power.state" -> null to SystemToolbox.powerState(app)
-                        "device.thermal" -> null to SystemToolbox.thermal(app)
-                        "device.audio.dnd" -> null to SystemToolbox.dndGet(app)
-                        else -> null to SystemToolbox.dndSet(
-                            app,
-                            jsonField(args, "mode") ?: throw IllegalArgumentException("mode required"),
-                        )
-                    }
-                }.fold(
-                    onSuccess = { (listKey, payload) ->
-                        val body = if (listKey == null) {
-                            @Suppress("UNCHECKED_CAST")
-                            jsonObject(payload as Map<String, Any?>)
-                        } else {
-                            @Suppress("UNCHECKED_CAST")
-                            val rows = payload as List<Map<String, Any?>>
-                            """{"$listKey":[${rows.joinToString(",") { jsonObject(it) }}],"count":${rows.size}}"""
-                        }
-                        DeviceLanePolicy.ok(command.commandId, body)
-                    },
-                    onFailure = { t ->
-                        DeviceLanePolicy.fail(
-                            command.commandId,
-                            SystemToolbox.errorCode(t),
-                            SystemToolbox.errorMessage(t),
-                        )
-                    },
-                )
-            }
-            "device.voice.speak" -> {
-                val text = jsonField(args, "text").orEmpty()
-                if (text.isBlank()) {
-                    return DeviceLanePolicy.fail(command.commandId, "missing_args", "text required")
-                }
-                runCatching {
-                    SpeechToolbox.speak(
-                        app,
-                        text = text,
-                        queue = jsonBool(args, "queue") ?: false,
-                        rate = jsonNumber(args, "rate"),
-                        pitch = jsonNumber(args, "pitch"),
-                        waitMs = jsonLong(args, "wait_ms") ?: 0L,
-                    )
-                }.fold(
-                    onSuccess = { info -> DeviceLanePolicy.ok(command.commandId, jsonObject(info)) },
-                    onFailure = { t ->
-                        DeviceLanePolicy.fail(
-                            command.commandId,
-                            SpeechToolbox.errorCode(t),
-                            t.message ?: "speak failed",
-                        )
-                    },
-                )
-            }
-            "device.voice.stop" -> {
-                val had = SpeechToolbox.stop()
-                DeviceLanePolicy.ok(command.commandId, """{"stopped":$had}""")
-            }
-            "device.voice.status" -> {
-                DeviceLanePolicy.ok(command.commandId, jsonObject(SpeechToolbox.status(app)))
-            }
-            "device.sms.send" -> {
-                val to = jsonField(args, "address").orEmpty()
-                val body = jsonField(args, "body").orEmpty()
-                if (to.isBlank() || body.isEmpty()) {
-                    return DeviceLanePolicy.fail(
-                        command.commandId,
-                        "missing_args",
-                        "address and a non-empty body required",
-                    )
-                }
-                runCatching { TelephonyToolbox.smsSend(app, to, body) }.fold(
-                    // Never echo the body: it is a private message to a real person.
-                    onSuccess = { parts ->
-                        DeviceLanePolicy.ok(
-                            command.commandId,
-                            """{"sent":true,"parts":$parts,"length":${body.length}}""",
-                        )
-                    },
-                    onFailure = { t ->
-                        DeviceLanePolicy.fail(
-                            command.commandId,
-                            TelephonyToolbox.errorCode(t),
-                            TelephonyToolbox.errorMessage(t),
-                        )
-                    },
-                )
-            }
-            "device.sms.compose", "device.calls.dial", "device.calls.place" -> {
-                // L2 intent handoffs: these put an app on screen. compose/dial need no
-                // permission at all — the messaging app or dialer opens pre-filled and the user
-                // completes it, which is why they are the route to prefer over sms.send.
-                val to = jsonField(args, "address").orEmpty().trim()
-                if (to.isBlank()) {
-                    return DeviceLanePolicy.fail(command.commandId, "missing_args", "address required")
-                }
-                val body = jsonField(args, "body").orEmpty()
-                runCatching { IntentToolbox.launch(app, command.action, to, body) }.fold(
-                    onSuccess = { info -> DeviceLanePolicy.ok(command.commandId, jsonObject(info)) },
-                    onFailure = { t ->
-                        DeviceLanePolicy.fail(
-                            command.commandId,
-                            IntentToolbox.errorCode(t),
-                            t.message ?: "handoff failed",
-                        )
-                    },
-                )
-            }
-            "device.notifications.actions" -> {
-                val key = jsonField(args, "key").orEmpty()
-                if (key.isBlank()) {
-                    return DeviceLanePolicy.fail(command.commandId, "missing_args", "key required")
-                }
-                NotifActions.listActions(key).fold(
-                    onSuccess = { rows ->
-                        val body = rows.joinToString(",") { r ->
-                            """{"index":${r.index},"title":${jsonQuote(r.title)},"accepts_text":${r.acceptsText}}"""
-                        }
-                        DeviceLanePolicy.ok(command.commandId, """{"actions":[$body]}""")
-                    },
-                    onFailure = { t ->
-                        DeviceLanePolicy.fail(
-                            command.commandId,
-                            NotifActions.errorCode(t),
-                            NotifActions.errorMessage(t),
-                        )
-                    },
-                )
-            }
-            "device.notifications.action" -> {
-                val key = jsonField(args, "key").orEmpty()
-                val index = jsonLong(args, "index")?.toInt()
-                if (key.isBlank() || index == null) {
-                    return DeviceLanePolicy.fail(
-                        command.commandId,
-                        "missing_args",
-                        "key and index required; list them with the notification actions tool",
-                    )
-                }
-                NotifActions.fireAction(app, key, index).fold(
-                    onSuccess = { title ->
-                        DeviceLanePolicy.ok(
-                            command.commandId,
-                            """{"fired":${jsonQuote(title)},"index":$index}""",
-                        )
-                    },
-                    onFailure = { t ->
-                        DeviceLanePolicy.fail(
-                            command.commandId,
-                            NotifActions.errorCode(t),
-                            NotifActions.errorMessage(t),
-                        )
-                    },
-                )
-            }
-            "device.notifications.reply" -> {
-                val key = jsonField(args, "key").orEmpty()
-                val text = jsonField(args, "text")
-                if (key.isBlank() || text.isNullOrEmpty()) {
-                    return DeviceLanePolicy.fail(
-                        command.commandId,
-                        "missing_args",
-                        "key and a non-empty text required",
-                    )
-                }
-                NotifActions.reply(app, key, text).fold(
-                    onSuccess = { title ->
-                        // Never echo the body back: replies land in the user's private threads.
-                        DeviceLanePolicy.ok(
-                            command.commandId,
-                            """{"replied":true,"action":${jsonQuote(title)},"length":${text.length}}""",
-                        )
-                    },
-                    onFailure = { t ->
-                        DeviceLanePolicy.fail(
-                            command.commandId,
-                            NotifActions.errorCode(t),
-                            NotifActions.errorMessage(t),
-                        )
-                    },
-                )
-            }
-            "device.notifications.dismiss" -> {
-                val key = jsonField(args, "key").orEmpty()
-                if (key.isBlank()) {
-                    return DeviceLanePolicy.fail(command.commandId, "missing_args", "key required")
-                }
-                NotifActions.dismiss(key).fold(
-                    onSuccess = { DeviceLanePolicy.ok(command.commandId, """{"dismissed":true}""") },
-                    onFailure = { t ->
-                        DeviceLanePolicy.fail(
-                            command.commandId,
-                            NotifActions.errorCode(t),
-                            NotifActions.errorMessage(t),
-                        )
-                    },
-                )
-            }
-            "device.notifications.snooze" -> {
-                val key = jsonField(args, "key").orEmpty()
-                val ms = jsonLong(args, "duration_ms")
-                if (key.isBlank() || ms == null) {
-                    return DeviceLanePolicy.fail(
-                        command.commandId,
-                        "missing_args",
-                        "key and duration_ms required",
-                    )
-                }
-                NotifActions.snooze(key, ms).fold(
-                    onSuccess = { applied ->
-                        DeviceLanePolicy.ok(command.commandId, """{"snoozed_ms":$applied}""")
-                    },
-                    onFailure = { t ->
-                        DeviceLanePolicy.fail(
-                            command.commandId,
-                            NotifActions.errorCode(t),
-                            NotifActions.errorMessage(t),
-                        )
-                    },
-                )
-            }
-            "device.notifications.stream.set" -> {
-                // `enabled` is declared as a boolean in the tool schema, so it arrives unquoted;
-                // hasEnabled tracks presence separately from the parsed value so a malformed
-                // value still reports invalid_enabled rather than missing_args.
-                val hasEnabled = Regex("\"enabled\"\\s*:").containsMatchIn(args)
-                val enabledParsed = jsonBool(args, "enabled")
-                val originRaw = jsonField(args, "origin")
-                val profileRaw = jsonField(args, "profile")
-                if (!hasEnabled && originRaw == null && profileRaw == null) {
-                    return DeviceLanePolicy.fail(
-                        command.commandId,
-                        "missing_args",
-                        "pass enabled=false to stop sharing; enable and routing require the phone UI",
-                    )
-                }
-                // Validate before touching anything: a rejected call must not have moved the target.
-                if (hasEnabled && enabledParsed == null) {
-                    return DeviceLanePolicy.fail(
-                        command.commandId,
-                        "invalid_enabled",
-                        "enabled must be one of true/false",
-                    )
-                }
-                if (enabledParsed == true || originRaw != null || profileRaw != null) {
-                    return DeviceLanePolicy.fail(command.commandId, "phone_consent_required", "Choose apps and destination and enable sharing in the phone UI.")
-                }
-                setNotifStreamEnabled(false, deferLaneRefresh = true)
-                val target = sticky.notifStreamTargetOrigin()
-                val profile = target?.let { sticky.notifStreamProfileFor(it) }
-                DeviceLanePolicy.ok(
-                    command.commandId,
-                    "{" +
-                        "\"enabled\":${sticky.notifStreamEnabled}," +
-                        "\"origin\":${jsonQuote(sticky.notifStreamOrigin.orEmpty())}," +
-                        "\"target_origin\":${jsonQuote(target.orEmpty())}," +
-                        "\"profile\":${jsonQuote(profile.orEmpty())}," +
-                        "\"nls_bound\":${NotifStreamBus.listenerBound}" +
-                    "}",
-                )
-            }
-            else -> DeviceLanePolicy.fail(command.commandId, "capability_denied")
-        }
-    }
-
-    private fun swipeSpec(args: String, service: CompanionAccessibilityService?): SwipeSpec? {
-        val x1 = jsonNumber(args, "x1")
-        val y1 = jsonNumber(args, "y1")
-        val x2 = jsonNumber(args, "x2")
-        val y2 = jsonNumber(args, "y2")
-        if (x1 != null && y1 != null && x2 != null && y2 != null) {
-            return DeviceGestures.swipe(x1, y1, x2, y2)
-        }
-        val from = lastNodes.find { it.ref == jsonField(args, "from_ref") }
-        val to = lastNodes.find { it.ref == jsonField(args, "to_ref") }
-        if (from != null && to != null && from.bounds.size >= 4 && to.bounds.size >= 4) {
-            return DeviceGestures.swipe(
-                (from.bounds[0] + from.bounds[2]) / 2f,
-                (from.bounds[1] + from.bounds[3]) / 2f,
-                (to.bounds[0] + to.bounds[2]) / 2f,
-                (to.bounds[1] + to.bounds[3]) / 2f,
-            )
-        }
-        val dx = jsonNumber(args, "dx")
-        val dy = jsonNumber(args, "dy")
-        if (dx != null && dy != null) {
-            val (w, h) = service?.displaySize() ?: (1080 to 2400)
-            val cx = w / 2f
-            val cy = h / 2f
-            return DeviceGestures.swipe(cx, cy, cx + dx, cy + dy)
-        }
-        return null
-    }
-
-    private fun noteAudit(action: String, app: String, ok: Boolean, code: String) {
-        val row = DeviceAudit.row(action = action, app = app, ok = ok, code = code)
-        auditRows = DeviceAudit.append(auditRows, row)
-        val line = "${row.action} ${if (row.ok) "ok" else row.code} ${row.app}".trim()
-        _state.update { it.copy(lastAudit = line, foregroundApp = CompanionAccessibilityService.foregroundApp) }
-    }
-
-    private fun jsonField(raw: String, key: String): String? = JsonArgs.string(raw, key)
-
-    /**
-     * Read a boolean argument.
-     *
-     * [jsonField] only matches a *quoted* value, so a real JSON boolean (`"enabled": true`) is
-     * invisible to it — and the tool schemas declare these as booleans, so that is exactly what
-     * a well-behaved caller sends. Accept both, plus the usual string spellings, so the wire
-     * format and the schema agree.
-     */
-    private fun jsonBool(raw: String, key: String): Boolean? {
-        val match = Regex("\"${Regex.escape(key)}\"\\s*:\\s*\"?([A-Za-z01]+)\"?").find(raw)
-        return when (match?.groupValues?.getOrNull(1)?.lowercase()) {
-            "true", "1", "yes", "on" -> true
-            "false", "0", "no", "off" -> false
-            else -> null
-        }
-    }
-
-    /** Pixel coordinates / TTS rate: Float precision is plenty. Timestamps and counts use [jsonLong]. */
-    private fun jsonNumber(raw: String, key: String): Float? = JsonArgs.double(raw, key)?.toFloat()
-
-    private fun jsonLong(raw: String, key: String): Long? = JsonArgs.long(raw, key)
-
-    private fun jsonXy(raw: String): Pair<Float, Float>? {
-        val match = Regex("\"xy\"\\s*:\\s*\\[\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)").find(raw)
-        val x = match?.groupValues?.getOrNull(1)?.toFloatOrNull() ?: return null
-        val y = match.groupValues.getOrNull(2)?.toFloatOrNull() ?: return null
-        return x to y
-    }
-
-    // Delegated to a tested, spec-correct encoder: the previous inline version escaped only
-    // `\` and `"`, so a newline in an SMS body, notification text or snapshot label produced a
-    // payload the host could not parse — surfacing as a timeout rather than an error.
-    private fun jsonQuote(value: String): String = JsonText.quote(value)
-
-    private fun jsonObject(row: Map<String, Any?>): String = JsonText.obj(row)
 }
 
 /** Pairing phase derives from the stored credential, but only for the origin it was issued by. */

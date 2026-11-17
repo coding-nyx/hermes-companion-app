@@ -44,6 +44,9 @@ fun ProfileBottomSheet(
     onSelect: (String) -> Unit,
     onOpenAll: () -> Unit,
     onDismiss: () -> Unit,
+    hostName: String = "",
+    switching: Boolean = false,
+    switchingLabel: String = "Switching profile…",
     sheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
 ) {
     ModalBottomSheet(
@@ -88,7 +91,7 @@ fun ProfileBottomSheet(
                     style = CompanionType.Caption.copy(color = CompanionColor.Signal),
                     modifier = Modifier
                         .testTag("nav.profile.sheet.all")
-                        .heightIn(min = 48.dp).clickable {
+                        .heightIn(min = 48.dp).clickable(enabled = !switching) {
                             onDismiss()
                             onOpenAll()
                         }
@@ -96,9 +99,14 @@ fun ProfileBottomSheet(
                 )
             }
             Hairline()
-            Text("Choose the agent for this host. Each agent keeps its own conversations.",
+            Text(if (hostName.isBlank()) "Choose the agent for this host. Each agent keeps its own conversations."
+                else "Agents on $hostName · each keeps its own conversations.",
                 style = CompanionType.Caption,
                 modifier = Modifier.padding(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm))
+            if (switching) Text(switchingLabel, style = CompanionType.Caption,
+                modifier = Modifier.padding(horizontal = CompanionSpace.Lg).testTag("nav.profile.switching"))
+            if (profiles.isEmpty()) Text("This host has not reported any profiles.", style = CompanionType.Caption,
+                modifier = Modifier.padding(CompanionSpace.Lg).testTag("nav.profile.empty"))
             LazyColumn(
                 modifier = Modifier.fillMaxWidth(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = CompanionSpace.Lg, vertical = CompanionSpace.Sm),
@@ -106,6 +114,7 @@ fun ProfileBottomSheet(
             ) {
                 items(profiles, key = { it.id }) { profile ->
                     ProfileChoice(profile = profile, selected = profile.id == activeProfileId,
+                        enabled = !switching, switching = switching,
                         onSelect = { onSelect(profile.id); onDismiss() },
                         modifier = Modifier.testTag("nav.profile.sheet.${profile.id}"))
                 }

@@ -4,6 +4,7 @@ import app.hermes.companion.backend.BackendWorkspaceScreen
 import android.Manifest
 import android.app.KeyguardManager
 import android.content.Intent
+import android.content.ComponentName
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -32,12 +33,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.MutableStateFlow
-import app.hermes.companion.device.CompanionAccessibilityService
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import app.hermes.companion.device.LiveOverlay
 import app.hermes.companion.design.CompanionTheme
 import app.hermes.companion.domain.DeviceLanePolicy
@@ -53,9 +57,19 @@ class MainActivity : FragmentActivity() {
     private var pendingPermissionAction: (() -> Unit)? = null
     private var pendingPermissionDeny: (() -> Unit)? = null
     private lateinit var permissionLauncher: ActivityResultLauncher<String>
+    private lateinit var handsConnectLauncher: ActivityResultLauncher<Intent>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handsConnectLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                val token = result.data?.getStringExtra("hands_token")
+                val endpoint = result.data?.getStringExtra("hands_endpoint")
+                if (!token.isNullOrBlank() && !endpoint.isNullOrBlank()) lifecycleScope.launch {
+                    (application as CompanionApp).deviceNode.connectExternalHands(token, endpoint)
+                }
+            }
+        }
         permissionLauncher = registerForActivityResult(
             ActivityResultContracts.RequestPermission(),
         ) { granted ->
@@ -85,6 +99,11 @@ class MainActivity : FragmentActivity() {
         setContent {
             CompanionTheme {
                 val vm: CompanionViewModel = viewModel(factory = CompanionViewModel.factory(app))
+                val openHands: () -> Unit = {
+                    val launch = packageManager.getLaunchIntentForPackage("app.hermes.hands")
+                    if (launch == null) vm.noteError("Hands is not installed.")
+                    else runCatching { startActivity(launch) }.onFailure { vm.noteError("Could not open Hands.") }
+                }
                 val state by vm.state.collectAsStateWithLifecycle()
                 val backendState by vm.backendWorkspace.state.collectAsStateWithLifecycle()
                 val reconnect by reconnectNonce.collectAsStateWithLifecycle()
@@ -98,6 +117,14 @@ class MainActivity : FragmentActivity() {
                 }
 
                 val lifecycleOwner = LocalLifecycleOwner.current
+                LaunchedEffect(lifecycleOwner, state.externalHands) {
+                    if (state.externalHands) lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                        while (true) {
+                            app.handsClient.refresh()
+                            delay(3_000)
+                        }
+                    }
+                }
                 DisposableEffect(lifecycleOwner, pickerOutstanding) {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_START) vm.setFleetHealthForeground(true)
@@ -107,15 +134,7 @@ class MainActivity : FragmentActivity() {
                             if (!pickerOutstanding) vm.lockIfEnabled()
                         }
                         if (event == Lifecycle.Event.ON_RESUME) {
-                            app.deviceNode.recoverAccessibility()
-                            vm.refreshKeepA11yAvailable()
-                            val enabled = Settings.Secure.getString(
-                                contentResolver,
-                                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-                            )
-                            vm.setA11yBound(DeviceLanePolicy.componentEnabled(
-                                enabled, packageName, CompanionAccessibilityService::class.java.name,
-                            ))
+                            app.deviceNode.refreshExternalHands()
                             vm.setOverlayGranted(LiveOverlay.allowed(this@MainActivity))
                             vm.setNotifyGranted(notifyAllowed())
 
@@ -346,25 +365,25 @@ class MainActivity : FragmentActivity() {
                     onApprovePair = vm::approvePair,
                     onCancelPair = vm::cancelPair,
                     onRevokePair = vm::revokePair,
-                    onArm = vm::arm,
+                    onArm = openHands,
                     onDisarm = vm::disarm,
-                    onEnableA11y = {
-                        if (!vm.turnAccessibilityOn()) startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    onConnectHands = {
+                        runCatching {
+                            handsConnectLauncher.launch(Intent().setComponent(ComponentName("app.hermes.hands", "app.hermes.hands.ConnectActivity"))
+                                .putExtra("caller_label", "Hermes Companion")
+                                .putStringArrayListExtra("hands_protected_packages", ArrayList((app.sticky.protectedPackages + state.protectedCustom).toSortedSet())))
+                        }.onFailure { vm.noteError("Install or open Hands, then connect it from Device.") }
                     },
-                    onDisableA11y = {
-                        if (!vm.turnAccessibilityOff()) startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    },
-                    onEnableOverlay = {
-                        startActivity(
-                            Intent(
-                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                Uri.parse("package:$packageName"),
-                            ),
-                        )
-                    },
-                    onEnableNls = {
-                        startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-                    },
+                    onDisconnectHands = { app.deviceNode.disconnectExternalHands() },
+                    onOpenHands = openHands,
+                    onEnableA11y = openHands,
+                    onDisableA11y = openHands,
+                    onEnableOverlay = openHands,
+                    onRequestSmsPermission = openHands,
+                    onOpenSmsSettings = openHands,
+                    privateEntryActive = state.externalHandsPrivacy,
+                    onOpenPrivateEntry = openHands,
+                    onEnableNls = openHands,
                     onToggleNotifStream = vm::toggleNotifStream,
                     onSetStreamApp = vm::setNotifStreamApp,
                     onSetStreamContent = vm::setNotifStreamContent,

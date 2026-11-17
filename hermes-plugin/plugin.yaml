@@ -1,6 +1,6 @@
 name: hermes-companion
-version: "1.0.0"
-description: Pair an Android companion as a device node and expose mobile_* tools (a11y lane + direct API lane).
+version: "1.2.0"
+description: Pair an Android companion with screen control, work-aware screen holds, brightness, shared-storage file management and binary transfers, plus direct API tools.
 author: hermes-companion-app
 kind: standalone
 platforms:
@@ -12,9 +12,28 @@ provides_tools:
   - mobile_status
   - mobile_arm
   - mobile_disarm
+  - mobile_keep_awake
+  - mobile_brightness_get
+  - mobile_brightness_set
+  - mobile_agent_screen_start
+  - mobile_agent_screen_status
+  - mobile_agent_screen_stop
+  - mobile_accessibility_status
+  - mobile_accessibility_enable
+  - mobile_accessibility_disable
+  - mobile_accessibility_services
+  - mobile_accessibility_service_set
+  - mobile_secure_settings
+  - mobile_secure_settings_set
+  - mobile_files_access
+  - mobile_files_enable
+  - mobile_files
+  - mobile_file_pull
+  - mobile_file_push
   - mobile_snapshot
   - mobile_click
   - mobile_type
+  - mobile_secure_entry
   - mobile_press
   - mobile_swipe
   - mobile_scroll

@@ -429,7 +429,17 @@ class RelayState:
         with self.lock:
             meta = self.live_meta.setdefault(device_id, {})
             if "armed" in fields:
-                meta["armed"] = bool(fields["armed"])
+                meta["armed"] = fields["armed"] is True
+                if fields["armed"] is True:
+                    meta.pop("local_approval_required", None)
+            if fields.get("local_approval_required") is True or fields.get("privacy_active") is True:
+                meta["armed"] = False
+            if "screen_control_available" in fields:
+                meta["screen_control_available"] = fields["screen_control_available"] is True
+            elif "a11y_bound" in fields:
+                meta.pop("screen_control_available", None)
+            if "local_approval_required" in fields:
+                meta["local_approval_required"] = fields["local_approval_required"] is True
             if "foreground_app" in fields:
                 meta["foreground_app"] = str(fields.get("foreground_app") or "")
             app = fields.get("app")
@@ -439,6 +449,8 @@ class RelayState:
                 meta["a11y_bound"] = bool(fields["a11y_bound"])
             if "overlay" in fields:
                 meta["overlay"] = bool(fields["overlay"])
+            if "privacy_active" in fields:
+                meta["privacy_active"] = bool(fields["privacy_active"])
             if "notifications_stream" in fields:
                 meta["notifications_stream"] = bool(fields["notifications_stream"])
             if "notifications_listener_bound" in fields:
@@ -455,6 +467,9 @@ class RelayState:
     def push_notification(self, device_id: str, event: dict) -> str:
         if not device_id or not isinstance(event, dict):
             return "invalid_event"
+        with self.lock:
+            if self.live_meta.get(device_id, {}).get("privacy_active"):
+                return "privacy_active"
         notification = event.get("notification")
         notification = notification if isinstance(notification, dict) else {}
         # An explicitly versioned phone consent contract. Malformed values never fall
@@ -502,6 +517,10 @@ class RelayState:
         except Exception:
             mode = None
         with self.lock:
+            # Repeat under the commit lock: a secure-entry status can race decoding
+            # or policy evaluation above. Never append or wake while shielded.
+            if self.live_meta.get(device_id, {}).get("privacy_active"):
+                return "privacy_active"
             if delivery_key is not None:
                 now = time.monotonic()
                 self.notif_deliveries = {k: v for k, v in self.notif_deliveries.items() if v[0] > now}
@@ -548,10 +567,12 @@ class RelayState:
         profile_filter = (profile or "").strip() or None
         with self.lock:
             if device_id:
-                rows = list(self.notif_rings.get(device_id, []))
+                rows = [] if self.live_meta.get(device_id, {}).get("privacy_active") else list(self.notif_rings.get(device_id, []))
             else:
                 rows = []
                 for did, ring in self.notif_rings.items():
+                    if self.live_meta.get(did, {}).get("privacy_active"):
+                        continue
                     for row in ring:
                         item = dict(row)
                         item.setdefault("device_id", did)
@@ -647,7 +668,8 @@ class RelayState:
         result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
         if lane_id and isinstance(result, dict) and (
             "armed" in result or "foreground_app" in result or "app" in result
-            or "a11y_bound" in result or "overlay" in result
+            or "a11y_bound" in result or "overlay" in result or "privacy_active" in result
+            or "screen_control_available" in result or "local_approval_required" in result
         ):
             self._apply_live_meta(lane_id, result)
         with self.lock:
@@ -1122,7 +1144,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 )
                 if body.get("wait") is False:
                     return self._json({"command_id": command_id, "device_id": device_id})
-                result = self.state.wait_result(command_id)
+                result = self.state.wait_result(command_id, timeout=120 if body.get("action") == "device.files" else 20)
                 result["command_id"] = command_id
                 result["device_id"] = device_id
                 # Mirror arm/disarm into live_meta even if the phone omitted device_id on the frame.

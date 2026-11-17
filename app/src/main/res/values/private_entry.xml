@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The Compose surface is opaque. A translucent, separate task keeps the
+         destination window/node alive and returns to it when local input closes. -->
+    <style name="Theme.HermesCompanion.PrivateEntry" parent="Theme.HermesCompanion">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
+</resources>

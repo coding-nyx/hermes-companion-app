@@ -13,7 +13,6 @@ import app.hermes.companion.data.local.TranscriptCache
 import app.hermes.companion.data.remote.DashboardClient
 import app.hermes.companion.data.remote.DashboardException
 import app.hermes.companion.data.remote.HostClientPool
-import app.hermes.companion.device.CompanionAccessibilityService
 import app.hermes.companion.domain.AuthPolicy
 import app.hermes.companion.domain.ChatContent
 import app.hermes.companion.domain.DraftThread
@@ -73,7 +72,7 @@ class CompanionViewModel(
             ntfyTopic = initialOrigin?.let { sticky.ntfyTopicFor(it) }.orEmpty(),
             stayConnected = sticky.stayConnected,
             keepA11yOn = sticky.keepA11yOn,
-            keepA11yAvailable = CompanionAccessibilityService.canWriteSecureSettings(runtime),
+            keepA11yAvailable = false,
             threadSort = ThreadSort.parse(sticky.threadSort),
             showArchived = sticky.showArchived,
             speechBackend = runCatching { SpeechBackend.valueOf(sticky.speechBackend.orEmpty()) }.getOrDefault(SpeechBackend.HOST),
@@ -309,10 +308,9 @@ class CompanionViewModel(
         sync.startWake()
     }
 
-    /** WRITE_SECURE_SETTINGS can be granted over adb while the app runs; re-read on resume. */
+    /** Accessibility configuration belongs to Hands; Companion cannot toggle it locally. */
     fun refreshKeepA11yAvailable() {
-        val available = CompanionAccessibilityService.canWriteSecureSettings(runtime)
-        if (available != _state.value.keepA11yAvailable) _state.update { it.copy(keepA11yAvailable = available) }
+        if (_state.value.keepA11yAvailable) _state.update { it.copy(keepA11yAvailable = false) }
     }
 
     fun toggleKeepA11yOn() {
@@ -445,7 +443,7 @@ class CompanionViewModel(
         sync.stopAll()
         origin?.let { clients.existing(it)?.let { api -> api.closeRpc(); api.closeBotSockets() } }
         // Keep device lanes while ARMED so Hands survives an operator disconnect (A8.5).
-        if (deviceNode.state.value.arm == DeviceArm.DISARMED) {
+        if (deviceNode.state.value.arm == DeviceArm.DISARMED && !deviceNode.state.value.externalHandsArmed) {
             deviceNode.unbind()
         }
         _state.update {
@@ -1196,7 +1194,7 @@ class CompanionViewModel(
         if (voiceStream.isActive) { super.onCleared(); return }
         voiceStream.shutdown()
         chat.cancelAll()
-        if (sticky.stayConnected || deviceNode.state.value.arm != DeviceArm.DISARMED) {
+        if (sticky.stayConnected || deviceNode.state.value.arm != DeviceArm.DISARMED || deviceNode.state.value.externalHandsArmed) {
             super.onCleared()
             return
         }

@@ -1,7 +1,6 @@
 package app.hermes.companion
 
 import android.app.Application
-import android.content.ComponentName
 import android.content.pm.PackageManager
 import org.junit.Assert.*
 import org.junit.Test
@@ -34,20 +33,21 @@ class AppIdentityIsolationTest {
         }
     }
 
-    @Test fun debugToolboxIsPackageScopedAndStillProtectedByDumpPermission() {
-        assertEquals("${app.packageName}.test.L0", DirectToolboxTestReceiver.ACTION)
-        val receiver = app.packageManager.getReceiverInfo(ComponentName(app, DirectToolboxTestReceiver::class.java), 0)
-        assertEquals(app.packageName, receiver.packageName)
-        assertEquals("android.permission.DUMP", receiver.permission)
-        assertTrue(receiver.exported)
+    @Test fun debugBuildDoesNotExposeRetiredLocalPhoneExecutionReceivers() {
+        val info = app.packageManager.getPackageInfo(app.packageName, PackageManager.GET_RECEIVERS)
+        assertFalse(info.receivers.orEmpty().any {
+            it.name == "app.hermes.companion.DirectToolboxTestReceiver" ||
+                it.name == "app.hermes.companion.device.DisarmReceiver"
+        })
     }
 
-    @Test fun previewDoesNotChangeServiceClassNamespacesOrShareAUid() {
+    @Test fun companionOwnsNoRetiredControlServicesAndDoesNotShareAUid() {
         val info = app.packageManager.getPackageInfo(app.packageName, PackageManager.GET_SERVICES)
         assertNull(info.sharedUserId)
         val services = info.services.orEmpty()
-        assertTrue(services.any { it.name == "app.hermes.companion.device.CompanionAccessibilityService" })
-        assertTrue(services.any { it.name == "app.hermes.companion.device.CompanionNotificationListener" })
+        val retired = setOf("app.hermes.companion.device.CompanionAccessibilityService",
+            "app.hermes.companion.device.CompanionNotificationListener", "app.hermes.companion.device.HandsService")
+        assertFalse(services.any { it.name in retired })
         services.forEach { assertEquals(app.packageName, it.packageName) }
     }
 }

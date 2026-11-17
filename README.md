@@ -46,6 +46,29 @@ For **Hands, notification streaming, custom rooms and the agent console**, use t
 
 5. Chat through Threads/Chat. Device control is optional: grant the required Android accessibility/overlay/notification permissions, then explicitly **Arm** it. Use **Disarm** to stop control. Review Device-tab protection rules; do not assume a built-in protected-app list.
 
+### Hands Standalone Mobile Control & Secure Settings Setup
+
+Mobile control is executed by the standalone **Hermes Hands** application (`app.hermes.hands`). Hands runs independently of any specific agent, framework, or model, exposing an authenticated TLS JSON API and optional MCP stdio adapter.
+
+1. **Build and Install Hands**:
+   ```sh
+   ./gradlew :hands-app:assembleDebug
+   adb install -r hands-app/build/outputs/apk/debug/hands-app-debug.apk
+   ```
+
+2. **Grant Secure Settings via ADB** (recommended):
+   ```sh
+   adb shell pm grant app.hermes.hands android.permission.WRITE_SECURE_SETTINGS
+   ```
+   *What this enables*: With `WRITE_SECURE_SETTINGS` granted, an armed agent can automatically enable/restore Hands Accessibility when needed without kicking the user out to system Settings, and can control supported system secure settings (e.g. `display_inversion`, hardware keyboard visibility).
+
+3. **Pairing with an Agent**:
+   - Open Hands on the phone and tap **Start service**.
+   - Go to **Clients → Enable LAN / Tailscale**, then tap **Pair remote agent**.
+   - Tap **Share to agent** (or **Copy instruction**) to share the connection payload (endpoint, SHA-256 TLS fingerprint, and 8-digit one-time code) with your agent.
+   - When the agent sends `POST /v1/pair`, the phone displays an explicit in-app confirmation modal (*"Allow [Agent] to connect? Request from [IP]"*).
+   - Tap **Approve agent** to grant the agent its revocable bearer token and full tool access.
+
 **New** reserves a host session; Hermes persists its conversation when the first message arrives. Tap the chat title for rename, pin, archive and branch. A running turn offers **Steer** with text or **Interrupt** with an empty draft. Delivery labels distinguish queued, sending, sent, failed and uncertain input: **Sent** means acknowledged by Hermes, **Retry** follows an explicit rejection, and **Check** reads history without automatically resubmitting an uncertain send.
 
 The rich-text composer keeps formatting visible and supports expanded draft editing. Tap the center **Voice** dock to start a continuous call in the selected conversation; long-press it to dictate. Hermes speech is the default, with explicit Android speech compatibility and host-configured realtime modes. Calls use a foreground microphone service through backgrounding; profile speech settings apply across Hermes clients on the next call. Model and reasoning controls apply to the selected conversation. See the [voice protocol and lifecycle](docs/protocol/voice.md) and [validation and current provider blockers](docs/reviews/2026-10-21-continuous-voice.md).

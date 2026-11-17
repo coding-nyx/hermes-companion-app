@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Deterministic isolated fixture for adb/CI validation; never in release builds. -->
+        <activity android:name="app.hermes.hands.engine.AgentScreenFixtureActivity"
+            android:exported="true" android:excludeFromRecents="true" />
+    </application>
+</manifest>

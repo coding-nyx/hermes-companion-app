@@ -18,6 +18,9 @@ object CompactTree {
         width: Int = 0,
         height: Int = 0,
         safeArea: ScreenSafeArea = ScreenSafeArea(),
+        capturedAtMs: Long = 0,
+        windowId: Int? = null,
+        generation: Long = 0,
     ): String {
         val clipped = clip(nodes)
         val rows = clipped.joinToString(",") { node ->
@@ -27,7 +30,11 @@ object CompactTree {
         val safeJson = if (safeArea.top > 0 || safeArea.bottom > 0 || safeArea.left > 0 || safeArea.right > 0) {
             ""","safe_area":{"top":${safeArea.top},"bottom":${safeArea.bottom},"left":${safeArea.left},"right":${safeArea.right}}"""
         } else ""
-        return """{"app":${q(app)},"activity":${q(activity)},"size":{"w":$width,"h":$height}$safeJson,"nodes":[$rows]}"""
+        val observation = if (capturedAtMs > 0) {
+            ""","captured_at_ms":$capturedAtMs,"generation":$generation""" +
+                (windowId?.let { ""","window_id":$it""" } ?: "")
+        } else ""
+        return """{"app":${q(app)},"activity":${q(activity)},"size":{"w":$width,"h":$height}$safeJson$observation,"nodes":[$rows]}"""
     }
 
     fun refsOf(nodes: List<SnapshotNode>): Set<String> = clip(nodes).map { it.ref }.toSet()

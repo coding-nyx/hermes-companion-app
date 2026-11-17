@@ -40,3 +40,8 @@ include(":feature-desk")
 include(":desk-app")
 
 include(":core-backend")
+
+// Agent-neutral phone controller; Companion is an optional client.
+include(":hands-engine")
+include(":hands-client")
+include(":hands-app")

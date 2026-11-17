@@ -77,7 +77,8 @@ class LiveOverlay(private val context: Context) {
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.END
-            y = topInset + (pad * 4)
+            val awakeHeight = KeepAwakeWindow.indicatorHeight(context)
+            y = topInset + (pad * 4) + if (awakeHeight > 0) awakeHeight + (pad * 12) else 0
             x = rightInset + (pad * 12)
         }
         runCatching {

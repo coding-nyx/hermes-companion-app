@@ -7,18 +7,30 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
-import app.hermes.companion.device.CompanionAccessibilityService
 import app.hermes.companion.device.StopStreamReceiver
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-/** Keeps the process alive so operator WS / ntfy / notification stream can wake the phone. */
+/**
+ * User-enabled continuous paired-agent bridge: authenticated device/operator WebSockets, wake
+ * subscriptions and the selected-app notification stream stay available until the user opts out.
+ * This is an interactive connection, not a finite data-sync transfer. It never arms or wakes a phone.
+ */
 class StayConnectedService : Service() {
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var keepJob: Job? = null
+    private var refreshJob: Job? = null
+    @Volatile private var foreground = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -33,67 +45,120 @@ class StayConnectedService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (backgroundTimedOut) { stopSelf(); return START_NOT_STICKY }
-        if (intent?.action == ACTION_REFRESH) {
-            if (keepJob?.isActive == true) startForeground(ID, notice())
-            return START_STICKY
-        }
-        if (intent?.action == ACTION_STOP) {
-            keepJob?.cancel()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+        if (backgroundTimedOut || intent?.action == ACTION_STOP) {
+            stopBridge()
             return START_NOT_STICKY
         }
-        startForeground(ID, notice())
-        keepOperator()
+        // A refresh can create a cold service, including while an earlier foreground start is
+        // pending. Satisfy Android's promotion deadline on EVERY continuing path, before looking
+        // up host names, encrypted credentials or network state.
+        try {
+            startForeground(ID, initialNotice())
+            foreground = true
+        } catch (_: RuntimeException) {
+            Log.w(TAG, "Android rejected the connection foreground service")
+            stopBridge()
+            val wanted = runCatching {
+                val app = application as? CompanionApp
+                app != null && (app.sticky.stayConnected || app.sticky.notifStreamEnabled)
+            }.getOrDefault(false)
+            if (wanted) runCatching { BackgroundConnectionResume.show(this) }
+            return START_NOT_STICKY
+        }
+        val app = application as? CompanionApp
+        val enabled = app != null && runCatching {
+            app.sticky.stayConnected || app.sticky.notifStreamEnabled
+        }.getOrDefault(false)
+        if (!enabled || app == null) {
+            stopBridge()
+            return START_NOT_STICKY
+        }
+        BackgroundConnectionResume.clear(this)
+        keepOperator(app)
+        refreshJob?.cancel()
+        refreshJob = serviceScope.launch { refreshNotice() }
         return START_STICKY
     }
 
     override fun onTimeout(startId: Int, fgsType: Int) {
-        // Android 15 dataSync budget is finite. Stop promptly, never restart around it.
+        // Honor any platform timeout even though this ongoing bridge uses specialUse rather
+        // than a finite dataSync task. Never restart around a system-imposed stop.
         backgroundTimedOut = true
-        keepJob?.cancel()
-        (application as? CompanionApp)?.deviceNode?.pauseForBackgroundLimit()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        try {
+            runCatching { (application as? CompanionApp)?.deviceNode?.pauseForBackgroundLimit() }
+        } finally {
+            stopBridge()
+        }
     }
 
     override fun onDestroy() {
-        keepJob?.cancel()
+        foreground = false
+        serviceScope.cancel()
         keepJob = null
+        refreshJob = null
         super.onDestroy()
     }
 
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        val app = application as? CompanionApp
-        if (!backgroundTimedOut && app != null && (app.sticky.stayConnected || app.sticky.notifStreamEnabled)) {
-            val stay = Intent(applicationContext, StayConnectedService::class.java)
-            runCatching { androidx.core.content.ContextCompat.startForegroundService(applicationContext, stay) }
-        } else {
-            super.onTaskRemoved(rootIntent)
+    private fun stopBridge() {
+        foreground = false
+        keepJob?.cancel()
+        keepJob = null
+        refreshJob?.cancel()
+        refreshJob = null
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        stopSelf()
+    }
+
+    private fun keepOperator(app: CompanionApp) {
+        if (keepJob?.isActive == true) return
+        keepJob = serviceScope.launch {
+            while (isActive && foreground) {
+                delay(KEEP_MS)
+                val enabled = runCatching { app.sticky.stayConnected || app.sticky.notifStreamEnabled }
+                    .getOrDefault(false)
+                if (!enabled) {
+                    withContext(Dispatchers.Main.immediate) { stopBridge() }
+                    return@launch
+                }
+                maintainConnection(app)
+            }
         }
     }
 
-    private fun keepOperator() {
-        val app = application as CompanionApp
-        keepJob?.cancel()
-        keepJob = app.appScope.launch(Dispatchers.IO) {
-            while (isActive && (app.sticky.stayConnected || app.sticky.notifStreamEnabled)) {
-                delay(KEEP_MS)
-                val origin = app.sticky.notifStreamTargetOrigin()
-                    ?: app.sticky.lastGoodOrigin
-                    ?: app.sticky.origin
-                if (!origin.isNullOrBlank()) runCatching { app.clients.forOrigin(origin).ping() }
-                app.deviceNode.recoverAccessibility()
-                // Refresh subtitle (stream on/off · profile) periodically.
-                startForeground(ID, notice())
-            }
-            if (!app.sticky.stayConnected && !app.sticky.notifStreamEnabled) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
+    internal suspend fun maintainConnection(app: CompanionApp) {
+        try {
+            val origin = app.sticky.notifStreamTargetOrigin() ?: app.sticky.lastGoodOrigin ?: app.sticky.origin
+            if (!origin.isNullOrBlank()) app.clients.forOrigin(origin).ping()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            Log.w(TAG, "Connection heartbeat unavailable; the connection lane will retry")
+        }
+        runCatching { app.deviceNode.recoverAccessibility() }
+            .onFailure { Log.w(TAG, "Could not refresh accessibility availability") }
+        refreshNotice()
+    }
+
+    private suspend fun refreshNotice() {
+        val updated = runCatching { notice() }.getOrElse {
+            Log.w(TAG, "Could not refresh connection notification; retaining the current notice")
+            return
+        }
+        withContext(Dispatchers.Main.immediate) {
+            if (foreground) runCatching { getSystemService(NotificationManager::class.java).notify(ID, updated) }
+                .onFailure { Log.w(TAG, "Could not update the connection notification") }
         }
     }
+
+    private fun initialNotice(): Notification = NotificationCompat.Builder(this, CHANNEL)
+        .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
+        .setContentTitle("HERMES CONNECTED")
+        .setContentText("Paired agent connection enabled")
+        .setOngoing(true)
+        .setCategory(Notification.CATEGORY_SERVICE)
+        .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+        .build()
 
     private fun notice(): Notification {
         val app = application as CompanionApp
@@ -145,15 +210,18 @@ class StayConnectedService : Service() {
         const val ACTION_STOP = "app.hermes.companion.STAY_STOP"
         const val ACTION_REFRESH = "app.hermes.companion.STAY_REFRESH"
 
-        /** Re-post the notification with the current active host; no-op if the service is not running. */
+        /** Refresh (or restore) the opted-in connection service; never enable it implicitly. */
         fun refresh(context: android.content.Context) {
             val app = context.applicationContext as CompanionApp
             if (backgroundTimedOut || (!app.sticky.stayConnected && !app.sticky.notifStreamEnabled)) return
-            runCatching { context.startService(Intent(context, StayConnectedService::class.java).setAction(ACTION_REFRESH)) }
+            runCatching { androidx.core.content.ContextCompat.startForegroundService(context,
+                Intent(context, StayConnectedService::class.java).setAction(ACTION_REFRESH)) }
+                .onFailure { runCatching { BackgroundConnectionResume.show(context) } }
         }
 
         private const val CHANNEL = "stay"
         private const val ID = 17
         private const val KEEP_MS = 20_000L
+        private const val TAG = "StayConnectedService"
     }
 }

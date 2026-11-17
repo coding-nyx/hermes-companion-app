@@ -92,6 +92,30 @@ class CompanionPrototypeRenderTest {
         compose.onNodeWithTag("backend.connections").performClick()
         compose.onNodeWithText("Connected to Sample workspace").assertIsDisplayed();capture("$name-connections")
     }
+    @Test fun visibleProfilesSwitchWithinConnectionAndRestoreOnlyTheirOwnDrafts() {
+        mount(); compose.onNodeWithTag("backend.sample").performScrollTo().performClick()
+        compose.waitUntil(5000) { c.state.value.bots.size == 6 }
+        compose.onNodeWithTag("context.agent").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("nav.profile.sheet.hermes:coder").performScrollTo().performClick()
+        compose.waitUntil(5000) { c.state.value.thread?.botId == "hermes:coder" && !c.state.value.loadingHistory }
+        c.draft("Private coder draft")
+        compose.onNodeWithTag("context.agent").performClick()
+        compose.onNodeWithTag("nav.profile.sheet.hermes:coder").assertIsSelected()
+        compose.onNodeWithTag("nav.profile.sheet.openclaw:research").performScrollTo().performClick()
+        compose.waitUntil(5000) { c.state.value.thread?.botId == "openclaw:research" && !c.state.value.loadingHistory }
+        assertEquals("", c.state.value.draft)
+        compose.onNodeWithTag("context.agent").performClick()
+        compose.onNodeWithTag("nav.profile.sheet.hermes:coder").performScrollTo().performClick()
+        compose.waitUntil(5000) { c.state.value.thread?.botId == "hermes:coder" && !c.state.value.loadingHistory }
+        assertEquals("Private coder draft", c.state.value.draft)
+        capture("profiles-dark")
+        c.draft("approval"); c.send()
+        compose.waitUntil(5000) { c.state.value.busy }
+        compose.onNodeWithTag("context.agent").performClick()
+        compose.onNodeWithTag("nav.profile.sheet.openclaw:research").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithTag("nav.profile.sheet.sample-team").assertDoesNotExist()
+        compose.onNodeWithText("Finish or stop the current turn before switching.").assertIsDisplayed()
+    }
     @Test fun existingHermesBotsMenuOpensTheSharedConnections() {
         var opened=false
         compose.setContent { CompanionTheme {

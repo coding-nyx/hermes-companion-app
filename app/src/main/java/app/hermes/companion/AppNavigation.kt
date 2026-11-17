@@ -74,7 +74,11 @@ private fun NavigationItem(state: CompanionState, destination: NavigationDestina
     val color = if (active) CompanionColor.Signal else CompanionColor.TextDim
     val status = when (destination) {
         NavigationDestination.CHATS -> if (state.visibleSessions.any { it.unread } || state.unreadRooms.isNotEmpty()) "Unread conversations" else null
-        NavigationDestination.DEVICE -> if (state.arm != DeviceArm.DISARMED) "Hands armed" else null
+        NavigationDestination.DEVICE -> when {
+            state.externalHands && !state.externalHandsReachable -> "Hands unavailable"
+            state.externalHandsArmed || state.arm != DeviceArm.DISARMED -> "Hands armed"
+            else -> null
+        }
         else -> null
     }
     Column(modifier.height(if (androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.5f) 60.dp else 48.dp).clip(androidx.compose.foundation.shape.CutCornerShape(topEnd = 6.dp, bottomStart = 6.dp))

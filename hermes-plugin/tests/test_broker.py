@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import _isolate  # noqa: F401,E402  # must precede plugin imports
 
-from broker import ALLOWLIST, L0_NO_A11Y, L0_PASSIVE, Broker, BrokerError, LiveDevice, MockDevice
+from broker import ALLOWLIST, L0_NO_A11Y, L0_PASSIVE, META, Broker, BrokerError, LiveDevice, MockDevice
 from tools import error_hint, find_clickable, make_handlers
 
 
@@ -43,7 +43,8 @@ class BrokerTests(unittest.TestCase):
             self.assertEqual(broker.dispatch(action)["action"], action)
 
     def test_l0_destructive_refuses_while_disarmed(self):
-        destructive = L0_NO_A11Y - L0_PASSIVE
+        # Explicit META stop actions remain available without arming.
+        destructive = L0_NO_A11Y - L0_PASSIVE - META
         self.assertTrue(destructive)
         for action in sorted(destructive):
             broker = Broker(device=MockDevice(armed=False))
@@ -340,7 +341,7 @@ class BrokerTests(unittest.TestCase):
             self.assertEqual(action, "device.snapshot")
             return {"app": "app.hermes.companion", "nodes": [{"ref": "e1"}]}
 
-        broker = Broker(device=LiveDevice(send=send))
+        broker = Broker(device=LiveDevice(send=send, armed=True))
         result = broker.dispatch("device.snapshot")
         self.assertEqual(result["app"], "app.hermes.companion")
         self.assertEqual(broker.device.foreground_app, "app.hermes.companion")
@@ -371,7 +372,7 @@ class BrokerTests(unittest.TestCase):
             del action, arguments
             raise BrokerError("disarmed", "device is DISARMED")
 
-        broker = Broker(device=LiveDevice(send=send))
+        broker = Broker(device=LiveDevice(send=send, armed=True))
         with self.assertRaises(BrokerError) as ctx:
             broker.dispatch("device.snapshot")
         self.assertEqual(ctx.exception.code, "disarmed")

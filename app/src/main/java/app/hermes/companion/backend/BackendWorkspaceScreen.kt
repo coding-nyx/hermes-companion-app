@@ -17,12 +17,15 @@ import app.hermes.companion.chat.ChatScreen
 import app.hermes.companion.model.*
 import app.hermes.companion.design.*
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BackendWorkspaceScreen(state: BackendWorkspaceState,coordinator: BackendCoordinator,onExit:()->Unit,
     onHermesTools:(String)->Unit) {
     var editor by remember(state.connection?.owner) { mutableStateOf<String?>(null) }
     var options by remember { mutableStateOf(false) }
     var notices by remember { mutableStateOf(false) }
+    var profiles by remember(state.connection?.owner) { mutableStateOf(false) }
+    val profileBots = state.bots.filterNot { it.group }
     BackHandler(enabled=state.thread!=null) {coordinator.back()}
     if(state.connection==null) { ConnectionSetup(state,coordinator,onExit); return }
     val connection=requireNotNull(state.connection)
@@ -31,6 +34,7 @@ fun BackendWorkspaceScreen(state: BackendWorkspaceState,coordinator: BackendCoor
             if(state.sample) "SAMPLE WORKSPACE · LOCAL ONLY" else "${connection.name} · ${connection.runtime.label}",
             leading=if(state.thread==null) null else ({ IconButton(onClick=coordinator::back,modifier=Modifier.size(48.dp).testTag("backend.chat.back").semantics {contentDescription="Back to bots"}) {ControlIcon(ControlGlyph.BACK)} }),
             actions={
+                ProfileSwitchAction({ profiles = true }, !state.connecting && profileBots.isNotEmpty())
                 if(state.thread!=null && state.busy && state.capabilities.interrupt) IconButton(onClick=coordinator::interrupt,
                     modifier=Modifier.size(48.dp).testTag("backend.chat.stop").semantics {contentDescription="Stop agent turn"}) {ControlIcon(ControlGlyph.CLOSE,CompanionColor.Warn)}
                 if(state.thread==null && state.section in setOf("Bots","Chats") && (state.capabilities.createBot || state.capabilities.nativeGroups)) Box {
@@ -96,6 +100,18 @@ fun BackendWorkspaceScreen(state: BackendWorkspaceState,coordinator: BackendCoor
                 onMore={coordinator.section("Connections")},onVoice={coordinator.section("Voice")})
         }
     }
+    if (profiles) app.hermes.companion.profiles.ProfileBottomSheet(
+        profiles = profileBots.map { ProfileRef(it.id, it.name, it.name.take(3).uppercase(), model = it.model) },
+        activeProfileId = state.thread?.takeUnless { it.group }?.botId,
+        onSelect = { id ->
+            if (!state.busy && !state.loadingHistory && id != state.thread?.botId)
+                profileBots.find { it.id == id }?.let(coordinator::open)
+            profiles = false
+        },
+        onOpenAll = { profiles = false; coordinator.section("Bots") }, onDismiss = { profiles = false },
+        hostName = connection.name, switching = state.busy || state.loadingHistory,
+        switchingLabel = if (state.busy) "Finish or stop the current turn before switching." else "Loading conversation…",
+    )
     if(notices) {
         val context=androidx.compose.ui.platform.LocalContext.current
         val text=remember { context.assets.open("companion-notices.txt").bufferedReader().use { it.readText() } }

@@ -121,270 +121,140 @@ fun DeviceScreen(
     connectionModeBusy: Boolean = false,
     connectionModeError: String? = null,
     onConnectionMode: (String) -> Unit = {},
-) {
+    smsReadGranted: Boolean = false,
+    smsPermissionCanRequest: Boolean = true,
+    smsPermissionMessage: String = "Allow SMS reading only if you want an armed agent to access your message history. This does not allow sending SMS.",
+    onRequestSmsPermission: () -> Unit = {},
+    onOpenSmsSettings: () -> Unit = {},
+    privateEntryActive: Boolean = false,
+    onOpenPrivateEntry: () -> Unit = {},
+    externalHands: Boolean = false,
+    externalHandsReachable: Boolean = false,
+    externalHandsArmed: Boolean = false,
+    externalHandsBackend: String = "",
+    externalHandsTarget: String = "",
+    externalHandsA11y: Boolean = false,
+    externalHandsPrivacy: Boolean = false,
+    externalHandsError: String? = null,
+    onConnectHands: () -> Unit = {},
+    onDisconnectHands: () -> Unit = {},
+    onOpenHands: () -> Unit = {},
+ ) {
     var detail by rememberSaveable(deviceId, deviceProfileId) { mutableStateOf<String?>(null) }
     var confirmRevoke by rememberSaveable { mutableStateOf(false) }
     var confirmStream by rememberSaveable { mutableStateOf(false) }
-    val streamReady = nlsBound && notifStreamApps.isNotEmpty() && !notifStreamOrigin.isNullOrBlank() && !notifStreamProfile.isNullOrBlank()
     var labelDraft by rememberSaveable(deviceId, deviceLabel) { mutableStateOf(deviceLabel) }
     val dismissKeyboard = rememberDismissKeyboard()
-    val armed = arm != DeviceArm.DISARMED
-    val permissionCount = listOf(a11yBound, overlayGranted, notifyGranted).count { it }
-    val streamStatus = notificationStreamStatus(notifStreamEnabled, nlsBound)
+    val routeReady = externalHands && !notifStreamOrigin.isNullOrBlank() && !notifStreamProfile.isNullOrBlank()
     Column(modifier.fillMaxSize().background(CompanionColor.Void).testTag("device.surface")
         .verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        ConnectionModePreference(relayHealth?.mode.orEmpty(), relayHealth?.connectionSettings == true,
-            phase == PairingPhase.PAIRED, connectionModeBusy, connectionModeError, onConnectionMode)
-        GroupedSection("Hermes accessibility service", padded = true) {
-            val actual = when {
-                a11yBound -> "Connected"
-                a11yListed == true -> "Listed in Android Settings · not connected"
-                a11yListed == false -> "Off"
-                else -> "State unavailable · check Android Settings"
-            }
-            Text(actual, style = CompanionType.RowTitle, modifier = Modifier.testTag("device.a11y.actual"))
-            if (a11yOffRequested && (a11yBound || a11yListed != false)) {
-                Text("OFF requested. Waiting for Android; if this persists, switch Hermes off in Accessibility settings.", style = CompanionType.Caption)
-            }
-            Text("Screen access and Hands are separate. Arm Hands to allow control; turn it off at any time.", style = CompanionType.Caption)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Action("TURN ON", "device.a11y.on", onEnableA11y)
-                Action("TURN OFF", "device.a11y.off", onDisableA11y)
+        GroupedSection("Phone control owner", padded = true) {
+            Text("Hands", style = CompanionType.RowTitle, modifier = Modifier.testTag("device.hands.owner"))
+            Text("Hands owns mobile permissions, SMS, files, notifications and screen control. Companion forwards authorized commands.", style = CompanionType.Body)
+            Text(when {
+                !externalHands -> "Connect Hands to enable mobile tools"
+                externalHandsPrivacy -> "Private entry · remote access paused"
+                !externalHandsReachable -> "Hands unavailable · open the app to reconnect"
+                externalHandsArmed -> "Armed in Hands"
+                else -> "Connected · control off"
+            }, style = CompanionType.RowTitle, color = if (externalHandsArmed) CompanionColor.Warn else CompanionColor.Signal,
+                modifier = Modifier.testTag("device.hands.status"))
+            if (externalHands) Text("Backend: ${externalHandsBackend.ifBlank { "Check Hands" }} · Target: ${externalHandsTarget.ifBlank { "Check Hands" }}", style = CompanionType.Caption)
+            externalHandsError?.let { Text(it, style = CompanionType.Caption, color = CompanionColor.Warn) }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!externalHands) Action("CONNECT HANDS", "device.hands.connect", onConnectHands)
+                Action("OPEN HANDS", "device.hands.launch", onOpenHands)
+                if (externalHandsArmed) Action("DISARM", "device.hands.disarm", onDisarm)
+                if (externalHands) Action("DISCONNECT", "device.hands.disconnect", onDisconnectHands)
             }
         }
+        ConnectionModePreference(relayHealth?.mode.orEmpty(), relayHealth?.connectionSettings == true,
+            phase == PairingPhase.PAIRED, connectionModeBusy, connectionModeError, onConnectionMode)
         when (phase) {
-            PairingPhase.IDLE -> {
-                Text("Connect your phone", style = CompanionType.Display)
-                GroupedSection("Pairing", padded = true) {
-                    Text("Not paired", style = CompanionType.RowTitle, modifier = Modifier.testTag("device.status"))
-                    Text("Enable the Companion extension on your host, then approve this phone.", style = CompanionType.Body,
-                        modifier = Modifier.testTag("device.plugin.hint"))
-                    Action("PAIR", "device.pair", onPair)
-                }
+            PairingPhase.IDLE -> GroupedSection("Gateway connection", padded = true) {
+                Text("Not paired", style = CompanionType.RowTitle, modifier = Modifier.testTag("device.status"))
+                Text("Pair Companion with your host to transport its requests to Hands.", style = CompanionType.Body)
+                Action("PAIR", "device.pair", onPair)
             }
-            PairingPhase.WAITING -> {
-                val clipboard = LocalClipboardManager.current
-                Text("Pair your phone", style = CompanionType.Display)
-                GroupedSection("Pairing code", padded = true) {
-                    Text(code, style = CompanionType.Display.copy(color = CompanionColor.Signal, fontSize = 28.sp, letterSpacing = 4.sp),
-                        maxLines = 1, softWrap = false, modifier = Modifier.testTag("device.code"))
-                    Text("Waiting for host approval", style = CompanionType.Caption, modifier = Modifier.testTag("device.status"))
-                    Text("hermes companion approve $code", style = CompanionType.Mono)
-                    Action("COPY", "device.copy") { clipboard.setText(AnnotatedString(code)) }
-                }
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Action("APPROVE", "device.approve", onApprove)
-                    Action("CANCEL", "device.cancel", onCancel)
+            PairingPhase.WAITING -> GroupedSection("Pairing", padded = true) {
+                Text(code, style = CompanionType.Mono, modifier = Modifier.testTag("device.pair.code"))
+                Text("Waiting for the gateway's approval.", style = CompanionType.Body)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Action("APPROVE", "device.pair.approve", onApprove)
+                    Action("CANCEL", "device.pair.cancel", onCancel)
                 }
             }
             PairingPhase.PAIRED -> {
-                Text("Your phone. Your permissions.", style = CompanionType.Caption)
-                GroupSurface {
-                    PreferenceRow(deviceLabel.ifBlank { "This Android phone" }, "Paired · ${deviceProfileId ?: "Current profile"}",
-                        value = if (laneOpen) "Connected" else "Reconnecting", selected = laneOpen,
-                        onClick = { detail = "This phone" }, modifier = Modifier.testTag("device.status"))
+                GroupedSection("This phone") {
+                    PreferenceRow(deviceLabel.ifBlank { "Phone" }, "Paired · ${deviceProfileId ?: "default"}",
+                        value = if (laneOpen) "Connected" else "Connecting", selected = laneOpen,
+                        onClick = { detail = "This phone" }, modifier = Modifier.testTag("device.identity"))
                 }
-                GroupedSection("Hands", padded = true) {
-                    Text(if (armPending) "Connecting screen control…" else if (armed) "Screen control is armed" else "Screen control is off", style = CompanionType.RowTitle,
-                        color = if (armed) CompanionColor.Warn else CompanionColor.Text,
-                        modifier = Modifier.testTag("device.arm").semantics {
-                            stateDescription = if (armPending) "Connecting" else if (armed) "Armed" else "Disarmed"
-                        })
-                    Text(if (armed) "Hermes can view and control this phone. Press volume down twice to stop."
-                        else "Permission alone never starts control. Arm Hands only when you want Hermes to tap, scroll or type.",
-                        style = CompanionType.Body, color = CompanionColor.TextDim)
-                    if (!armed) Text(
-                        when {
-                            !a11yBound -> "Next: allow accessibility for screen control."
-                            !notifyGranted -> "Next: allow notifications for the control service."
-                            !overlayGranted -> "Control access is ready. Allow the overlay to show the control indicator."
-                            else -> "Ready when you are. Hands stays off until you arm it."
-                        }, style = CompanionType.Caption, color = CompanionColor.Signal,
-                        modifier = Modifier.testTag("device.nextAction"))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        when {
-                            armPending -> Action("CANCEL ARM", "device.disarm", onDisarm)
-                            armed -> Action("DISARM", "device.disarm", onDisarm)
-                            a11yOffRequested -> Action("TURN ON SERVICE", "device.a11y.enable", onEnableA11y)
-                            !a11yBound && !automaticA11y -> Action("ENABLE A11Y", "device.a11y.enable", onEnableA11y)
-                            !notifyGranted -> Action("ENABLE NOTIFY", "device.notify.enable", onEnableNotify)
-                            else -> Action("ARM", "device.arm.go", onArm)
-                        }
-                        ActionButton("Control details", { detail = "Hands" }, modifier = Modifier.testTag("device.hands.open"))
-                    }
-                    if (!a11yBound) Text("Android settings → Installed apps → Hermes Companion", style = CompanionType.Caption,
-                        modifier = Modifier.testTag("device.a11y.hint"))
-                    Text("Screen actions may require you to unlock. The background gateway connection is separate.",
-                        style = CompanionType.Caption, modifier = Modifier.testTag("device.locked.limit"))
-                }
-                GroupedSection("Phone → Hermes") {
-                    PreferenceRow("Notification stream", streamStatus.hint, value = streamStatus.label,
-                        selected = notifStreamEnabled && nlsBound, onClick = { detail = "Notification stream" },
-                        modifier = Modifier.testTag("device.stream.open").semantics { stateDescription = streamStatus.label })
+                GroupedSection("Notification forwarding") {
+                    PreferenceToggle("Forward from Hands", notifStreamEnabled,
+                        { if (notifStreamEnabled) onToggleNotifStream() else confirmStream = true },
+                        enabled = notifStreamEnabled || routeReady,
+                        summary = "Only the notification scope approved for Companion in Hands is forwarded.",
+                        modifier = Modifier.testTag("device.stream"))
                     PreferenceRow("Destination", "${notifStreamOrigin ?: "Choose a gateway"}\n${notifStreamProfile ?: "Choose a profile"}",
-                        value = "Change", onClick = { detail = "Notification destination" },
-                        modifier = Modifier.testTag("device.stream.route"))
-                    if (notifStreamEnabled && !nlsBound) PreferenceRow("Allow notification access", "Sharing is enabled, but Android access is missing.",
-                        value = "Fix access", onClick = onEnableNls, modifier = Modifier.testTag("device.nls.enable"))
+                        value = "Change", onClick = { detail = "Notification destination" }, modifier = Modifier.testTag("device.stream.route"))
+                    PreferenceRow("Delivery", notifStreamDelivery, modifier = Modifier.testTag("device.stream.delivery"))
+                    PreferenceRow("Phone approval", "${notifStreamApps.size} apps · $notifStreamContent · $notifStreamRetentionMinutes minutes",
+                        value = "Hands", onClick = onOpenHands, modifier = Modifier.testTag("device.stream.open"))
+                    Text("This is a passive inbox. Forwarding never wakes an agent or injects messages into a conversation.", style = CompanionType.Caption)
                 }
-                GroupedSection("Control permissions", trailing = {
-                    Text("$permissionCount / 3", style = CompanionType.Caption, color = CompanionColor.Signal,
-                        modifier = Modifier.testTag("device.permissions.count").semantics { contentDescription = "$permissionCount of 3 control permissions allowed" })
-                }) {
-                    PermissionAccessRow("Accessibility", "Screen access while Hands is armed", a11yBound, onEnableA11y, "device.permission.a11y")
-                    PermissionAccessRow("Control indicator", "Display over other apps", overlayGranted, onEnableOverlay, "device.permission.overlay")
-                    PermissionAccessRow("Service notifications", "Status, alerts and stop control", notifyGranted, onEnableNotify, "device.permission.notify")
-                    PreferenceRow("All access settings", "Notification access and locked-screen preferences", onClick = { detail = "Permissions" },
-                        modifier = Modifier.testTag("device.permissions.open"))
-                }
-                GroupedSection("Privacy & protection") {
+                GroupedSection("Companion preferences") {
                     PreferenceToggle("Keep awake during voice", awakeOnVoice, onToggleAwakeOnVoice,
-                        summary = "Only during a voice conversation", modifier = Modifier.testTag("device.awake.voice"))
+                        summary = "Only during Companion voice conversations", modifier = Modifier.testTag("device.awake.voice"))
                     PreferenceToggle("Biometric app lock", biometricLock, onToggleBiometricLock,
                         summary = "Authenticate before opening Companion", modifier = Modifier.testTag("device.biometric.lock"))
-                    PreferenceRow("Protected apps", if (protectedCustom.isEmpty()) "No custom rules. Add apps you want Hands to avoid."
-                        else "${protectedCustom.size} custom rules · blocked before screen control", onClick = { detail = "Protected apps" },
-                        modifier = Modifier.testTag("device.protected.open"))
-                    PreferenceRow("Activity audit", "Review the latest phone control outcome", onClick = { detail = "Activity audit" },
-                        modifier = Modifier.testTag("device.audit.open"))
                 }
             }
         }
         error?.takeIf { it.isNotBlank() }?.let { StatusStrip(it, modifier = Modifier.testTag("device.error")) }
     }
-    if (detail != null && phase == PairingPhase.PAIRED) {
-        androidx.compose.material3.ModalBottomSheet(onDismissRequest = { detail = null },
-            sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true),
-            containerColor = CompanionColor.Void, contentColor = CompanionColor.Text) {
-            Column(Modifier.fillMaxWidth().verticalScroll(remember(detail) { androidx.compose.foundation.ScrollState(0) }).padding(horizontal = 24.dp).padding(bottom = 24.dp)
-                .testTag("device.details"), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                SheetHeading(detail!!, onClose = { detail = null }, closeModifier = Modifier.testTag("device.details.close"),
-                    onBack = if (detail == "Notification destination" || detail == "Observed apps") ({ detail = "Notification stream" }) else null)
-                when (detail) {
-                    "This phone" -> {
-                        GroupedSection("Identity", padded = true) {
-                            Text("Device name", style = CompanionType.RowTitle)
-                            HairlineField(labelDraft, { labelDraft = it }, placeholder = "Device name", keyboardType = KeyboardType.Text,
-                                onDone = { onRenameDevice(labelDraft); dismissKeyboard() }, modifier = Modifier.testTag("device.label"))
-                            ActionButton("Save name", { onRenameDevice(labelDraft); dismissKeyboard() }, modifier = Modifier.testTag("device.label.save"))
-                            if (!deviceId.isNullOrBlank()) Text(deviceId, style = CompanionType.Caption, modifier = Modifier.testTag("device.id"))
-                        }
-                        GroupedSection("Pairing", padded = true) {
-                            Text(if (laneOpen) "Control connection is ready" else "Control connection is reconnecting", style = CompanionType.Body)
-                            if (!laneOpen) Action("RE-PAIR", "device.repair", onRepair)
-                            Action("REVOKE", "device.revoke") { confirmRevoke = true }
-                        }
-                    }
-                    "Hands" -> {
-                        GroupedSection("Control state") {
-                            PreferenceRow("Hands", if (armed) "Armed" else "Disarmed")
-                            PreferenceRow("Emergency stop", "Press volume down twice")
-                            PreferenceRow("Foreground app", foregroundApp.ifBlank { "Home screen" }, modifier = Modifier.testTag("device.foreground"))
-                        }
-                        GroupedSection("Safeguards") {
-                            PreferenceRow("Permissions", "Accessibility, overlay and notifications", onClick = { detail = "Permissions" })
-                            PreferenceRow("Protected apps", "Blocked before snapshots and gestures", onClick = { detail = "Protected apps" })
-                            PreferenceRow("Agent rooms", "Phone control is blocked during room turns")
-                        }
-                        if (armed) Action("DISARM", "device.disarm", onDisarm)
-                    }
-                    "Permissions" -> {
-                        GroupedSection("Phone control") {
-                            PreferenceRow("Control connection", if (laneOpen) "Connected" else "Connecting", modifier = Modifier.testTag("device.lane"))
-                            PermissionAccessRow("Accessibility", "Enable Hermes Companion in Installed apps", a11yBound, onEnableA11y, "device.a11y")
-                            PermissionAccessRow("Display over other apps", "Show the control indicator", overlayGranted, onEnableOverlay, "device.overlay")
-                            PermissionAccessRow("Notifications", "Show service notifications", notifyGranted, onEnableNotify, "device.notify")
-                            PermissionAccessRow("Notification access", "Read allowed notifications for sharing", nlsBound, onEnableNls, "device.nls")
-                        }
-                        GroupedSection("Locked screen") {
-                            PreferenceToggle("Request unlock on resume", lockedAccess, onToggleLockedAccess,
-                                summary = "Ask Android to dismiss the lock screen when Companion opens. Android may still require you to unlock. Does not bypass PIN or biometrics.",
-                                modifier = Modifier.testTag("device.locked.access"))
-                        }
-                        Text("Granting permission does not arm Hands.", style = CompanionType.Caption)
-                    }
-                    "Notification stream" -> {
-                        StatusStrip("${streamStatus.label}: ${streamStatus.hint}", tone = if (notifStreamEnabled && !nlsBound) CompanionColor.Warn else CompanionColor.TextDim,
-                            modifier = Modifier.testTag("device.stream.status"))
-                        GroupedSection("Sharing") {
-                            PreferenceRow("Delivery (this app session)", notifStreamDelivery, modifier = Modifier.testTag("device.stream.delivery"))
-                            PreferenceToggle("Share notifications", notifStreamEnabled,
-                                { if (notifStreamEnabled) onToggleNotifStream() else confirmStream = true },
-                                enabled = notifStreamEnabled || streamReady,
-                                summary = when { !nlsBound -> "Allow notification access before starting sharing"; streamReady -> "Forward selected apps to your chosen gateway and profile"; else -> "Choose apps, a gateway and a profile first" },
-                                modifier = Modifier.testTag("device.stream"))
-                            PreferenceRow("Observed apps", "${notifStreamApps.size} selected · tap to select or remove", onClick = { detail = "Observed apps" }, modifier = Modifier.testTag("device.stream.apps.open"))
-                            PermissionAccessRow("Notification access", "Read allowed notifications for sharing", nlsBound, onEnableNls, "device.nls")
-                            PreferenceRow("Destination", "${notifStreamOrigin ?: "Choose a gateway"} · ${notifStreamProfile ?: "Choose a profile"}",
-                                onClick = { detail = "Notification destination" }, modifier = Modifier.testTag("device.stream.sink"))
-                        }
-                        GroupedSection("What to share") {
-                            listOf("metadata" to "App and event only", "title" to "Include title", "full" to "Include title and message").forEach { (mode, label) ->
-                                PreferenceRow(label, selected = notifStreamContent == mode,
-                                    value = if (notifStreamContent == mode) "Selected" else null,
-                                    onClick = { onSetStreamContent(mode) }, modifier = Modifier.testTag("device.stream.content.$mode"))
-                            }
-                            PreferenceToggle("Call notifications", notifStreamCalls, onToggleStreamCalls,
-                                summary = "Include call-category notifications from selected apps. Not a complete call-state feed; no call audio or call-log access.", modifier = Modifier.testTag("device.stream.calls"))
-                        }
-                        GroupedSection("Offline retention") {
-                            listOf(2, 15, 60).forEach { minutes ->
-                                PreferenceRow("$minutes minutes", selected = notifStreamRetentionMinutes == minutes,
-                                    value = if (notifStreamRetentionMinutes == minutes) "Selected" else null,
-                                    onClick = { onSetStreamRetention(minutes) }, modifier = Modifier.testTag("device.stream.retention.$minutes"))
-                            }
-                        }
-                        GroupedSection("Privacy", padded = true) {
-                            Text("Offline events are encrypted on this phone, with at most 128 queued. Events expire after the selected retention. If full, the oldest is evicted and counted. Changing settings pauses sharing until you confirm again.", style = CompanionType.Body)
-                            Text("Only new notification events are shared, not a snapshot of your notification history. Call notifications are not guaranteed call-state events.", style = CompanionType.Caption)
-                            Text("Titles and messages may contain private information. App and event only is the safest setting. Android can redact or withhold sensitive notifications.", style = CompanionType.Body)
-                            Text("Companion service channels and Telegram clients are always excluded.", style = CompanionType.Body, modifier = Modifier.testTag("device.stream.mute"))
-                            Text("The gateway inbox is passive: an agent must read it explicitly. Sharing never starts autonomous actions or forwards to Telegram. Allowed content is visible to the chosen host.",
-                                style = CompanionType.Caption, modifier = Modifier.testTag("device.stream.warn"))
-                        }
-                    }
-                    "Observed apps" -> NotificationAppPicker(notifStreamApps, onSetStreamApp)
-                    "Notification destination" -> {
-                        Text("Allowed notification content is sent only to this host and profile. Changing the route does not arm phone control.", style = CompanionType.Body,
-                            color = CompanionColor.TextDim)
-                        GroupedSection("Host") {
-                            pairedHosts.forEach { host -> PreferenceRow(host, selected = host == notifStreamOrigin,
-                                value = if (host == notifStreamOrigin) "Selected" else null, onClick = { onPickStreamOrigin(host) }, modifier = Modifier.testTag("device.stream.origin")) }
-                            if (pairedHosts.isEmpty()) PreferenceRow("No paired gateway", notifStreamOrigin ?: "Select a paired host to change the destination")
-                        }
-                        GroupedSection("Profile") {
-                            profilesForStream.forEach { profile -> PreferenceRow(profile, selected = profile == notifStreamProfile,
-                                value = if (profile == notifStreamProfile) "Selected" else null, onClick = { onPickStreamProfile(profile) }, modifier = Modifier.testTag("device.stream.profile")) }
-                            if (profilesForStream.isEmpty()) PreferenceRow("No profiles available", "Select and connect to this gateway as your active host to load its profiles. No current-host profile is used as a fallback.")
-                        }
-                    }
-                    "Protected apps" -> GroupedSection("App rules", padded = true) {
-                        ProtectedPackages(protectedCustom, protectedDefaults, protectedError, onAddProtected, onRemoveProtected)
-                    }
-                    "Activity audit" -> GroupedSection("Latest outcome") {
-                        PreferenceRow("Control event", lastAudit.ifBlank { "No recent phone control events" }, modifier = Modifier.testTag("device.audit"))
-                        PreferenceRow("Foreground app", foregroundApp.ifBlank { "Home screen" })
-                    }
+    if (detail != null && phase == PairingPhase.PAIRED) androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = { detail = null }, sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = CompanionColor.Void, contentColor = CompanionColor.Text) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            SheetHeading(checkNotNull(detail), { detail = null }, closeModifier = Modifier.testTag("device.details.close"))
+            if (detail == "This phone") {
+                GroupedSection("Identity", padded = true) {
+                    HairlineField(labelDraft, { labelDraft = it }, placeholder = "Device name", keyboardType = KeyboardType.Text,
+                        onDone = { onRenameDevice(labelDraft); dismissKeyboard() }, modifier = Modifier.testTag("device.label"))
+                    ActionButton("Save name", { onRenameDevice(labelDraft); dismissKeyboard() }, Modifier.testTag("device.label.save"))
+                    deviceId?.let { Text(it, style = CompanionType.Caption, modifier = Modifier.testTag("device.id")) }
+                }
+                GroupedSection("Pairing", padded = true) {
+                    Text(if (laneOpen) "Gateway connection is ready" else "Gateway connection is reconnecting", style = CompanionType.Body)
+                    if (!laneOpen) Action("RE-PAIR", "device.repair", onRepair)
+                    Action("REVOKE", "device.revoke") { confirmRevoke = true }
+                }
+            } else {
+                Text("Only this gateway and profile receive the scope approved for Companion in Hands. Changing destination pauses forwarding.", style = CompanionType.Body)
+                GroupedSection("Gateway") {
+                    pairedHosts.forEach { host -> PreferenceRow(host, selected = host == notifStreamOrigin,
+                        value = if (host == notifStreamOrigin) "Selected" else null, onClick = { onPickStreamOrigin(host) },
+                        modifier = Modifier.testTag("device.stream.origin")) }
+                }
+                GroupedSection("Profile") {
+                    profilesForStream.forEach { profile -> PreferenceRow(profile, selected = profile == notifStreamProfile,
+                        value = if (profile == notifStreamProfile) "Selected" else null, onClick = { onPickStreamProfile(profile) },
+                        modifier = Modifier.testTag("device.stream.profile")) }
                 }
             }
         }
     }
     if (confirmStream) androidx.compose.material3.AlertDialog(onDismissRequest = { confirmStream = false },
-        title = { Text("Start notification sharing?") },
-        text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Gateway: ${notifStreamOrigin.orEmpty()}\nProfile: ${notifStreamProfile.orEmpty()}")
-            Text("${notifStreamApps.size} selected ${if (notifStreamApps.size == 1) "app" else "apps"}: ${notifStreamApps.sorted().joinToString()}")
-            Text("Content: ${when (notifStreamContent) { "full" -> "titles and message text"; "title" -> "titles"; else -> "app and event metadata only" }}. Call notifications: ${if (notifStreamCalls) "included" else "excluded"}.")
-            Text("Offline queue: encrypted, at most 128 events, retained for $notifStreamRetentionMinutes minutes. Oldest events are evicted when full.")
-            Text("The selected gateway can read and retain this data. Sharing does not arm phone control. You can stop sharing or remove an app at any time.")
-        } },
-        confirmButton = { androidx.compose.material3.TextButton(enabled = streamReady, modifier = Modifier.testTag("device.stream.confirm"), onClick = { confirmStream = false; onToggleNotifStream() }) { Text("Start sharing") } },
-        dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmStream = false }) { Text("Cancel") } })
+        title = { Text("Forward notifications from Hands?") },
+        text = { Text("Gateway: ${notifStreamOrigin.orEmpty()}\nProfile: ${notifStreamProfile.orEmpty()}\nOnly content approved for Companion in Hands will be forwarded. This does not arm control.") },
+        confirmButton = { ActionButton("Start forwarding", { confirmStream = false; onToggleNotifStream() },
+            Modifier.testTag("device.stream.confirm"), ActionKind.PRIMARY, enabled = routeReady) },
+        dismissButton = { ActionButton("Cancel", { confirmStream = false }) })
     if (confirmRevoke) androidx.compose.material3.AlertDialog(onDismissRequest = { confirmRevoke = false },
-        title = { Text("Remove this phone’s pairing?") },
-        text = { Text("Host tools will lose access until this phone pairs again.") },
-        confirmButton = { androidx.compose.material3.TextButton(modifier = Modifier.testTag("device.revoke.confirm"), onClick = { confirmRevoke = false; detail = null; onRevoke() }) { Text("Remove pairing", color = CompanionColor.Danger) } },
-        dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmRevoke = false }) { Text("Cancel") } })
+        title = { Text("Remove this phone's gateway pairing?") }, text = { Text("Host tools lose this transport until Companion pairs again.") },
+        confirmButton = { ActionButton("Remove pairing", { confirmRevoke = false; detail = null; onRevoke() }, Modifier.testTag("device.revoke.confirm"), ActionKind.DANGER) },
+        dismissButton = { ActionButton("Cancel", { confirmRevoke = false }) })
 }
 
 /** Denylist editor. Built-in list is empty; user rows are exact ids or `prefix.*`. */
@@ -496,12 +366,14 @@ private fun Action(label: String, tag: String, onClick: () -> Unit) {
         "REVOKE" -> "Remove pairing"
         "ARM" -> "Arm Hands"
         "DISARM" -> "Disarm Hands"
+        "OPEN HANDS" -> "Open Hands"
+        "CONNECT HANDS" -> "Connect Hands"
         else -> label.lowercase().replaceFirstChar(Char::titlecase)
     }
     app.hermes.companion.design.ActionButton(title, onClick, modifier = Modifier.testTag(tag),
         kind = when (tag) {
             "device.arm.go", "device.pair" -> app.hermes.companion.design.ActionKind.PRIMARY
-            "device.disarm", "device.revoke" -> app.hermes.companion.design.ActionKind.DANGER
+            "device.disarm", "device.hands.disarm", "device.revoke" -> app.hermes.companion.design.ActionKind.DANGER
             else -> app.hermes.companion.design.ActionKind.GHOST
         })
 }

@@ -48,4 +48,14 @@ class CompactTreeTest {
         val json = CompactTree.json(nodes, app = "com.test", width = 1080, height = 2400, safeArea = safe)
         assertTrue(json.contains("\"safe_area\":{\"top\":104,\"bottom\":68,\"left\":0,\"right\":0}"))
     }
+
+    @Test
+    fun observationMetadataIdentifiesWhenAndWhichWindowWasRead() {
+        val json = CompactTree.json(emptyList(), app = "com.example", capturedAtMs = 123456789L,
+            windowId = 42, generation = 7L)
+        assertTrue(json.contains("\"captured_at_ms\":123456789"))
+        assertTrue(json.contains("\"window_id\":42"))
+        assertTrue(json.contains("\"generation\":7"))
+        assertFalse(CompactTree.json(emptyList()).contains("captured_at_ms"))
+    }
 }

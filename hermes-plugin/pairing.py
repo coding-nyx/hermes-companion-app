@@ -285,6 +285,12 @@ class PairingStore:
         }
         if "a11y_bound" in live:
             row["a11y_bound"] = bool(live["a11y_bound"])
+        if "screen_control_available" in live:
+            row["screen_control_available"] = live["screen_control_available"] is True
+        elif "a11y_bound" in live:
+            row["screen_control_available"] = live["a11y_bound"] is True
+        if "local_approval_required" in live:
+            row["local_approval_required"] = live["local_approval_required"] is True
         if "overlay" in live:
             row["overlay"] = bool(live["overlay"])
         return row

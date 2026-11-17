@@ -81,9 +81,22 @@ class AccessibilitySettingsToggleTest {
     @Test fun globalEnableFailureIsNotSuccessEvenIfListWriteSucceeded() {
         globalOk = false
         assertFalse(toggle.setEnabled(true))
-        assertEquals(full, services)
+        assertEquals("", services)
         assertTrue(toggle.setEnabled(false))
         assertEquals("", services)
+    }
+
+    @Test fun cancellationAfterWriteRemovesOnlyOurNewComponent() {
+        services = other
+        var checks = 0
+        assertFalse(toggle.setEnabled(true) {
+            if (++checks == 3) {
+                services += ":org.example/.OtherReader"
+                throw IllegalStateException("disarmed")
+            }
+        })
+        assertEquals("$other:org.example/.OtherReader", services)
+        assertEquals(0, globalEnables)
     }
 
     @Test fun serviceAlreadyListedStillRepairsGlobalEnableAndDisableIsIdempotent() {

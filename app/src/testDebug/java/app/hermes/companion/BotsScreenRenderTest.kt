@@ -138,7 +138,7 @@ class BotsScreenRenderTest {
         } }
         compose.onNodeWithTag("nav.bots").assertIsSelected()
         (1..6).forEach { compose.onNodeWithTag("bots.open.bot-$it").assertIsDisplayed() }
-        compose.onNodeWithTag("context.agent").assertDoesNotExist()
+        compose.onNodeWithTag("context.agent").assertIsDisplayed().assertIsNotEnabled()
         capture("dense-shell")
     }
     @Test fun groupsFilterKeepsGroupConversationsVisibleWithoutBotRows() {

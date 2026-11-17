@@ -40,11 +40,12 @@ class GroupedDesignRenderTest {
                 onNtfyTopicChange = { state = state.copy(ntfyTopic = it) }, onSaveNtfy = { actions += "topic:${state.ntfyTopic}" },
                 onDisconnect = { actions += "disconnect" }, onDismiss = {})
             else DeviceScreen(PairingPhase.PAIRED, "", "fixture", deviceLabel = "Samsung Galaxy S22", deviceProfileId = "developer", error = null,
-                laneOpen = true, a11yBound = true, overlayGranted = true, notifyGranted = true,
+                laneOpen = true, externalHands = true, externalHandsReachable = true,
                 protectedCustom = listOf("com.example.bank"), nlsBound = true,
                 notifStreamApps = setOf("com.example.mail"), notifStreamEnabled = state.notifStreamEnabled, pairedHosts = listOf("https://fixture.invalid", "https://other.invalid"),
                 notifStreamOrigin = "https://fixture.invalid", notifStreamProfile = "developer", profilesForStream = listOf("developer", "researcher"),
                 onPair = {}, onCancel = {}, onRevoke = { actions += "revoke" }, onArm = { actions += "arm" },
+                onOpenHands = { actions += "openHands" },
                 onToggleNotifStream = { actions += "stream"; state = state.copy(notifStreamEnabled = !state.notifStreamEnabled) })
         } } }
         rule.mainClock.advanceTimeBy(500)
@@ -62,30 +63,30 @@ class GroupedDesignRenderTest {
         File("build/reports/grouped/$name.png").apply { parentFile?.mkdirs() }.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         bitmap.recycle()
     }
-    @Test fun deviceDetailsAreFocusedAndDoNotArmHands() {
+    @Test fun deviceDetailsAreFocusedAndControlSettingsBelongToHands() {
         mount()
         capture("device-dark")
         rule.onNodeWithTag("device.protected").assertDoesNotExist()
-        rule.onNodeWithTag("device.protected.open").performScrollTo().performClick()
-        rule.onNodeWithTag("device.protected").assertIsDisplayed()
-        rule.onNodeWithText("com.example.bank").assertIsDisplayed()
-        capture("protected-dark")
-        rule.onNodeWithTag("device.details.close").performScrollTo().performClick()
-        rule.onNodeWithTag("device.protected").assertDoesNotExist()
+        rule.onNodeWithTag("device.protected.open").assertDoesNotExist()
+        rule.onNodeWithTag("device.identity").performScrollTo().performClick()
+        rule.onNodeWithTag("device.label").assertIsDisplayed()
+        capture("device-identity-dark")
+        rule.onNodeWithTag("device.details.close").performClick()
         Assert.assertTrue(actions.isEmpty())
+        rule.onNodeWithTag("device.hands.launch").performScrollTo().performClick()
+        Assert.assertEquals(listOf("openHands"), actions)
     }
     @Test fun notificationSwitchActsOnceAndDestinationStaysSeparateAtLargeText() {
         mount(font = 2f)
-        rule.onNodeWithTag("device.stream.open").performScrollTo().performClick()
         rule.onNodeWithTag("device.stream").performScrollTo().performClick()
-        rule.onNodeWithText("Start sharing").performClick()
+        rule.onNodeWithText("Start forwarding").performClick()
         Assert.assertEquals(listOf("stream"), actions)
         Assert.assertTrue(state.notifStreamEnabled)
         capture("notifications-large")
-        rule.onNodeWithTag("device.stream.sink").performScrollTo().performClick()
+        rule.onNodeWithTag("device.stream.route").performScrollTo().performClick()
         rule.onNodeWithText("https://other.invalid").performScrollTo().assertIsDisplayed()
         capture("notification-destination-large")
-        rule.onNodeWithContentDescription("Back", useUnmergedTree = true).performScrollTo().performClick()
+        rule.onNodeWithTag("device.details.close").performClick()
         rule.onNodeWithTag("device.stream").performScrollTo().assertIsDisplayed()
         Assert.assertEquals(listOf("stream"), actions)
     }

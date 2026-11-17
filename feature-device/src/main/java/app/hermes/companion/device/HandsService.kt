@@ -9,8 +9,9 @@ import android.content.Intent
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 
-/** Persistent kill switch while ARMED. */
+/** Persistent kill switch for armed control and explicit standalone screen holds. */
 class HandsService : Service() {
+    private var epoch = HandsBridge.serviceEpoch.get()
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -33,14 +34,17 @@ class HandsService : Service() {
         }
         // Names of the hosts whose lanes may drive the phone (A8.5); re-posted whenever they change.
         hosts = intent?.getStringArrayListExtra(EXTRA_HOSTS)?.toList() ?: hosts
+        armed = intent?.getBooleanExtra(EXTRA_ARMED, true) ?: true
+        epoch = intent?.getLongExtra(EXTRA_EPOCH, epoch) ?: epoch
         startForeground(ID, notice())
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private var hosts: List<String> = emptyList()
+    private var armed = true
 
     override fun onDestroy() {
-        HandsBridge.onDisarm?.invoke()
+        if (epoch == HandsBridge.serviceEpoch.get()) HandsBridge.onDisarm?.invoke()
         super.onDestroy()
     }
 
@@ -65,12 +69,12 @@ class HandsService : Service() {
         val who = hosts.filter { it.isNotBlank() }.joinToString(", ")
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentTitle(if (who.isBlank()) "HERMES HAS HANDS" else "HERMES HAS HANDS · $who")
-            .setContentText(if (who.isBlank()) "Tap to disarm" else "$who can move this phone · tap to disarm")
+            .setContentTitle(if (!armed) "HERMES KEEP AWAKE" else if (who.isBlank()) "HERMES HAS HANDS" else "HERMES HAS HANDS · $who")
+            .setContentText(if (!armed) "Screen held awake · tap to stop" else if (who.isBlank()) "Screen held awake · tap to disarm" else "$who can move this phone · tap to disarm")
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setContentIntent(disarm)
-            .addAction(0, "DISARM", disarm)
+            .addAction(0, if (armed) "DISARM" else "STOP", disarm)
             .apply {
                 if (openApp != null) {
                     addAction(0, "OPEN", openApp)
@@ -82,10 +86,13 @@ class HandsService : Service() {
     companion object {
         const val ACTION_DISARM = "app.hermes.companion.device.DISARM"
         const val EXTRA_HOSTS = "hosts"
+        const val EXTRA_ARMED = "armed"
+        private const val EXTRA_EPOCH = "epoch"
 
         /** Start (or re-post) the kill-switch notification naming [hosts]. */
-        fun start(context: android.content.Context, hosts: List<String>): Intent =
+        fun start(context: android.content.Context, hosts: List<String>, armed: Boolean = true, epoch: Long = HandsBridge.serviceEpoch.get()): Intent =
             Intent(context, HandsService::class.java).putStringArrayListExtra(EXTRA_HOSTS, ArrayList(hosts))
+                .putExtra(EXTRA_ARMED, armed).putExtra(EXTRA_EPOCH, epoch)
         private const val CHANNEL = "hands"
         private const val ID = 31
     }

@@ -48,6 +48,7 @@ fun BotsScreen(
     onHostSwitch: () -> Unit = onGateways, onSettings: () -> Unit = {},
     onChats: () -> Unit = {},
     onConnections: (() -> Unit)? = null,
+    onProfiles: (() -> Unit)? = null, profilesEnabled: Boolean = true,
 ) {
     var editing by remember(state.owner) { mutableStateOf<NativeBot?>(null) }
     var createBot by remember(state.owner) { mutableStateOf(false) }
@@ -70,6 +71,7 @@ fun BotsScreen(
             onTitleClick = if (state.selected == null) onHostSwitch else null,
             leading = if (state.selected == null) null else ({ IconButton(onClick = onCloseGroup, modifier = Modifier.testTag("bots.group.back").semantics { contentDescription = "All bots" }) { ControlIcon(ControlGlyph.BACK) } }),
             actions = {
+                onProfiles?.let { ProfileSwitchAction(it, profilesEnabled) }
                 if (state.selected == null && !state.unsupported) Box {
                     IconButton(onClick = { newMenu = true }, modifier = Modifier.testTag("bots.new").semantics { contentDescription = "Create bot or group" }) { ControlIcon(ControlGlyph.PLUS) }
                     DropdownMenu(newMenu, { newMenu = false }, containerColor = CompanionColor.VoidElevated) {

@@ -11,6 +11,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Bounded armed and explicitly requested standalone screen holds. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Direct user-authorized file management across shared internal and removable storage. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
     <!--
       Phone-tool permissions.
 
@@ -31,6 +36,9 @@
       themselves, further down.
     -->
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <!-- device.display.brightness.set — SPECIAL: user grants Modify system settings access. -->
+    <uses-permission android:name="android.permission.WRITE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
 
     <!-- device.sms.list / device.sms.send / device.calls.log — TelephonyToolbox.
          HARD-RESTRICTED: the installer must allowlist these or the grant is refused however
@@ -91,7 +99,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="armed device-control kill switch" />
+                android:value="device-control kill switch and explicit screen hold" />
         </service>
         <receiver
             android:name=".DisarmReceiver"

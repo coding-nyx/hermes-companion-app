@@ -70,7 +70,7 @@ def attach_inprocess(broker: Broker, state) -> None:
         device_id = resolve_device_id(state, hint)
         command_id = state.send_command(device_id, action, args)
         try:
-            return _raise_payload(state.wait_result(command_id))
+            return _raise_payload(state.wait_result(command_id, timeout=120 if action == "device.files" else 20))
         except TicketError as extra:
             raise BrokerError(extra.code, extra.code) from extra
 
@@ -160,7 +160,7 @@ def attach_http(broker: Broker, origin: str | None = None) -> None:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=25) as resp:
+            with urllib.request.urlopen(req, timeout=125 if action == "device.files" else 25) as resp:
                 return _raise_payload(json.loads(resp.read().decode()))
         except urllib.error.HTTPError as extra:
             raw_body = extra.read().decode()

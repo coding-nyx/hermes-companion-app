@@ -51,7 +51,7 @@ internal fun filterNotificationApps(apps: List<NotificationApp>, query: String):
     apps.filter { it.label.contains(query.trim(), ignoreCase = true) || it.packageName.contains(query.trim(), ignoreCase = true) }
 
 @Composable
-internal fun NotificationAppPicker(selected: Set<String>, onSelect: (String, Boolean) -> Unit) {
+fun NotificationAppPicker(selected: Set<String>, onSelect: (String, Boolean) -> Unit) {
     val context = LocalContext.current
     var apps by remember { mutableStateOf<List<NotificationApp>>(emptyList()) }
     var loaded by remember { mutableStateOf(false) }
@@ -68,7 +68,7 @@ internal fun NotificationAppGrid(apps: List<NotificationApp>, selected: Set<Stri
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("${selected.size} ${if (selected.size == 1) "app" else "apps"} selected", style = CompanionType.RowTitle, modifier = Modifier.testTag("device.stream.apps.count"))
         Text("Only selected apps are observed. Protected apps and the built-in echo exclusions still take priority. Removing an app discards its pending notifications.", style = CompanionType.Caption)
-        HairlineField(query, { query = it }, placeholder = "Search apps", keyboardType = androidx.compose.ui.text.input.KeyboardType.Text, modifier = Modifier.testTag("device.stream.apps.search"))
+        SearchField(query, { query = it }, placeholder = "Search apps", modifier = Modifier.testTag("device.stream.apps.search"))
         val filtered = filterNotificationApps(apps, query)
         if (!loaded) Text("Loading apps…", style = CompanionType.Body)
         else if (filtered.isEmpty()) Text("No matching apps", style = CompanionType.Body)

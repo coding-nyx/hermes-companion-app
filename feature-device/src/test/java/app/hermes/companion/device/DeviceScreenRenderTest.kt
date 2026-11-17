@@ -1,7 +1,8 @@
 package app.hermes.companion.device
 
 import androidx.activity.ComponentActivity
-import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.*
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.SemanticsMatcher
@@ -28,202 +29,133 @@ import org.robolectric.annotation.GraphicsMode
 class DeviceScreenRenderTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
-    @Test fun screenControlCannotBeArmedBeforeRequiredPermissions() {
-        var armed = 0
-        var accessibility = 0
-        rule.setContent { CompanionTheme {
-            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
-                onPair = {}, onCancel = {}, onRevoke = {}, onArm = { armed++ }, onEnableA11y = { accessibility++ })
-        } }
-        rule.onNodeWithTag("device.arm.go").assertDoesNotExist()
-        rule.onNodeWithTag("device.a11y.enable").performScrollTo().performClick()
-        assertEquals(1, accessibility)
-        assertEquals(0, armed)
-        rule.onNodeWithTag("device.nextAction").assertTextContains("Next: allow accessibility for screen control.")
-        capture("device-control-permission-next-action")
-    }
-
-    @Test fun notificationsRemainTheNextStepAfterAccessibility() {
-        var notifications = 0
-        var armed = 0
-        rule.setContent { CompanionTheme {
-            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
-                a11yBound = true, onPair = {}, onCancel = {}, onRevoke = {}, onArm = { armed++ },
-                onEnableNotify = { notifications++ })
-        } }
-        rule.onNodeWithTag("device.arm.go").assertDoesNotExist()
-        rule.onNodeWithTag("device.notify.enable").performScrollTo().performClick()
-        assertEquals(1, notifications)
-        assertEquals(0, armed)
-    }
-
-    @Test fun grantingPermissionsNeverArmsHandsAutomatically() {
-        var arms = 0
-        rule.setContent { CompanionTheme {
-            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
-                a11yBound = true, notifyGranted = true, overlayGranted = true,
-                onPair = {}, onCancel = {}, onRevoke = {}, onArm = { arms++ })
-        } }
-        assertEquals(0, arms)
-        rule.onNodeWithTag("device.arm").assertTextContains("Screen control is off")
-        rule.onNodeWithTag("device.arm.go").performScrollTo().performClick()
-        assertEquals(1, arms)
-    }
-
-    @Test fun armedStateAlwaysOffersStopEvenWhenPermissionWasLost() {
-        var stops = 0
-        rule.setContent { CompanionTheme {
-            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
-                arm = DeviceArm.ARMED, onPair = {}, onCancel = {}, onRevoke = {}, onDisarm = { stops++ })
-        } }
-        rule.onNodeWithTag("device.disarm").performScrollTo().performClick()
-        assertEquals(1, stops)
-        rule.onNodeWithTag("device.arm.go").assertDoesNotExist()
-    }
-
-    @Test fun pendingArmKeepsConnectingStateAccessibleAndOffersCancel() {
-        var stops = 0
-        rule.setContent { CompanionTheme {
-            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
-                armPending = true, onPair = {}, onCancel = {}, onRevoke = {}, onDisarm = { stops++ })
-        } }
-        rule.onNodeWithTag("device.arm").assertTextContains("Connecting screen control…")
-            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Connecting"))
-        rule.onNodeWithTag("device.arm.go").assertDoesNotExist()
-        rule.onNodeWithTag("device.disarm").performScrollTo().performClick()
-        assertEquals(1, stops)
-    }
-
-    @Test fun permissionUpdatesAdvanceTheNextActionWithoutArming() {
-        val accessibility = androidx.compose.runtime.mutableStateOf(false)
-        val notifications = androidx.compose.runtime.mutableStateOf(false)
-        var arms = 0
-        rule.setContent { CompanionTheme {
-            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
-                a11yBound = accessibility.value, notifyGranted = notifications.value,
-                onPair = {}, onCancel = {}, onRevoke = {}, onArm = { arms++ })
-        } }
-        rule.onNodeWithTag("device.a11y.enable").assertExists()
-        rule.runOnIdle { accessibility.value = true }
-        rule.onNodeWithTag("device.a11y.enable").assertDoesNotExist()
-        rule.onNodeWithTag("device.notify.enable").assertExists()
-        rule.runOnIdle { notifications.value = true }
-        rule.onNodeWithTag("device.notify.enable").assertDoesNotExist()
-        rule.onNodeWithTag("device.arm.go").assertExists()
-        assertEquals(0, arms)
-    }
-
-    @Test fun notificationDestinationIsOneTapFromDeviceOverview() {
-        var host: String? = null
-        rule.setContent { CompanionTheme {
-            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
-                notifStreamEnabled = true, nlsBound = true, notifStreamOrigin = "https://lab.example",
-                notifStreamProfile = "assistant", pairedHosts = listOf("https://lab.example", "https://raj.example"),
-                profilesForStream = listOf("assistant", "coder"),
-                onPair = {}, onCancel = {}, onRevoke = {}, onPickStreamOrigin = { host = it })
-        } }
-        rule.onNodeWithTag("device.stream.route").performScrollTo().assertTextContains("https://lab.example\nassistant").performClick()
-        rule.onNodeWithText("https://raj.example").performClick()
-        assertEquals("https://raj.example", host)
-        capture("device-notification-routing")
-    }
-
-    @Test fun enabledStreamWithMissingAccessShowsExplicitRecovery() {
-        var access = 0
-        rule.setContent { CompanionTheme {
-            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
-                notifStreamEnabled = true, nlsBound = false, onPair = {}, onCancel = {}, onRevoke = {},
-                onEnableNls = { access++ })
-        } }
-        rule.onNodeWithTag("device.stream.open").performScrollTo().assertTextContains("Needs access")
-        rule.onNodeWithTag("device.nls.enable").performScrollTo().performClick()
-        assertEquals(1, access)
-        capture("device-notifications-needs-access")
-    }
-
-    @Test fun permissionChecklistReportsStateAndOpensAndroidSettingsDirectly() {
-        var overlay = 0
-        rule.setContent { CompanionTheme {
-            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
-                a11yBound = true, notifyGranted = true, onPair = {}, onCancel = {}, onRevoke = {},
-                onEnableOverlay = { overlay++ })
-        } }
-        rule.onNodeWithTag("device.permission.overlay").performScrollTo().assertTextContains("Not allowed").performClick()
-        assertEquals(1, overlay)
-        rule.onNodeWithTag("device.permissions.count").performScrollTo().assertTextContains("2 / 3")
-        capture("device-permission-checklist")
-    }
-
-    @Test fun optionalIndicatorAccessDoesNotChangeExistingArmEligibility() {
-        rule.setContent { CompanionTheme {
-            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
-                a11yBound = true, notifyGranted = true, overlayGranted = false,
-                onPair = {}, onCancel = {}, onRevoke = {})
-        } }
-        rule.onNodeWithTag("device.arm.go").assertExists()
-        rule.onNodeWithTag("device.nextAction").assertTextContains("Control access is ready. Allow the overlay to show the control indicator.")
-    }
-
-    @Test fun largeTextKeepsPermissionStatusAndDirectActionReadable() {
-        var opened = 0
-        rule.setContent {
-            val density = androidx.compose.ui.platform.LocalDensity.current
-            androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(density.density, 2f)) {
-                CompanionTheme {
-                    DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "research-agent", error = null,
-                        a11yBound = true, onPair = {}, onCancel = {}, onRevoke = {}, onEnableOverlay = { opened++ })
-                }
-            }
+    private fun assertNoLocalControls() {
+        listOf("device.arm.go", "device.a11y.enable", "device.notify.enable", "device.permission.a11y",
+            "device.permission.overlay", "device.sms.open", "device.nls.enable").forEach {
+            rule.onNodeWithTag(it).assertDoesNotExist()
         }
-        rule.onNodeWithTag("device.permission.overlay").performScrollTo().assertIsDisplayed().assertTextContains("Not allowed").performClick()
-        assertEquals(1, opened)
-        capture("device-permissions-large-text")
     }
 
-    @Test fun lockScreenPreferenceExplainsAndroidAuthenticationBoundary() {
-        var requested = 0
-        var armed = 0
+    @Test fun unconnectedOffersHandsWithoutResurrectingLegacyControl() {
+        var connections = 0; var opens = 0; var legacy = 0
         rule.setContent { CompanionTheme {
             DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
-                onPair = {}, onCancel = {}, onRevoke = {}, onArm = { armed++ }, onToggleLockedAccess = { requested++ })
+                arm = DeviceArm.ARMED, armPending = true, a11yBound = true, notifyGranted = true, overlayGranted = true,
+                onPair = {}, onCancel = {}, onRevoke = {}, onArm = { legacy++ }, onEnableA11y = { legacy++ },
+                onEnableNls = { legacy++ }, onConnectHands = { connections++ }, onOpenHands = { opens++ })
         } }
-        rule.onNodeWithTag("device.locked.limit").performScrollTo()
-            .assertTextContains("Screen actions may require you to unlock. The background gateway connection is separate.")
-        rule.onNodeWithTag("device.permissions.open").performScrollTo().performClick()
-        rule.onNodeWithTag("device.locked.access").performScrollTo()
-            .assertTextContains("Ask Android to dismiss the lock screen when Companion opens. Android may still require you to unlock. Does not bypass PIN or biometrics.")
-            .performClick()
-        assertEquals(1, requested)
-        assertEquals(0, armed)
+        rule.onNodeWithTag("device.hands.status").assertTextContains("Connect Hands to enable mobile tools")
+        assertNoLocalControls()
+        rule.onNodeWithTag("device.hands.disarm").assertDoesNotExist()
+        rule.onNodeWithTag("device.hands.connect").performScrollTo().performClick()
+        rule.onNodeWithTag("device.hands.launch").performScrollTo().performClick()
+        assertEquals(1, connections); assertEquals(1, opens); assertEquals(0, legacy)
+        capture("device-hands-unconnected-light")
     }
 
-    @Test fun pairingRemovalStillRequiresConfirmation() {
+    @Test fun connectedAndUnavailableStatusNeverOffersLocalFallback() {
+        val reachable = mutableStateOf(true)
+        var opens = 0; var arms = 0
+        rule.setContent { CompanionTheme {
+            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
+                externalHands = true, externalHandsReachable = reachable.value,
+                externalHandsBackend = "shizuku", externalHandsTarget = "agent",
+                onPair = {}, onCancel = {}, onRevoke = {}, onArm = { arms++ }, onOpenHands = { opens++ })
+        } }
+        rule.onNodeWithTag("device.hands.status").assertTextContains("Connected · control off")
+        rule.onNodeWithTag("device.hands.launch").performScrollTo().performClick()
+        rule.runOnIdle { reachable.value = false }
+        rule.onNodeWithTag("device.hands.status").assertTextContains("Hands unavailable · open the app to reconnect")
+        rule.onNodeWithTag("device.hands.connect").assertDoesNotExist()
+        assertNoLocalControls(); assertEquals(1, opens); assertEquals(0, arms)
+    }
+
+    @Test fun actualHandsArmOffersStopAndPrivacyPauseRemainsVisible() {
+        val privacy = mutableStateOf(false)
+        var stops = 0
+        rule.setContent { CompanionTheme {
+            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
+                externalHands = true, externalHandsReachable = true, externalHandsArmed = true,
+                externalHandsPrivacy = privacy.value, externalHandsA11y = false,
+                onPair = {}, onCancel = {}, onRevoke = {}, onDisarm = { stops++ })
+        } }
+        rule.onNodeWithTag("device.hands.status").assertTextContains("Armed in Hands")
+        rule.onNodeWithTag("device.hands.disarm").performScrollTo().performClick()
+        assertEquals(1, stops)
+        rule.runOnIdle { privacy.value = true }
+        rule.onNodeWithTag("device.hands.status").assertTextContains("Private entry · remote access paused")
+        assertNoLocalControls()
+    }
+
+    @Test fun gatewayPairingNeedsExplicitApprovalAndDoesNotGrantControl() {
+        var approves = 0; var cancels = 0; var arms = 0
+        rule.setContent { CompanionTheme {
+            DeviceScreen(PairingPhase.WAITING, "123456", null, deviceProfileId = null, error = null,
+                onPair = {}, onCancel = { cancels++ }, onRevoke = {}, onApprove = { approves++ }, onArm = { arms++ })
+        } }
+        rule.onNodeWithTag("device.pair.code").performScrollTo().assertTextContains("123456")
+        assertEquals(0, approves)
+        rule.onNodeWithTag("device.pair.approve").performScrollTo().performClick()
+        rule.onNodeWithTag("device.pair.cancel").performScrollTo().performClick()
+        assertEquals(1, approves); assertEquals(1, cancels); assertEquals(0, arms)
+    }
+
+    @Test fun gatewayIdentityRenameAndRepairRemainTransportOnly() {
+        var name: String? = null; var repairs = 0; var arms = 0
+        rule.setContent { CompanionTheme {
+            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceLabel = "Old name", deviceProfileId = "coder", error = null,
+                onPair = {}, onCancel = {}, onRevoke = {}, onRenameDevice = { name = it },
+                onRepair = { repairs++ }, onArm = { arms++ })
+        } }
+        rule.onNodeWithTag("device.identity").performScrollTo().performClick()
+        rule.onNodeWithTag("device.label").performScrollTo().performTextReplacement("My phone")
+        rule.onNodeWithTag("device.label.save").performScrollTo().performClick()
+        assertEquals("My phone", name)
+        rule.onNodeWithTag("device.repair").performScrollTo().performClick()
+        assertEquals(1, repairs); assertEquals(0, arms)
+        rule.onNodeWithTag("device.id").performScrollTo().assertTextContains("phone")
+    }
+
+    @Test fun pairingRemovalRequiresConfirmationAndCancelPreservesPairing() {
         var revoked = 0
         rule.setContent { CompanionTheme {
             DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
                 onPair = {}, onCancel = {}, onRevoke = { revoked++ })
         } }
-        rule.onNodeWithTag("device.status").performClick()
+        rule.onNodeWithTag("device.identity").performScrollTo().performClick()
         rule.onNodeWithTag("device.revoke").performScrollTo().performClick()
         assertEquals(0, revoked)
         rule.onNodeWithText("Cancel").performClick()
-        assertEquals(0, revoked)
-        rule.onNodeWithTag("device.revoke").performClick()
+        rule.onNodeWithTag("device.revoke").performScrollTo().performClick()
         rule.onNodeWithTag("device.revoke.confirm").performClick()
         assertEquals(1, revoked)
     }
 
-    @Test
-    @Config(sdk = [31], qualifiers = "w360dp-h720dp-night-xhdpi")
-    fun darkControlOverviewRendersWithExplicitDisarmedState() {
+    @Test fun notificationDestinationUsesExplicitGatewayAndProfileChoices() {
+        var host: String? = null; var profile: String? = null; var opened = 0
         rule.setContent { CompanionTheme {
-            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceLabel = "Pixel 9", deviceProfileId = "research", error = null,
-                laneOpen = true, a11yBound = true, notifyGranted = true, overlayGranted = true,
-                notifStreamEnabled = true, nlsBound = true, notifStreamOrigin = "https://lab.example", notifStreamProfile = "assistant",
+            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
+                externalHands = true, notifStreamOrigin = "https://lab.example", notifStreamProfile = "assistant",
+                pairedHosts = listOf("https://lab.example", "https://raj.example"), profilesForStream = listOf("assistant", "coder"),
+                onPair = {}, onCancel = {}, onRevoke = {}, onPickStreamOrigin = { host = it },
+                onPickStreamProfile = { profile = it }, onOpenHands = { opened++ })
+        } }
+        rule.onNodeWithTag("device.stream.route").performScrollTo().assertTextContains("https://lab.example\nassistant").performClick()
+        rule.onNodeWithText("https://raj.example").performScrollTo().performClick()
+        rule.onNodeWithText("coder", useUnmergedTree = true).performScrollTo().performClick()
+        assertEquals("https://raj.example", host); assertEquals("coder", profile)
+        rule.onNodeWithTag("device.details.close").performClick()
+        rule.onNodeWithTag("device.stream.open").performScrollTo().performClick()
+        assertEquals(1, opened); assertNoLocalControls()
+    }
+
+    @Test fun notificationForwardingCannotStartWithoutHandsAndDestination() {
+        rule.setContent { CompanionTheme {
+            DeviceScreen(PairingPhase.PAIRED, "", "phone", deviceProfileId = "coder", error = null,
                 onPair = {}, onCancel = {}, onRevoke = {})
         } }
-        rule.onNodeWithTag("device.arm").assertTextContains("Screen control is off")
-        capture("device-control-dark")
+        rule.onNodeWithTag("device.stream").performScrollTo().assertIsNotEnabled()
+        rule.onNodeWithTag("device.stream.confirm").assertDoesNotExist()
     }
 
     private fun capture(name: String) {

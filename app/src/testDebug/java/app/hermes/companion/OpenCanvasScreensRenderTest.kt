@@ -148,20 +148,22 @@ class OpenCanvasScreensRenderTest {
         mount(2f)
         rule.onNodeWithTag("device.pair").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         rule.runOnIdle { screen = screen.copy(pairingPhase = PairingPhase.WAITING, pairingCode = "123456") }
-        rule.onNodeWithTag("device.code").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("device.pair.code").performScrollTo().assertIsDisplayed()
         val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
-        rule.onNodeWithTag("device.code").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        rule.onNodeWithTag("device.pair.code").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
         val metrics = layouts.joinToString { "width=${it.size.width}, last=${it.getBoundingBox(5).right}, end=${it.getLineEnd(0, true)}" }
         Assert.assertTrue("Every pairing digit must fit: $metrics", layouts.isNotEmpty() && layouts.all {
             !it.isLineEllipsized(0) && it.getLineEnd(0, true) == 6 && it.getBoundingBox(5).right <= it.size.width + 1f
         })
-        rule.onNodeWithTag("device.copy").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("device.pair.approve").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         rule.runOnIdle { screen = base().copy(tab = MainTab.DEVICE) }
-        rule.onNodeWithTag("device.a11y.enable").performScrollTo().assertIsDisplayed()
-        rule.runOnIdle { screen = screen.copy(a11yBound = true, notifyGranted = true, overlayGranted = true) }
-        rule.onNodeWithTag("device.arm.go").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
-        rule.runOnIdle { screen = screen.copy(arm = DeviceArm.ARMED) }
-        rule.onNodeWithTag("device.disarm").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        rule.onNodeWithTag("device.hands.connect").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        rule.onNodeWithTag("device.a11y.enable").assertDoesNotExist()
+        rule.runOnIdle { screen = screen.copy(externalHands = true, externalHandsReachable = true) }
+        rule.onNodeWithTag("device.hands.launch").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
+        rule.onNodeWithTag("device.arm.go").assertDoesNotExist()
+        rule.runOnIdle { screen = screen.copy(externalHandsArmed = true) }
+        rule.onNodeWithTag("device.hands.disarm").performScrollTo().assertIsDisplayed().assertHeightIsAtLeast(48.dp)
         capture("hands-permissions-2x")
     }
     @Test fun sheetsKeepTheirLastActionReachableWithDoubleText() {

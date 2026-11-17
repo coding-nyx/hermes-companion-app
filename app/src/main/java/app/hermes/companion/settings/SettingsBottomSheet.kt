@@ -11,9 +11,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import app.hermes.companion.CompanionState
 import app.hermes.companion.MainTab
 import app.hermes.companion.design.*
+import app.hermes.companion.device.BatteryBackgroundPolicy
 import app.hermes.companion.model.SpeechBackend
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -42,6 +46,21 @@ fun SettingsBottomSheet(
     var confirmDisconnect by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     var decorativeMotion by remember { mutableStateOf(CompanionAppearance.motionEnabled(context)) }
+    var backgroundPolicy by remember(context) { mutableStateOf(BatteryBackgroundPolicy.status(context)) }
+    var backgroundSettingsError by remember { mutableStateOf<String?>(null) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                backgroundPolicy = BatteryBackgroundPolicy.status(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(page) {
+        if (page == "Background connection") backgroundPolicy = BatteryBackgroundPolicy.status(context)
+    }
     ModalBottomSheet(onDismissRequest = { if (page == "Settings") onDismiss() else page = "Settings" }, sheetState = sheetState,
         containerColor = CompanionColor.Void, contentColor = CompanionColor.Text,
         modifier = Modifier.testTag("settings.sheet")) {
@@ -95,9 +114,41 @@ fun SettingsBottomSheet(
                 "Background connection" -> {
                     GroupedSection("Connection") {
                         PreferenceToggle("Stay connected", state.stayConnected, onToggleStay,
-                            summary = "Keep the operator connection active in the background", modifier = Modifier.testTag("settings.stay"))
+                            summary = "Keep the operator connection active in the background and restore it after restart", modifier = Modifier.testTag("settings.stay"))
                         if (state.keepA11yAvailable) PreferenceToggle("Keep screen control ready", state.keepA11yOn, onToggleKeepA11y,
                             summary = "Re-enable accessibility if it drops out while armed. DISARM switches Hermes off when secure-settings permission is granted.", modifier = Modifier.testTag("settings.keep_a11y"))
+                    }
+                    GroupedSection("Battery & background") {
+                        PreferenceRow("Battery optimization",
+                            if (backgroundPolicy.ignoringBatteryOptimizations) "Companion is exempt from Android's battery optimization."
+                            else "Allow Companion to keep its connection while the screen is off. Android asks for your approval.",
+                            value = if (backgroundPolicy.ignoringBatteryOptimizations) "Exempt" else "Optimized",
+                            selected = backgroundPolicy.ignoringBatteryOptimizations,
+                            onClick = {
+                                backgroundSettingsError = if (BatteryBackgroundPolicy.openSettings(context) == null)
+                                    "Open Android Settings → Apps → Companion → Battery to review background access." else null
+                            }, modifier = Modifier.testTag("settings.battery.open"))
+                        PreferenceRow("Battery Saver",
+                            if (backgroundPolicy.powerSaveMode) "Android may limit background networking while Battery Saver is on." else null,
+                            value = if (backgroundPolicy.powerSaveMode) "On" else "Off",
+                            modifier = Modifier.testTag("settings.power_saver"))
+                        PreferenceRow("Background activity",
+                            if (backgroundPolicy.backgroundRestricted) "Android restricts Companion. Open app settings and review Battery access."
+                            else "Android reports no app background restriction.",
+                            value = if (backgroundPolicy.backgroundRestricted) "Restricted" else "Allowed",
+                            onClick = {
+                                backgroundSettingsError = if (!BatteryBackgroundPolicy.openAppSettings(context))
+                                    "Open Android Settings → Apps → Companion → Battery to review background access." else null
+                            }, modifier = Modifier.testTag("settings.background.restriction"))
+                    }
+                    if (android.os.Build.MANUFACTURER.equals("samsung", ignoreCase = true)) {
+                        Text("Samsung: add Companion to Battery → Background usage limits → Never sleeping apps (Never auto sleeping apps on some versions).",
+                            style = CompanionType.Caption, color = CompanionColor.TextDim,
+                            modifier = Modifier.testTag("settings.battery.samsung"))
+                    }
+                    backgroundSettingsError?.let { message ->
+                        Text(message, style = CompanionType.Caption, color = CompanionColor.Warn,
+                            modifier = Modifier.testTag("settings.battery.error"))
                     }
                     GroupedSection("Notification topic URL", padded = true) {
                         Text("Use the full URL configured on your Hermes relay. Save it for this exact host address; after upgrading, re-save any existing topic once. Delivery depends on the host publisher and background connection.", style = CompanionType.Caption)

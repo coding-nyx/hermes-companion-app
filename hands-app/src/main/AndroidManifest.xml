@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Explicitly granted by the operator via ADB; never granted by a remote client. -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
+    <!-- Hands owns every mobile permission; Companion only retains its chat/voice permissions. -->
+    <uses-permission android:name="android.permission.HIDE_OVERLAY_WINDOWS" />
+    <queries>
+        <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
+        <intent><action android:name="android.accessibilityservice.AccessibilityService" /></intent>
+        <!-- device.sms.compose: opens the messaging app pre-filled, no permission needed. -->
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="smsto" />
+        </intent>
+        <!-- device.calls.dial / device.calls.place. -->
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+            <data android:scheme="tel" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.CALL" />
+            <data android:scheme="tel" />
+        </intent>
+        <!-- device.alarm.set / device.timer.set. -->
+        <intent>
+            <action android:name="android.intent.action.SET_ALARM" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SET_TIMER" />
+        </intent>
+        <!-- device.media.play_search: start playback when no media session exists yet. -->
+        <intent>
+            <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+        </intent>
+        <!-- device.calendar.add. -->
+        <intent>
+            <action android:name="android.intent.action.INSERT" />
+            <data android:mimeType="vnd.android.cursor.dir/event" />
+        </intent>
+        <!-- device.share. -->
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="*/*" />
+        </intent>
+    </queries>
+    <application android:name=".HandsApplication" android:label="Hands"
+        android:icon="@drawable/ic_hands" android:theme="@style/Theme.HermesHands"
+        android:allowBackup="false" android:usesCleartextTraffic="true" android:supportsRtl="true">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name=".SecureEntryActivity" android:exported="false"
+            android:taskAffinity="" android:launchMode="singleTask"
+            android:theme="@style/Theme.HermesHands.PrivateEntry"
+            android:excludeFromRecents="true" android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".ConnectActivity" android:exported="true" android:excludeFromRecents="true" />
+        <activity android:name=".NotificationSettingsActivity" android:exported="false" android:excludeFromRecents="true" />
+        <service android:name=".HandsHostService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-started authenticated phone automation and independent agent display" />
+        </service>
+        <service android:name="app.hermes.companion.device.HandsService" tools:node="remove" />
+        <receiver android:name="app.hermes.companion.device.DisarmReceiver" tools:node="remove" />
+    </application>
+</manifest>

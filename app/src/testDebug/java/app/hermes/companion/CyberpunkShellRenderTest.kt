@@ -39,6 +39,68 @@ class CyberpunkShellRenderTest {
                 onNewThread = onNew, onCloseChat = {}, onDraftChange = {}, onSend = {}, onInterrupt = {}, onApproval = {}, imeVisible = false)
         } } }
     }
+    @Test fun visibleChoiceSwitchesProfileAndMarksTheNewSelection() {
+        var screen = androidx.compose.runtime.mutableStateOf(state())
+        rule.setContent { CompanionTheme {
+            CompanionShell(screen.value, onOriginChange = {}, onConnect = {}, onSelectProfile = {
+                screen.value = screen.value.copy(activeProfileId = it)
+            }, onTab = {}, onOpenSession = {}, onNewThread = {}, onCloseChat = {},
+                onDraftChange = {}, onSend = {}, onInterrupt = {}, onApproval = {}, imeVisible = false)
+        } }
+        rule.onNodeWithTag("context.agent").assertIsDisplayed().assertHeightIsAtLeast(48.dp).performClick()
+        rule.onNodeWithTag("nav.profile.sheet.research").performClick()
+        rule.runOnIdle { assertEquals("research", screen.value.activeProfileId) }
+        rule.onNodeWithTag("context.agent").performClick()
+        rule.onNodeWithTag("nav.profile.sheet.research").assertIsSelected()
+        rule.onNodeWithTag("nav.profile.sheet.developer").assertIsNotSelected()
+    }
+    @Test fun botLandingAlsoExposesProfilesWithoutAnOverflowMenu() {
+        mount(state(MainTab.BOTS))
+        rule.onNodeWithTag("context.agent").assertIsDisplayed().performClick()
+        rule.onNodeWithTag("nav.profile.sheet.research").assertIsDisplayed()
+        capture("bots-profile-switcher-dark")
+    }
+    @Test fun loadingChoicesAreDisabledAndEmptyCatalogCannotSwitch() {
+        mount(state().copy(sessionsLoading = true))
+        rule.onNodeWithTag("context.agent").performClick()
+        rule.onNodeWithTag("nav.profile.sheet.research").assertIsNotEnabled()
+        rule.onNodeWithTag("nav.profile.switching").assertIsDisplayed()
+    }
+    @Test fun chooserUsesReportedProfilesNotPeerOrInferredBotProfiles() {
+        mount(state().copy(peerProfiles = mapOf("other-host" to listOf(ProfileRef("peer-only", "Peer", "P"))),
+            botMode = BotModeState(bots = listOf(NativeBot(BotOwner("https://fixture.invalid", "inferred-only"), "Inferred", "", metadataRevision = 0)))))
+        rule.onNodeWithTag("context.agent").performClick()
+        rule.onNodeWithTag("nav.profile.sheet.research").assertIsDisplayed()
+        rule.onNodeWithTag("nav.profile.sheet.peer-only").assertDoesNotExist()
+        rule.onNodeWithTag("nav.profile.sheet.inferred-only").assertDoesNotExist()
+    }
+    @Test fun noProfilesDisablesTheVisibleEntryPoint() {
+        mount(state().copy(profiles = emptyList()))
+        rule.onNodeWithTag("context.agent").assertIsDisplayed().assertIsNotEnabled()
+    }
+    @Test fun choosingAnotherProfileRequiresVoiceConfirmationButCurrentDoesNot() {
+        var changed = 0
+        mount(state().copy(voiceStreamState = VoiceStreamState.MUTED), onProfile = { changed++ })
+        rule.onNodeWithTag("context.agent").performClick()
+        rule.onNodeWithTag("nav.profile.sheet.developer").performClick()
+        rule.onNodeWithText("End voice to switch conversations?").assertDoesNotExist()
+        rule.onNodeWithTag("context.agent").performClick()
+        rule.onNodeWithTag("nav.profile.sheet.research").performClick()
+        rule.onNodeWithText("End voice to switch conversations?").assertIsDisplayed()
+        rule.onNodeWithText("Stay here").performClick()
+        assertEquals(0, changed)
+        rule.onNodeWithTag("context.agent").performClick()
+        rule.onNodeWithTag("nav.profile.sheet.research").performClick()
+        rule.onNodeWithText("End voice and switch").performClick()
+        assertEquals(1, changed)
+    }
+    @Test @Config(qualifiers = "w360dp-h800dp-notnight-xhdpi")
+    fun lightProfileSwitcherAndLandingRemainReadable() {
+        mount(); capture("chats-light")
+        rule.onNodeWithTag("context.agent").performClick()
+        rule.onNodeWithTag("nav.profile.sheet.research").assertIsDisplayed()
+        capture("agent-switcher-light")
+    }
     @After fun restoreFontScale() { org.robolectric.RuntimeEnvironment.setFontScale(1f) }
     @Test fun contextSwitchersAreExplicitAndTouchSized() {
         mount()
@@ -69,7 +131,6 @@ class CyberpunkShellRenderTest {
         var changed = 0
         mount(state().copy(voiceStreamState = VoiceStreamState.MUTED, voiceMicrophoneMuted = true,
             openSessionId = "one", voiceSessionTitle = "Ship the next release"), onProfile = { changed++ })
-        rule.onNodeWithTag("header.options").performClick()
         rule.onNodeWithTag("context.agent").performClick()
         rule.onNodeWithText("End voice to switch conversations?").assertDoesNotExist()
         assertEquals(0, changed)
@@ -83,7 +144,6 @@ class CyberpunkShellRenderTest {
     }
     @Test fun agentQuickSwitcherIdentifiesCurrentSelection() {
         mount()
-        rule.onNodeWithTag("header.options").performClick()
         rule.onNodeWithTag("context.agent").performClick()
         rule.onNodeWithTag("nav.profile.sheet.developer").assertIsSelected().assertHeightIsAtLeast(48.dp)
         rule.onNodeWithTag("nav.profile.sheet.research").assertIsNotSelected().assertHeightIsAtLeast(48.dp)
@@ -93,7 +153,6 @@ class CyberpunkShellRenderTest {
     }
     @Test fun agentQuickSwitcherKeepsChoicesReachableAtDoubleText() {
         mount(scale = 2f)
-        rule.onNodeWithTag("header.options").performClick()
         rule.onNodeWithTag("context.agent").performClick()
         rule.onNodeWithTag("nav.profile.sheet.research").performScrollTo().assertIsDisplayed()
         capture("agent-switcher-large-text")

@@ -184,10 +184,20 @@ fun CompanionShell(
     onApprovePair: () -> Unit = {},
     onArm: () -> Unit = {},
     onDisarm: () -> Unit = {},
+    onConnectHands: () -> Unit = {},
+    onDisconnectHands: () -> Unit = {},
+    onOpenHands: () -> Unit = {},
     onEnableA11y: () -> Unit = {},
     onDisableA11y: () -> Unit = {},
     onEnableOverlay: () -> Unit = {},
     onEnableNotify: () -> Unit = {},
+    smsReadGranted: Boolean = false,
+    smsPermissionCanRequest: Boolean = true,
+    smsPermissionMessage: String = "",
+    onRequestSmsPermission: () -> Unit = {},
+    onOpenSmsSettings: () -> Unit = {},
+    privateEntryActive: Boolean = false,
+    onOpenPrivateEntry: () -> Unit = {},
     onEnableNls: () -> Unit = {},
     onToggleNotifStream: () -> Unit = {},
     onSetStreamApp: (String, Boolean) -> Unit = { _, _ -> },
@@ -375,7 +385,7 @@ fun CompanionShell(
         }
         if (showProfileSheet) {
             ProfileBottomSheet(
-                profiles = state.chatProfiles,
+                profiles = state.profiles,
                 activeProfileId = state.activeProfileId,
                 onSelect = { id ->
                     showProfileSheet = false
@@ -386,6 +396,7 @@ fun CompanionShell(
                     onTab(MainTab.PROFILES)
                 },
                 onDismiss = { showProfileSheet = false },
+                hostName = state.hostName, switching = state.sessionsLoading || state.loading,
             )
         }
         if (showModelSheet) {
@@ -553,6 +564,7 @@ fun CompanionShell(
                     onDisband = botActions.disband, onApprove = botActions.approve, onRetry = botActions.retry,
                     onRecover = botActions.recover, onSchedules = { onTab(MainTab.REMINDERS) },
                     onGateways = { onTab(MainTab.GATEWAY) }, modifier = body,
+                    onProfiles = { showProfileSheet = true }, profilesEnabled = state.origin != null && state.profiles.isNotEmpty() && !state.loading,
                     onHostSwitch = { showHostSheet = true }, onSettings = { showSettingsSheet = true }, onConnections = onBackendConnections,
                     onChats = { onTab(MainTab.THREADS) })
                 MainTab.THREADS -> ThreadsScreen(
@@ -703,6 +715,15 @@ fun CompanionShell(
                     modifier = body,
                 )
                 MainTab.DEVICE -> DeviceScreen(
+                    externalHands = state.externalHands,
+                    externalHandsReachable = state.externalHandsReachable,
+                    externalHandsArmed = state.externalHandsArmed,
+                    externalHandsBackend = state.externalHandsBackend,
+                    externalHandsTarget = state.externalHandsTarget,
+                    externalHandsA11y = state.externalHandsA11y,
+                    externalHandsPrivacy = state.externalHandsPrivacy,
+                    externalHandsError = state.externalHandsError,
+                    onConnectHands = onConnectHands, onDisconnectHands = onDisconnectHands, onOpenHands = onOpenHands,
                     relayHealth = state.relayHealth, connectionModeBusy = state.connectionModeBusy,
                     connectionModeError = state.connectionModeError, onConnectionMode = onConnectionMode,
                     phase = state.pairingPhase,
@@ -736,6 +757,13 @@ fun CompanionShell(
                     onEnableA11y = onEnableA11y,
                     onEnableOverlay = onEnableOverlay,
                     onEnableNotify = onEnableNotify,
+                    smsReadGranted = smsReadGranted,
+                    smsPermissionCanRequest = smsPermissionCanRequest,
+                    smsPermissionMessage = smsPermissionMessage,
+                    onRequestSmsPermission = onRequestSmsPermission,
+                    onOpenSmsSettings = onOpenSmsSettings,
+                    privateEntryActive = privateEntryActive,
+                    onOpenPrivateEntry = onOpenPrivateEntry,
                     onEnableNls = onEnableNls,
                     onToggleNotifStream = onToggleNotifStream,
                     onPickStreamOrigin = onPickStreamOrigin,
@@ -936,6 +964,7 @@ private fun Header(
                 app.hermes.companion.design.ControlIcon(app.hermes.companion.design.ControlGlyph.BACK)
             }
         }), actions = {
+            ProfileSwitchAction(onAgent, state.origin != null && state.profiles.isNotEmpty() && !state.loading)
             Box {
                 androidx.compose.material3.IconButton(onClick = { options = true }, modifier = Modifier.testTag("header.options").semantics { contentDescription = "Page options" }) {
                     app.hermes.companion.design.ControlIcon(app.hermes.companion.design.ControlGlyph.MORE)
@@ -950,7 +979,6 @@ private fun Header(
                         androidx.compose.material3.DropdownMenuItem(text = { Text("Refresh conversations") }, onClick = { options = false; onRefreshConversations() }, modifier = Modifier.testTag("threads.refresh"))
                     }
                     androidx.compose.material3.DropdownMenuItem(text = { Text("Switch host") }, onClick = { options = false; onHost() }, modifier = Modifier.testTag(if (inChat) "context.host" else "header.host"))
-                    androidx.compose.material3.DropdownMenuItem(text = { Text("Switch agent") }, onClick = { options = false; onAgent() }, modifier = Modifier.testTag("context.agent"))
                     androidx.compose.material3.DropdownMenuItem(text = { Text("Settings") }, onClick = { options = false; onOpenSettings() }, modifier = Modifier.testTag("header.settings"))
                 }
             }
