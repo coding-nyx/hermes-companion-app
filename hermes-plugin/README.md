@@ -10,6 +10,13 @@ Users: follow the [root README setup](../README.md#setup). This file is for the 
 
 Copies into `~/.hermes/plugins/hermes-companion` and runs `hermes plugins enable hermes-companion`. Start a **new** Hermes session so tools, skill, CLI, and the `:9120` relay load.
 
+For hosts using Hands directly through MCP, create
+`~/.hermes/plugins/hermes-companion/.hands-mcp-only`. The plugin retains its
+relay and CLI but does not register its mobile tools, mobile skill, prompt or
+lease hooks. The installer preserves this marker. An explicit
+`HERMES_COMPANION_MOBILE_ENABLED=1` or `0` overrides it for a process. Configure
+Hands MCP separately for each Hermes profile; see [Hands MCP](../hands-mcp/README.md).
+
 From GitHub:
 
 ```bash

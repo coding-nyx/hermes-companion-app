@@ -9,7 +9,7 @@
   "tools": [
     {
       "name": "mobile_status",
-      "description": "Read connection, consent, lease, backend and display status. Allowed while disarmed.",
+      "description": "Read connection, lease, selected backend and display status. Allowed while disarmed.",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -404,7 +404,7 @@
     },
     {
       "name": "mobile_arm",
-      "description": "Acquire a unique controller holder while the Hands service is running. The process renews its issued holders during reasoning. duration_seconds defaults to 3600, range 30..7200. Does not grant Android permissions. Choose agent to keep work off the primary display. With WRITE_SECURE_SETTINGS and no explicit Accessibility OFF, a screen-capable primary Accessibility or Hybrid holder may recover Hands Accessibility when needed. Auto-recovery never runs for direct-only holders, the agent display or the Shizuku backend. A direct-only holder stays direct-only; acquire a new explicit holder under the same client to request screen control.",
+      "description": "Acquire a unique controller holder while the Hands service is running. The process renews its issued holders during reasoning. duration_seconds defaults to 3600, range 30..7200. Does not grant Android permissions. First check mobile_status for the selected target and backend; omit both fields to use the existing selection. Explicit target/backend values only assert the current selection and cannot change it. For separate-screen work, target must already be agent; if it is primary, ask the operator to select Agent screen in Hands. No separate session approval is needed. With WRITE_SECURE_SETTINGS and no explicit Accessibility OFF, a screen-capable primary Accessibility or Hybrid holder may recover Hands Accessibility when needed. Auto-recovery never runs for direct-only holders, the agent display or the Shizuku backend. A direct-only holder stays direct-only; acquire a new explicit holder under the same client to request screen control.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -416,6 +416,7 @@
           },
           "backend": {
             "type": "string",
+            "description": "Optional assertion of the backend already selected in Hands; omit to use that selection.",
             "enum": [
               "accessibility",
               "shizuku",
@@ -424,6 +425,7 @@
           },
           "target": {
             "type": "string",
+            "description": "Optional assertion of the screen already selected in Hands; omit to use that selection. For separate-screen work, verify the selected target is agent before arming.",
             "enum": [
               "primary",
               "agent"
@@ -530,7 +532,7 @@
     },
     {
       "name": "mobile_agent_screen_start",
-      "description": "Create the separate agent display after local arming consent. Requires authorized Shizuku. Does not move work to the primary display on failure.",
+      "description": "Create the separate agent display after arming with target=agent already selected in Hands. Requires authorized Shizuku. Does not move work to the primary display on failure.",
       "inputSchema": {
         "type": "object",
         "properties": {

@@ -128,6 +128,16 @@ class HandsDeviceTools(
                                 throw Failure("permission_denied", "Hands needs WRITE_SECURE_SETTINGS")
                             if (!toggle.setEnabled(true, requirePermit)) throw Failure("permission_denied", "Android refused to enable Hands Accessibility")
                             requirePermit()
+                            if (wasListed && !CompanionAccessibilityService.bound) {
+                                fun enablePermit() {
+                                    requirePermit()
+                                    if (CompanionAccessibilityService.explicitlyOff(context))
+                                        throw Failure("accessibility_disabled", "Hands Accessibility was switched off")
+                                }
+                                val rebound = toggle.rebindListed(::enablePermit)
+                                enablePermit()
+                                if (!rebound) throw Failure("permission_denied", "Android refused to reconnect Hands Accessibility")
+                            }
                         } catch (failure: Exception) {
                             if (wasOff) CompanionAccessibilityService.setExplicitlyOff(context, true)
                             if ((!wasListed || wasOff) && !toggle.setEnabled(false)) {

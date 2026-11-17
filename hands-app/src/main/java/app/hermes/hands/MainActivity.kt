@@ -617,8 +617,9 @@ fun HandsScreen(
                         "Choose one approved client, specific apps and a content limit. Only that client receives the passive inbox. Sharing never wakes an agent or injects messages into a conversation.",
                         style = HandsType.Caption,
                     )
+                    val appSummary = if ("*" in notificationSharing.packages) "All notifications" else "${notificationSharing.packages.size} apps"
                     Text(
-                        "${notificationSharing.packages.size} apps · ${notificationSharing.content} · ${notificationSharing.queued} queued",
+                        "$appSummary · ${notificationSharing.content} · ${notificationSharing.queued} queued",
                         style = HandsType.MonoSmall,
                     )
                     ActionButton(
@@ -682,7 +683,7 @@ fun RemotePairingPanel(
                 }
 
                 Text(
-                    "This agent receives its own revocable credential. Screen control still requires local session approval.",
+                    "This agent receives its own revocable credential and can request control while the service is running.",
                     style = HandsType.Body.copy(color = HandsTheme.colors.textSecondary),
                 )
 

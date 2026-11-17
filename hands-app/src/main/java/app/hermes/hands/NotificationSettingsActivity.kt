@@ -168,10 +168,11 @@ private fun NotificationConsentContent(
     val context = LocalContext.current
     var enabled by remember { mutableStateOf(initial.enabled) }
     val defaultRecipient = initial.clientId?.takeIf { id -> clients.any { it.id == id } }
-        ?: clients.singleOrNull()?.id
+        ?: clients.firstOrNull()?.id
     var recipient by remember { mutableStateOf(defaultRecipient) }
-    var packages by remember { mutableStateOf(initial.packages) }
-    var content by remember { mutableStateOf(initial.content) }
+    var packages by remember { mutableStateOf(initial.packages.ifEmpty { setOf("*") }) }
+    var specificApps by remember { mutableStateOf(initial.packages.filter { it != "*" }.toSet()) }
+    var content by remember { mutableStateOf(if (initial.content.isBlank()) "full" else initial.content) }
     var retention by remember { mutableIntStateOf(initial.retentionMinutes) }
     var calls by remember { mutableStateOf(initial.includeCalls) }
     var choosingApps by remember { mutableStateOf(false) }
@@ -197,16 +198,23 @@ private fun NotificationConsentContent(
         ) {
             SheetHeading(
                 title = if (choosingApps) "Observed apps" else "Notification approval",
-                onClose = if (choosingApps) ({ choosingApps = false }) else onClose,
+                onClose = if (choosingApps) ({
+                    packages = specificApps
+                    choosingApps = false
+                }) else onClose,
             )
 
             if (choosingApps) {
                 HandsNotificationAppPicker(
-                    selected = packages,
+                    selected = specificApps,
                     onSelect = { pkg, selected ->
-                        packages = if (selected) packages + pkg else packages - pkg
+                        specificApps = if (selected) specificApps + pkg else specificApps - pkg
+                        packages = specificApps
                     },
-                    onDone = { choosingApps = false },
+                    onDone = {
+                        packages = specificApps
+                        choosingApps = false
+                    },
                 )
             } else {
                 Text(
@@ -240,7 +248,7 @@ private fun NotificationConsentContent(
                         title = "Share notifications",
                         checked = enabled,
                         onCheckedChange = { enabled = it },
-                        summary = "Stream incoming notifications from selected apps to the chosen agent.",
+                        summary = "Stream incoming notifications to the chosen agent.",
                         modifier = Modifier.testTag("hands.notifications.enabled"),
                     )
                 }
@@ -267,16 +275,39 @@ private fun NotificationConsentContent(
                     }
                 }
 
-                // Allowed Content Section
-                GlassGroupedSection("Allowed content") {
+                // Scope Section
+                val isAllApps = "*" in packages
+                GlassGroupedSection("Scope") {
                     GlassPreferenceRow(
-                        title = "Observed apps",
-                        summary = if (packages.isEmpty() && enabled) "Tap to select at least 1 app" else null,
-                        value = "${packages.size} selected",
-                        onClick = { choosingApps = true },
-                        modifier = Modifier.testTag("hands.notifications.apps"),
+                        title = "All notifications",
+                        summary = "Share notifications from all apps (except protected & suppressed apps)",
+                        selected = isAllApps,
+                        value = if (isAllApps) "Selected" else null,
+                        onClick = { packages = setOf("*") },
+                        modifier = Modifier.testTag("hands.notifications.scope.all"),
                     )
 
+                    GlassPreferenceRow(
+                        title = "Specific apps only",
+                        summary = if (isAllApps) {
+                            if (specificApps.isEmpty()) "Tap to select apps" else "${specificApps.size} apps configured"
+                        } else {
+                            if (packages.isEmpty()) "Tap to select at least 1 app" else "${packages.size} selected"
+                        },
+                        selected = !isAllApps,
+                        value = if (!isAllApps) "${packages.size} selected" else null,
+                        onClick = {
+                            if (isAllApps) {
+                                packages = specificApps
+                            }
+                            choosingApps = true
+                        },
+                        modifier = Modifier.testTag("hands.notifications.apps"),
+                    )
+                }
+
+                // Allowed Content Section
+                GlassGroupedSection("Allowed content") {
                     listOf(
                         "metadata" to "App and event only",
                         "title" to "Include title",
@@ -295,7 +326,7 @@ private fun NotificationConsentContent(
                         title = "Call notifications",
                         checked = calls,
                         onCheckedChange = { calls = it },
-                        summary = "Selected-app call alerts only; not call audio or complete call state.",
+                        summary = "Call alerts only; not call audio or complete call state.",
                     )
                 }
 
@@ -340,7 +371,7 @@ private fun NotificationConsentContent(
                             Text("• Select a recipient agent above", style = HandsType.Caption.copy(color = HandsTheme.colors.textPrimary))
                         }
                         if (packages.isEmpty()) {
-                            Text("• Choose at least 1 observed app above", style = HandsType.Caption.copy(color = HandsTheme.colors.textPrimary))
+                            Text("• Choose at least 1 observed app or select All notifications above", style = HandsType.Caption.copy(color = HandsTheme.colors.textPrimary))
                         }
                     }
                 }

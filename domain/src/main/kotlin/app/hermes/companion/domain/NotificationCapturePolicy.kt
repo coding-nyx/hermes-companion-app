@@ -4,7 +4,7 @@ package app.hermes.companion.domain
 object NotificationCapturePolicy {
     const val MAX_AGE_MS = 120_000L
     fun selected(pkg: String, apps: Set<String>, category: String, calls: Boolean): Boolean =
-        pkg in apps && (calls || category !in setOf("call", "missed_call"))
+        ("*" in apps || pkg in apps) && (calls || category !in setOf("call", "missed_call"))
 
     // Conservative best-effort suppression, not a claim to detect every secret or OTP.
     private val sensitive = Regex("(?i)\\b(otp|one[ -]?time|verification|verify|passcode|password|security code|authentication|auth code|2fa)\\b")

@@ -116,6 +116,34 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(click["controller_id"], arm["controller_id"])
         self.assertEqual(click["action"], "device.click")
 
+    def test_arm_omits_selection_by_default(self):
+        self.client.call("mobile_arm", {})
+        self.assertEqual(self.phone.requests[0]["body"]["arguments"], {})
+
+    def test_selection_mismatch_gives_actionable_hint_without_retry(self):
+        for code in ("target_mismatch", "backend_mismatch"):
+            with self.subTest(code=code):
+                self.phone.requests.clear()
+                self.phone.override = lambda _, c=code: (409, {"ok": False, "error": {
+                    "code": c, "message": "The requested selection does not match Hands."}}, {})
+                result = self.client.call("mobile_arm", {"target": "agent"})
+                self.assertEqual(result["error"]["code"], code)
+                self.assertIn("mobile_status", result["error"]["hint"])
+                self.assertIn("Omit both fields", result["error"]["hint"])
+                self.assertIn("No separate session approval", result["error"]["hint"])
+                self.assertEqual(len(self.phone.requests), 1)
+                self.assertIsNone(self.client.lease_id)
+
+    def test_legacy_selection_mismatch_does_not_rewrite_other_approval_errors(self):
+        self.phone.override = lambda _: (409, {"ok": False, "error": {
+            "code": "local_consent_required", "message": "Use the screen and backend selected in Hands."}}, {})
+        result = self.client.call("mobile_arm", {"backend": "shizuku"})
+        self.assertIn("mobile_status", result["error"]["hint"])
+        self.phone.override = lambda _: (409, {"ok": False, "error": {
+            "code": "local_consent_required", "message": "Local approval required"}}, {})
+        result = self.client.call("mobile_arm", {})
+        self.assertNotIn("hint", result["error"])
+
     def test_clients_do_not_share_a_controller_or_local_lease(self):
         other = hands.HandsClient(self.phone.endpoint, TOKEN)
         self.assertNotEqual(self.client.controller_id, other.controller_id)
@@ -454,6 +482,8 @@ class ProtocolTests(unittest.TestCase):
                 self.assertIn("tools", result["capabilities"])
                 self.assertEqual(result['serverInfo']['name'], 'hands')
                 self.assertIn("Hands must be running", result["instructions"])
+                self.assertIn("omit both", result["instructions"])
+                self.assertIn("No separate session approval", result["instructions"])
         self.assertEqual(self.phone.requests, [])
 
     def test_tools_require_completed_initialization(self):

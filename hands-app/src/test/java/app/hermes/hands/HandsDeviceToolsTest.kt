@@ -186,6 +186,24 @@ class HandsDeviceToolsTest {
             android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES))
     }
 
+    @Test fun explicitEnableRepairsAlreadyListedUnboundAccessibility() {
+        val other = "org.reader/.ReaderService"
+        val component = android.content.ComponentName(app, CompanionAccessibilityService::class.java).flattenToString()
+        android.provider.Settings.Secure.putString(app.contentResolver,
+            android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, "$other:$component")
+        CompanionAccessibilityService.setExplicitlyOff(app, false)
+        shadowOf(app).grantPermissions(Manifest.permission.WRITE_SECURE_SETTINGS)
+        assertFalse(CompanionAccessibilityService.bound)
+        val reply = checkNotNull(tools().execute("device.accessibility.enable", JSONObject()) {})
+        assertTrue(reply.toString(), reply.getBoolean("ok"))
+        assertTrue(reply.getJSONObject("result").getBoolean("enabled_automatically"))
+        assertEquals("$other:$component", android.provider.Settings.Secure.getString(app.contentResolver,
+            android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES))
+        assertEquals(1, android.provider.Settings.Secure.getInt(app.contentResolver,
+            android.provider.Settings.Secure.ACCESSIBILITY_ENABLED, 0))
+        assertNull(shadowOf(app).nextStartedActivity)
+    }
+
     @Test fun agentTargetNeverLaunchesPhysicalActivitiesWithoutAnExplicitHandoff() {
         val tools = HandsDeviceTools(app, { emptySet() }, targetIsAgent = { true })
         for (action in HandsDeviceTools.ACTIVITY_HANDOFF_ACTIONS) {

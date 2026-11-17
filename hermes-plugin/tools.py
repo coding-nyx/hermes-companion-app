@@ -56,10 +56,11 @@ ERROR_HINTS = {
     "privacy_active": "private entry is shielding the phone; wait for the user to finish and release it locally, then ask them to arm Hands again; never bypass via screenshots, clipboard, files or adb",
     "invalid_secure_entry_result": "update the phone app and plugin together; private-entry responses must contain status metadata only",
     "invalid_agent_screen_result": "update Hands, Companion and plugin together; check mobile_agent_screen_status and do not resume on the primary display or repeat an action blindly",
-    "local_consent_required": "start the Hands service and select the intended backend and screen before mobile_arm",
-    "need_local_consent": "start the Hands service and select the intended backend and screen before mobile_arm",
+    "local_consent_required": "check mobile_status for the selected screen and backend; use those selections when arming. Older Hands versions may require local approval",
+    "need_local_consent": "check mobile_status for the selected screen and backend; use those selections when arming. Older Hands versions may require local approval",
     "agent_screen_unavailable": "with target=agent and an armed Hands session, call mobile_agent_screen_start; never fall back to the primary display",
-    "target_mismatch": "the phone's selected target does not match this action; ask the user to select Agent screen in Hands and allow a new session, never switch to the primary display",
+    "target_mismatch": "call mobile_status to check the selected screen; arm using that selection, or ask the user to select the intended screen in Hands. Never switch to the primary display as a fallback",
+    "backend_mismatch": "call mobile_status to check the selected backend; arm using that selection, or ask the user to select the intended backend in Hands",
     "shizuku_unavailable": "start Shizuku and authorize standalone Hands locally; never use adb/shell input as a fallback",
     "controller_busy": "another controller owns Hands; wait for its session to finish or ask the user to stop it locally, never take over silently",
     "files_access_denied": "call mobile_files_access; enable Android All files access with mobile_files_enable and the user's approval",
@@ -70,7 +71,7 @@ ERROR_HINTS = {
     "disarmed": "call mobile_arm first — do not guess adb/shell workarounds",
     "stale_ref": "call mobile_snapshot and use a fresh @eN (or mobile_click text=). Do not reuse old refs.",
     "protected_package": "that package is denylisted; pick another app or ask the user",
-    "a11y_unavailable": "user must enable Accessibility → Installed apps → Hermes Companion; you cannot grant it",
+    "a11y_unavailable": "check Hands screen readiness and the selected backend; if Accessibility is needed, mobile_accessibility_enable can use Hands WRITE_SECURE_SETTINGS, otherwise the operator can enable it in Hands Access",
     "no_device": "pair from the phone Device tab, then `hermes companion approve CODE`",
     "rate_limited": "wait ~200ms and retry; do not spam gestures",
     "capability_denied": "unknown or ungranted action — use a documented mobile_* tool",
@@ -97,14 +98,13 @@ ERROR_HINTS = {
     "no_such_action": "list the buttons with mobile_notification_actions; use mobile_notification_reply for text ones",
     "action_cancelled": "the owning app cancelled that action; open the app over the a11y lane instead",
     "action_failed": "the notification action could not be delivered",
-    "arm_failed": "the phone refused to arm; unlock it, start Hands and approve a fresh local session",
+    "arm_failed": "the phone refused to arm; check mobile_status, unlock the phone and start the Hands service if needed",
     "hands_required": "install/open Hands and approve Companion as its client; no local Companion controller exists",
     "hands_unavailable": "open Hands and start its connection service; Companion never falls back to local controls",
-    "permission_denied": "open Hands → Access; the operator approves the named permission locally, then allows a new session. Companion cannot grant Hands permissions",
+    "permission_denied": "open Hands → Access; the operator approves the named Android permission locally, then call mobile_arm again. Companion cannot grant Hands permissions",
     "primary_handoff_required": "this tool opens the physical phone; use allow_primary_handoff=true only when the user explicitly requested that handoff, otherwise stay on the agent display",
-    "local_consent_required": "open Hands to approve the requested session or notification scope locally; remote tools cannot grant consent",
     "pairing_active": "phone access is paused for local client approval; wait for the operator to finish, then request a new session",
-    "permissions_changed": "Android permissions changed; review Hands → Access and request a fresh local session before mobile_arm",
+    "permissions_changed": "Android permissions changed; review Hands → Access, then call mobile_arm again when ready",
     "setting_unverified": "Android did not confirm the requested setting; inspect its current state before considering a retry",
     "own_service": "use mobile_accessibility_enable or mobile_accessibility_disable for Hands' own service",
     "unknown_service": "choose an installed component returned by mobile_accessibility_services",
@@ -125,13 +125,13 @@ def error_hint(code: str, message: str = "") -> str:
     if code == "overlay_permission_required" or (code == "permission_denied" and any(
         marker in (message or "").lower() for marker in ("overlay", "system_alert_window")
     )):
-        return "ask the operator to open Hands → Access and grant Floating screen permission, then allow a new session and retry arm or keep-awake explicitly. The visible AWAKE · STOP control needs this grant; do not bypass it with shell/adb or screen-timeout changes"
+        return "ask the operator to open Hands → Access and grant Floating screen permission, then retry arm or keep-awake explicitly. The visible AWAKE · STOP control needs this grant; do not bypass it with shell/adb or screen-timeout changes"
     if code == "permission_denied" and "READ_SMS" in (message or ""):
         return "ask the user to open Hands → Access → SMS access; the operator must approve read access locally. Denied or installer-restricted access cannot be bypassed by Companion, shell or adb"
     if code == "permission_denied" and "WRITE_SECURE_SETTINGS" in (message or ""):
-        return "Hands needs its own WRITE_SECURE_SETTINGS grant for this operation. The operator must grant it explicitly using the documented setup; then allow a new session and call mobile_arm. This is separate from WRITE_SETTINGS and storage access."
+        return "Hands needs its own WRITE_SECURE_SETTINGS grant for this operation. The operator must grant it explicitly using the documented setup; then call mobile_arm. This is separate from WRITE_SETTINGS and storage access."
     if code == "permission_denied" and "WRITE_SETTINGS" in (message or ""):
-        return "call mobile_settings_open(page='write_settings') or ask the operator to open Hands → Access for local Modify system settings approval; the opener returns local_approval_required and stops control. Allow a new session before retrying mobile_brightness_set"
+        return "call mobile_settings_open(page='write_settings') or ask the operator to open Hands → Access for local Modify system settings approval; the opener returns local_approval_required and stops control. Call mobile_arm before retrying mobile_brightness_set"
     return ERROR_HINTS.get(code, "")
 
 
@@ -1389,7 +1389,7 @@ def armed_hint(paired: bool, armed: bool) -> str | None:
             "mobile_brightness_get/set read/change display brightness; writes require ARMED and WRITE_SETTINGS. "
             "Hands owns every phone API and Android grant; Companion is only its client. "
             "Use Hands Access for local permission approval and Hands Alerts for one recipient client's notification scope. "
-            "Permission-opening tools stop control and return local_approval_required; allow a new session afterward. "
+            "Permission-opening tools stop control and return local_approval_required; after the operator completes the Android grant, arm again. "
             "Accessibility ON can use Hands WRITE_SECURE_SETTINGS when already granted; otherwise it opens local approval. "
             "Normal ARM may recover Hands Accessibility only for primary Accessibility, or Hybrid with Shizuku unavailable, "
             "when no OFF is saved; never for direct-only, agent-display or Shizuku-backed ARM. "
@@ -1428,7 +1428,7 @@ def armed_hint(paired: bool, armed: bool) -> str | None:
     return (
         "Hands is DISARMED or not freshly checked. Companion forwards to Hands with no local fallback. "
         "Start the Hands service; Access owns Android grants and Alerts pins notification sharing to one client. "
-        "Call mobile_status, then mobile_arm "
+        "Call mobile_status to check the selected screen and backend, then mobile_arm using those selections "
         "before snapshot/gestures or personal-data reads (including clipboard), and before reasoning "
         "about phone work so the screen stays awake. Screen readiness is screen_control_available "
         "(authorized Accessibility or Shizuku), with a11y_bound fallback for older protocols. "

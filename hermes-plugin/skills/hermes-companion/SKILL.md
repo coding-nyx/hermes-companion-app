@@ -11,7 +11,7 @@ metadata:
 
 # Hermes Companion — phone as hands
 
-Use the **hermes-companion** plugin tools (`mobile_*`) to look at and operate the paired Android phone. Hands is the phone execution owner and source of truth for Android permissions, local session approval and notification consent. Companion is an authenticated client; every device API uses Hands with no local fallback. Do not use adb, scrcpy, or shell input for this job.
+Use the **hermes-companion** plugin tools (`mobile_*`) to look at and operate the paired Android phone. Hands is the phone execution owner and source of truth for Android permissions, service state and notification consent. Companion is an authenticated client; every device API uses Hands with no local fallback. Do not use adb, scrcpy, or shell input for this job.
 
 Skill lives at `hermes-plugin/skills/hermes-companion/SKILL.md` and **ships with the plugin** (same PR / same deploy to lab+raj). Do not fork a second copy outside the plugin.
 
@@ -45,7 +45,7 @@ older protocol omits the readiness field. The phone checks actual capability on 
 
 Hands **Access** contains Android permission approvals (including SMS, files and notification
 access). Permission-opening tools without the needed grant stop control and return `local_approval_required`; the operator
-approves locally and allows a new session before a new `mobile_arm`. Never click permission or
+approves the Android grant locally, then the agent can call `mobile_arm` again. Never click permission or
 credential-approval controls remotely. Hands **Alerts** selects apps, content, retention, calls
 and one approved recipient client. Companion's Device page controls only its forwarding consent
 and pinned gateway/profile. Permissions granted to Companion do not grant them to Hands.
@@ -66,7 +66,7 @@ and pinned gateway/profile. Permissions granted to Companion do not grant them t
 | `mobile_clipboard_set` `text=…` | writes | no (destructive) | never log the value |
 | `mobile_device_info` | `{manufacturer, model, sdk_int, screen_w/h, refresh_rate_hz, locale, battery_pct, ringer_mode, a11y_bound, nls_bound}` | yes | health / identity / connectivity check |
 | `mobile_notifications_nls` | Hands own permission/binding metadata | yes | no other enabled listeners are exposed |
-| `mobile_notifications_nls_enable` | opens Hands Access for local approval | no | stops control, returns `local_approval_required`; operator approves locally and allows a new session |
+| `mobile_notifications_nls_enable` | opens Hands Access for local approval | no | stops control, returns `local_approval_required`; operator grants Android access locally, then the agent arms again |
 | `mobile_notifications_stream` | approved recipient, apps/content/retention/calls and `consent_version` | yes, pinned recipient | Companion separately pins gateway/profile; privacy and pairing pause delivery |
 | `mobile_notifications_stream_set` `enabled=false` | remotely disables sharing and returns the new state | no (destructive) | enabling or retargeting requires explicit phone UI consent; never infer a sharing destination from the active chat or use remote tools to broaden collection |
 | `mobile_notification_actions` `key=…` | `[{index, title, accepts_text}]` | yes | the buttons on one notification; call this before firing anything |
@@ -90,7 +90,7 @@ Host CLI (outside chat): `hermes companion qr`, `hermes companion list`, `hermes
 1. **`mobile_status`** / **`mobile_devices`** — paired? a11y? overlay? armed? which lanes?
 2. If multi-device or ambiguous: **`mobile_select_device`** (or pass `device=` on later calls).
 3. Connect Companion to Hands through local phone approval; permissions remain in Hands Access. If the host is unpaired: tell the user to run `hermes companion qr` on the host to scan or tap the link, or tap PAIR on the Device tab and approve on host. Stop.
-4. Choose the lane: files/direct APIs use `direct_only=true`, including when Accessibility is explicitly off. Hands screen control follows its selected backend; a saved explicit OFF choice must not be automatically overridden. Control requires the user's local session consent; see the separate agent screen workflow below.
+4. Choose the lane: files/direct APIs use `direct_only=true`, including when Accessibility is explicitly off. Check the selected screen and backend in `mobile_status`; arm using those selections. A saved explicit Accessibility OFF choice must not be automatically overridden. No separate local session approval is needed while the Hands service is running.
 5. **`mobile_arm` immediately** — before long planning text and before controls or personal-data reads — so the phone does not lock / sleep while you think. It returns `lanes`: **`l0+l1`** means Hands screen control is available too, **`l0`** means direct-API tools only. If you get `l0`, do not plan a snapshot/tap sequence — use an L0 tool or inspect Hands backend/readiness; never infer that Accessibility must be enabled. Check `keep_awake` and `working_lease_managed` in the result; arming does not wake/unlock an already sleeping phone.
 6. **`mobile_snapshot`** — work from `@eN` refs. Prefer snapshot over screenshot.
 7. Gesture: `mobile_click` (`text=` label or `ref=@eN`) / `mobile_type` / `mobile_swipe` / `mobile_scroll` / `mobile_press` / `mobile_open_app` (from `mobile_apps`).
@@ -126,7 +126,7 @@ authorized Shizuku. Companion executes no local controls. Never emulate the feat
    not imply target=agent.** If target is primary or the service is stopped, ask the operator to
    select the intended screen or start the service. Do not change to primary as recovery.
 3. Call `mobile_arm`, then `mobile_agent_screen_start(width=720, height=1280, density=240)` when the
-   separate screen is not active. Start requires armed consent and supports widths/heights 320–2560
+   separate screen is not active. Start requires an armed holder and supports widths/heights 320–2560
    and density 120–640. Confirm a positive, non-primary `display_id` and `target=agent`; a generic
    success response does not prove the agent screen exists.
 4. Obtain a fresh `mobile_snapshot` or `mobile_screenshot`, then use the ordinary screen tools.
@@ -194,7 +194,7 @@ Idle expiry, DISARM and service teardown release the arm hold. None of
 this wakes/unlocks a sleeping phone, changes screen timeout or overrides the power button.
 The visible **STOP** control releases the holds. Turning the screen off manually revokes the current
 holds; waking or unlocking later does not restore them, and background renewal cannot recreate them.
-Recheck live status and obtain the operator's consent before explicitly acquiring a new hold.
+Recheck live status before acquiring a new hold; respect an explicit user request to stop.
 Disarm when done; agents must not issue artificial tool keepalives.
 
 ## Standalone screen hold and brightness
@@ -230,7 +230,7 @@ Disarm when done; agents must not issue artificial tool keepalives.
   the tool enables only Hands Accessibility and preserves other services. Check the actual binding;
   an existing direct-only holder cannot use screen tools, so obtain a new screen-capable holder after
   binding. Without the grant it opens Hands **Access**, stops control and returns
-  `local_approval_required`; the operator approves locally and allows a fresh session.
+  `local_approval_required`; the operator grants Android access locally, then the agent arms again.
   Never automatically override a saved OFF after an arm failure. File and notification permission
   openers likewise need local approval; tools never grant Android permissions.
 - `mobile_accessibility_disable` stops control, saves OFF and requests service shutdown. Android

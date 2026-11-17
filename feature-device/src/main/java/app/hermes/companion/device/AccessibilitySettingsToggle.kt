@@ -46,6 +46,48 @@ class AccessibilitySettingsToggle(
         }
     }
 
+    /**
+     * Restart an already-listed service that Android reports as disconnected. Android may
+     * retain a crashed component in ENABLED_ACCESSIBILITY_SERVICES without binding it;
+     * writing the same list or setting the global switch again does not clear that state.
+     * Never touch another component or the global off switch. If authorization is revoked
+     * between the two writes, leave our component absent rather than enable it after Stop.
+     */
+    fun rebindListed(checkAllowed: () -> Unit = {}): Boolean {
+        var readded = false
+        return try {
+            checkAllowed()
+            if (!granted()) return false
+            val initial = readServices().orEmpty().split(':').filter { it.isNotBlank() }
+            if (initial.none { ComponentName.unflattenFromString(it) == component }) return false
+            val withoutOwn = initial.filter { ComponentName.unflattenFromString(it) != component }
+            checkAllowed()
+            if (!writeServices(withoutOwn.joinToString(":"))) return false
+            checkAllowed()
+            if (!granted()) return false
+            // Re-read before re-adding: other accessibility services may have changed.
+            val now = readServices().orEmpty().split(':').filter { it.isNotBlank() }
+            if (now.none { ComponentName.unflattenFromString(it) == component }) {
+                checkAllowed()
+                if (!writeServices((now + component.flattenToString()).joinToString(":"))) return false
+                readded = true
+            }
+            checkAllowed()
+            if (!enableAccessibility()) throw IllegalStateException("accessibility_enable_failed")
+            checkAllowed()
+            if (isListed() != true) throw IllegalStateException("accessibility_enable_failed")
+            true
+        } catch (_: RuntimeException) {
+            // Only undo our re-addition; preserve components other actors may have added.
+            if (readded) runCatching {
+                val now = readServices().orEmpty().split(':').filter { it.isNotBlank() }
+                val withoutOwn = now.filter { ComponentName.unflattenFromString(it) != component }
+                if (now != withoutOwn) writeServices(withoutOwn.joinToString(":"))
+            }
+            false
+        }
+    }
+
     /** null means state could not be read, not "off". */
     fun isListed(): Boolean? = try {
         readServices().orEmpty().split(':').any { ComponentName.unflattenFromString(it) == component }

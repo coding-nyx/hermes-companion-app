@@ -103,6 +103,16 @@ class HandsAccessConsentRenderTest {
     @Test @Config(qualifiers = "w320dp-h720dp-night-xhdpi") fun notificationConsentLargeDark() {
         RuntimeEnvironment.setFontScale(2f); consent("notification-consent-large-dark")
     }
+    @Test fun notificationConsentDefaultsToAllNotificationsAndCanSaveImmediately() {
+        var saved: NotificationChoices? = null
+        rule.setContent { CompanionTheme {
+            NotificationConsentScreen(HandsNotificationState(enabled = true), clients, accessGranted = true,
+                onSave = { saved = it }, onClose = {})
+        } }
+        rule.onNodeWithTag("hands.notifications.scope.all").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag("hands.notifications.save").performScrollTo().assertIsEnabled().performClick()
+        assertEquals(NotificationChoices(true, "workstation", setOf("*"), "full", 15, true), saved)
+    }
     @Test fun notificationConsentCannotStartWithoutAccessRecipientAndObservedApps() {
         rule.setContent { CompanionTheme {
             NotificationConsentScreen(HandsNotificationState(enabled = true), emptyList(), accessGranted = false,

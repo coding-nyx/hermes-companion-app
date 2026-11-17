@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -13,7 +14,7 @@ import _isolate  # noqa: F401,E402
 from broker import ALLOWLIST, L0_NO_A11Y, L0_PASSIVE, META, Broker, BrokerError, LiveDevice, MockDevice
 from schemas import AGENT_SCREEN_START, AGENT_SCREEN_STATUS, AGENT_SCREEN_STOP
 from tickets import ALLOWLIST as TICKET_ALLOWLIST
-from tools import armed_hint, make_handlers
+from tools import ERROR_HINTS, armed_hint, make_handlers
 
 
 SCHEMAS = (AGENT_SCREEN_START, AGENT_SCREEN_STATUS, AGENT_SCREEN_STOP)
@@ -45,6 +46,16 @@ class AgentScreenToolsTests(unittest.TestCase):
                 plugin.register(Context())
             self.assertEqual(calls, ['cli'])
             lease.assert_not_called()
+            with tempfile.TemporaryDirectory() as directory, \
+                    patch.object(plugin, '_MCP_ONLY_MARKER', Path(directory) / '.hands-mcp-only'), \
+                    patch.dict(os.environ, {}, clear=True):
+                self.assertTrue(plugin._mobile_enabled())
+                plugin._MCP_ONLY_MARKER.touch()
+                self.assertFalse(plugin._mobile_enabled())
+                with patch.dict(os.environ, {'HERMES_COMPANION_MOBILE_ENABLED': '1'}):
+                    self.assertTrue(plugin._mobile_enabled())
+                with patch.dict(os.environ, {'HERMES_COMPANION_MOBILE_ENABLED': '0'}):
+                    self.assertFalse(plugin._mobile_enabled())
         finally:
             for name in list(sys.modules):
                 if name == spec.name or name.startswith(spec.name + '.'):
@@ -177,7 +188,7 @@ class AgentScreenToolsTests(unittest.TestCase):
             self.assertIn('primary display', result['error']['hint'])
 
     def test_phone_refusal_is_not_retried_or_replaced_with_primary_control(self):
-        for code in ('capability_denied', 'local_consent_required', 'target_mismatch', 'shizuku_unavailable'):
+        for code in ('capability_denied', 'local_consent_required', 'target_mismatch', 'backend_mismatch', 'shizuku_unavailable'):
             calls = []
             def send(action, args):
                 calls.append(action)
@@ -186,6 +197,13 @@ class AgentScreenToolsTests(unittest.TestCase):
             result = json.loads(handlers['mobile_agent_screen_start']({}))
             self.assertEqual(result['error']['code'], code)
             self.assertEqual(calls, ['device.agent_screen.start'])
+
+    def test_selection_mismatch_guidance_uses_status_not_session_approval(self):
+        for code in ('target_mismatch', 'backend_mismatch', 'local_consent_required'):
+            hint = ERROR_HINTS[code]
+            self.assertIn('mobile_status', hint)
+            self.assertNotIn('approve a new session', hint.lower())
+            self.assertNotIn('allow a new session', hint.lower())
 
     def test_live_phone_enforces_consent_even_if_host_arm_cache_is_stale(self):
         calls = []

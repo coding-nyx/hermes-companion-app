@@ -171,7 +171,7 @@ WAIT = {
 
 ARM = {
     "name": "mobile_arm",
-    "description": "Arm the phone for control and hold its already-on screen awake during work, including reasoning between tools. duration_seconds sets the idle lease, default 3600, range 30..7200; accepted commands renew it. Each explicit arm gets its own holder lease_id. The host renews in the background throughout the owning agent turn when working_lease_managed=true and releases that holder at turn end; other active holders remain armed. Older runtimes use the bounded phone idle lease only. For files/direct APIs use direct_only=true: permits an l0 session even when Accessibility is explicitly off, without enabling it. Screen tools remain blocked in this mode even if the service is bound. Returns armed, a11y_bound, lanes, lease_id, idle_timeout_seconds, keep_awake and working_lease_managed. Check the screen hold status; this does not wake/unlock the phone. Disarm when done. To change mode, explicitly acquire another holder from the same controller; its existing holder keeps its own mode. With WRITE_SECURE_SETTINGS, normal ARM may restore Hands Accessibility only on the primary screen when needed for the selected Accessibility/Hybrid backend, no explicit OFF is saved and Shizuku is unavailable. Direct-only, agent-screen and Shizuku-targeted arms never auto-enable it.",
+    "description": "Arm the phone for control using the screen and backend selected in Hands; check mobile_status first. No separate local session approval is required while Hands is running. Hold its already-on screen awake during work, including reasoning between tools. duration_seconds sets the idle lease, default 3600, range 30..7200; accepted commands renew it. Each explicit arm gets its own holder lease_id. The host renews in the background throughout the owning agent turn when working_lease_managed=true and releases that holder at turn end; other active holders remain armed. Older runtimes use the bounded phone idle lease only. For files/direct APIs use direct_only=true: permits an l0 session even when Accessibility is explicitly off, without enabling it. Screen tools remain blocked in this mode even if the service is bound. Returns armed, a11y_bound, lanes, lease_id, idle_timeout_seconds, keep_awake and working_lease_managed. Check the screen hold status; this does not wake/unlock the phone. Disarm when done. To change mode, explicitly acquire another holder from the same controller; its existing holder keeps its own mode. With WRITE_SECURE_SETTINGS, normal ARM may restore Hands Accessibility only on the primary screen when needed for the selected Accessibility/Hybrid backend, no explicit OFF is saved and Shizuku is unavailable. Direct-only, agent-screen and Shizuku-targeted arms never auto-enable it.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -258,7 +258,7 @@ AGENT_SCREEN_STOP = {
 
 ACCESSIBILITY_STATUS = {
     "name": "mobile_accessibility_status",
-    "description": "Read Hands Accessibility and screen readiness. Allowed while disarmed. screen_control_available includes authorized Shizuku; a11y_bound describes Accessibility only. Listed alone does not prove readiness. Permissions and session approval belong to Hands, not Companion.",
+    "description": "Read Hands Accessibility and screen readiness. Allowed while disarmed. screen_control_available includes authorized Shizuku; a11y_bound describes Accessibility only. Listed alone does not prove readiness. Android permissions belong to Hands, not Companion.",
     "parameters": {"type": "object", "properties": {"device": {"type": "string", "description": "Device id or friendly name."}}},
 }
 ACCESSIBILITY_ENABLE = {
@@ -471,7 +471,7 @@ NOTIFICATIONS_NLS = {
 
 NOTIFICATIONS_NLS_ENABLE = {
     "name": "mobile_notifications_nls_enable",
-    "description": "Request Hands notification-access approval. Requires ARMED. Opens Hands Access, stops control and returns local_approval_required; the operator approves locally. Then allow a new session. Never silently grants access.",
+    "description": "Request Hands notification-access approval. Requires ARMED. Opens Hands Access, stops control and returns local_approval_required; the operator approves locally. Then call mobile_arm again. Never silently grants access.",
     "parameters": {
         "type": "object",
         "properties": {

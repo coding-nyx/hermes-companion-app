@@ -3,8 +3,8 @@
 Hands is a standalone Android control service. Any authorized agent, application
 or host can use its authenticated TLS JSON API from any language with HTTP/TLS
 support. No SDK, MCP runtime, Hermes installation, Companion account, gateway or
-model provider is required. Pairing and session permission are approved on the
-phone.
+model provider is required. Pairing is approved on the phone; starting the
+Hands service is the control gate, with no separate session approval.
 
 This directory provides an **optional** MCP stdio adapter for clients that prefer
 MCP tools. Python 3.10+ is its only host dependency; direct API clients do not
@@ -265,7 +265,7 @@ recreate a holder.
 `mobile_arm` accepts `backend` (`accessibility`, `shizuku`, `hybrid`), `target`
 (`primary`, `agent`) and an optional `duration_seconds` between 30 and 7200 (default
 3600). Omitting
-backend and target keeps the phone's selection. With WRITE_SECURE_SETTINGS and no explicit Accessibility OFF, a screen-capable primary Accessibility or Hybrid holder can recover Hands Accessibility when required. Recovery never runs for direct-only holders, the agent display or the Shizuku backend. A direct-only holder stays direct-only; the same client can acquire a new holder after the service binds. Display dimensions are logical
+backend and target keeps the phone's selection. Check `mobile_status` first and omit both fields by default. If specified, these fields assert the current selection; they do not switch it. For separate-screen work, verify `target=agent` first and ask the operator to select Agent screen in Hands if necessary. `target_mismatch` or `backend_mismatch` means the requested value differs from the selection, not that session approval is needed. With WRITE_SECURE_SETTINGS and no explicit Accessibility OFF, a screen-capable primary Accessibility or Hybrid holder can recover Hands Accessibility when required. Recovery never runs for direct-only holders, the agent display or the Shizuku backend. A direct-only holder stays direct-only; the same client can acquire a new holder after the service binds. Display dimensions are logical
 pixels and must come from the current observation, not a scaled image guess.
 
 Screenshots are MCP image content blocks with separate JSON metadata. Base64

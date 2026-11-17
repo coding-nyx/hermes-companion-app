@@ -189,7 +189,7 @@ class HandsRuntime(
             next.start()
             remoteServer = next
             _remoteAccess.value = RemoteAccessState(true, identity.fingerprint, remoteEndpoints(),
-                "Encrypted access is available to paired agents. Screen control still needs local session approval.",
+                "Encrypted access is available to paired agents. Screen control uses the screen and backend selected in Hands.",
                 autoStart = true)
         } catch (failure: Exception) {
             _remoteAccess.value = RemoteAccessState(message = "Could not start encrypted access. ${failure.message ?: "Try again."}",
@@ -470,8 +470,8 @@ class HandsRuntime(
             if (!commands.tryLock()) return error("controller_busy", "Another action is still running")
             var acquired: ControlLease.Lease? = null
             try {
-            require(!args.has("backend") || args.getString("backend") == state.value.backend) { "local_consent_required" }
-            require(!args.has("target") || args.getString("target") == state.value.target) { "local_consent_required" }
+            val selected = state.value
+            armSelectionMismatch(args, selected.target, selected.backend)?.let { return it }
             if (approvedPermissions != null && approvedPermissions != MobilePermissions.signature(context)) {
                 disarmControl(); error("permissions_changed")
             }
@@ -509,6 +509,20 @@ class HandsRuntime(
                     armPermit()
                     if (requested) {
                         val deadline = SystemClock.elapsedRealtime() + 5_000
+                        // Let a normal asynchronous bind settle first. Android can keep a
+                        // crashed service listed forever; re-list only our component if it
+                        // remains disconnected, with the same permit checks around each write.
+                        val rebindAfter = SystemClock.elapsedRealtime() + 1_500
+                        if (hadComponent) {
+                            while (!CompanionAccessibilityService.bound && SystemClock.elapsedRealtime() < rebindAfter) {
+                                armPermit(); Thread.sleep(50)
+                            }
+                            armPermit()
+                            if (!CompanionAccessibilityService.bound) {
+                                toggle.rebindListed(::armPermit)
+                                armPermit()
+                            }
+                        }
                         while (!CompanionAccessibilityService.bound && SystemClock.elapsedRealtime() < deadline) {
                             armPermit(); Thread.sleep(50)
                         }

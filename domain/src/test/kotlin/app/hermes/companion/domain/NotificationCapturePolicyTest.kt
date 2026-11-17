@@ -9,6 +9,11 @@ class NotificationCapturePolicyTest {
         assertTrue(NotificationCapturePolicy.selected("mail", setOf("mail"), "msg", true))
         assertFalse(NotificationCapturePolicy.selected("other", setOf("mail"), "msg", true))
     }
+    @Test fun wildcardMatchesAllAppsExceptCallsWhenDisabled() {
+        assertTrue(NotificationCapturePolicy.selected("any.app", setOf("*"), "msg", true))
+        assertFalse(NotificationCapturePolicy.selected("any.app", setOf("*"), "call", false))
+        assertTrue(NotificationCapturePolicy.selected("any.app", setOf("*"), "call", true))
+    }
     @Test fun callChoiceDoesNotFilterOrdinaryMessages() {
         assertFalse(NotificationCapturePolicy.selected("phone", setOf("phone"), "call", false))
         assertFalse(NotificationCapturePolicy.selected("phone", setOf("phone"), "missed_call", false))

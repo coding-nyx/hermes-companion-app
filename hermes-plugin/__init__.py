@@ -65,6 +65,14 @@ HANDLERS = make_handlers(broker, working_lease=working_lease)
 bind_stores(pairing_store)
 
 _SKILL = Path(__file__).resolve().parent / "skills" / "hermes-companion" / "SKILL.md"
+_MCP_ONLY_MARKER = Path(__file__).resolve().parent / ".hands-mcp-only"
+
+
+def _mobile_enabled() -> bool:
+    override = os.environ.get("HERMES_COMPANION_MOBILE_ENABLED")
+    if override is not None:
+        return override.strip().lower() not in {"0", "false", "no", "off"}
+    return not _MCP_ONLY_MARKER.exists()
 
 
 def _prompt(_info=None) -> str:
@@ -108,7 +116,8 @@ def _prompt(_info=None) -> str:
         "mobile_agent_screen_start/status/stop use Hands. "
         "Inspect status.target and status.agent_screen: target=agent is required to work separately "
         "from the user's primary display. The user must authorize Shizuku, select Agent screen in "
-        "Hands; start the service and mobile_arm acquires its controller lease. Start defaults "
+        "Hands; start the service and mobile_arm acquires its controller lease using the screen and backend selected in Hands. "
+        "There is no separate local session approval. Start defaults "
         "to 720x1280 at 240 dpi. Read a fresh snapshot afterward; old refs are invalid. Agent-display "
         "actions never fall back to the primary display. Stop closes the agent screen and globally "
         "disarms Hands; acquire a new holder before a new session. Shizuku text entry supports "
@@ -161,7 +170,7 @@ def _prompt(_info=None) -> str:
         "Phone files: mobile_files_access reports the All files grant and mounted shared-storage roots; "
         "use mobile_arm(direct_only=true) for file/direct-API tasks without enabling Accessibility, "
         "including when the operator explicitly switched it off. This mode blocks screen tools even if "
-        "Accessibility is bound; acquire another holder for the desired mode within the same approved controller session. "
+        "Accessibility is bound; acquire another holder for the desired mode within the same controller session. "
         "mobile_files_enable opens its Android permission page. mobile_files lists/stats/reads/writes/appends/"
         "creates/copies/moves/deletes/hashes files. mobile_file_pull downloads to this host; mobile_file_push "
         "uploads from this host with bounded chunks and SHA-256 verification. All contents and mutations "
@@ -194,7 +203,7 @@ def _prompt(_info=None) -> str:
         "enabled=false releases only that standalone hold; mobile_disarm releases the arm hold. "
         "The visible STOP control and phone notification kill switch stop the holds. A manual "
         "screen-off revokes current screen holds; waking/unlocking later never resumes them. "
-        "Recheck status and wait for the operator's consent before explicitly acquiring a new hold. "
+        "Recheck status before acquiring a new hold; respect an explicit user request to stop. "
         "mobile_brightness_get reads brightness; mobile_brightness_set(level=1..100 or auto=true/false) "
         "requires ARMED and Android WRITE_SETTINGS. If missing, mobile_settings_open(page=write_settings) "
         "opens the operator's grant page. Screen holds use a visible overlay with KEEP_SCREEN_ON "
@@ -234,7 +243,7 @@ def _prompt(_info=None) -> str:
 
 
 def register(ctx):
-    mobile_enabled = os.environ.get("HERMES_COMPANION_MOBILE_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+    mobile_enabled = _mobile_enabled()
     if mobile_enabled:
         working_lease.register(ctx)
     for schema in (

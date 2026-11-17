@@ -10,11 +10,14 @@ export HERMES_HOME="$HOME_DIR"
 DEST="$HOME_DIR/plugins/hermes-companion"
 mkdir -p "$DEST"
 if command -v rsync >/dev/null 2>&1; then
-  rsync -a --delete --exclude '__pycache__' --exclude 'tests' --exclude '.venv' "$SRC/" "$DEST/"
+  rsync -a --delete --exclude '__pycache__' --exclude 'tests' --exclude '.venv' --exclude '.hands-mcp-only' "$SRC/" "$DEST/"
 else
+  mcp_only=false
+  [ ! -e "$DEST/.hands-mcp-only" ] || mcp_only=true
   rm -rf "$DEST"
   mkdir -p "$DEST"
   cp -R "$SRC/." "$DEST/"
+  if "$mcp_only"; then touch "$DEST/.hands-mcp-only"; fi
 fi
 echo "copied plugin -> $DEST"
 if command -v hermes >/dev/null 2>&1; then

@@ -24,8 +24,8 @@ import java.util.UUID
 data class HandsNotificationState(
     val enabled: Boolean = false,
     val clientId: String? = null,
-    val packages: Set<String> = emptySet(),
-    val content: String = "metadata",
+    val packages: Set<String> = setOf("*"),
+    val content: String = "full",
     val retentionMinutes: Int = 15,
     val includeCalls: Boolean = true,
     val listenerBound: Boolean = false,
@@ -52,8 +52,8 @@ class HandsNotifications internal constructor(
     private val _state = MutableStateFlow(HandsNotificationState(
         // A process restart never silently resumes capture, even if the old process died armed.
         clientId = prefs.getString("client", null),
-        packages = prefs.getStringSet("packages", emptySet()).orEmpty().filter { validPackage(it) }.take(MAX_PACKAGES).toSet(),
-        content = prefs.getString("content", "metadata").takeIf { it in CONTENT } ?: "metadata",
+        packages = prefs.getStringSet("packages", setOf("*")).orEmpty().filter { validPackage(it) }.take(MAX_PACKAGES).toSet().ifEmpty { setOf("*") },
+        content = prefs.getString("content", "full").takeIf { it in CONTENT } ?: "full",
         retentionMinutes = prefs.getInt("retention", 15).coerceIn(1, 60),
         includeCalls = prefs.getBoolean("calls", true),
         consentVersion = prefs.getLong("version", 0).coerceAtLeast(0),
@@ -190,7 +190,7 @@ class HandsNotifications internal constructor(
         val since = integer(args, "since_ms", 0, 0, Long.MAX_VALUE)
         val pkg = optionalString(args, "package")
         require(pkg == null || validPackage(pkg)) { "bad_args" }
-        val eligible = ring.filter { it.cursor > after && it.id !in acknowledgements && it.event.capturedAtMs >= since && (pkg == null || it.event.packageName == pkg) }
+        val eligible = ring.filter { it.cursor > after && it.id !in acknowledgements && it.event.capturedAtMs >= since && (pkg == null || pkg == "*" || it.event.packageName == pkg) }
         val selected = eligible.take(limit)
         val events = JSONArray()
         selected.forEach { delivery ->
@@ -250,7 +250,8 @@ class HandsNotifications internal constructor(
         val content = optionalString(args, "content") ?: st.content
         val retention = integer(args, "retention_minutes", st.retentionMinutes.toLong(), 1, 60).toInt()
         val calls = if (args.has("include_calls")) args.opt("include_calls") as? Boolean ?: throw IllegalArgumentException("bad_args") else st.includeCalls
-        require(packages.all { it in st.packages } && content in CONTENT && CONTENT.indexOf(content) <= CONTENT.indexOf(st.content) &&
+        val packagesAllowed = if ("*" in st.packages) packages.all(::validPackage) else packages.all { it in st.packages }
+        require(packagesAllowed && content in CONTENT && CONTENT.indexOf(content) <= CONTENT.indexOf(st.content) &&
             retention <= st.retentionMinutes && (!calls || st.includeCalls)) { "local_consent_required" }
         _state.value = st.copy(packages = packages, content = content, retentionMinutes = retention, includeCalls = calls)
         saveChoices(); advanceScope(); refreshLocked(forceBus = true)
@@ -368,6 +369,7 @@ class HandsNotifications internal constructor(
                 !state.value.enabled -> "Notification sharing is off."
                 isPaused() -> "Sharing is paused for local privacy or approval."
                 !NotifStreamBus.listenerBound -> "Allow notification access in Android settings."
+                "*" in state.value.packages -> "All notifications are shared only with the approved client."
                 else -> "Selected notifications are shared only with the approved client."
             })
     }
@@ -410,7 +412,7 @@ class HandsNotifications internal constructor(
         val ACTIONS: Set<String> = META_ACTIONS + NLS_ENABLE + setOf("device.notifications.stream.set", "device.notifications.stream.on",
             "device.notifications.stream.off", "device.notifications.clear", "device.notifications.action", "device.notifications.reply",
             "device.notifications.dismiss", "device.notifications.snooze")
-        private fun validPackage(value: String) = value.matches(Regex("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+"))
+        private fun validPackage(value: String) = value == "*" || value.matches(Regex("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+"))
         private fun requireOnly(args: JSONObject, allowed: Set<String>) { require(args.keys().asSequence().all { it in allowed }) { "bad_args" } }
         private fun optionalString(args: JSONObject, name: String): String? = if (!args.has(name)) null else args.opt(name) as? String ?: throw IllegalArgumentException("bad_args")
         private fun integer(args: JSONObject, name: String, fallback: Long, min: Long, max: Long): Long {

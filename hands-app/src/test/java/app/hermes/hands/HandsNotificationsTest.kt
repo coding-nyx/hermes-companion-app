@@ -122,6 +122,27 @@ class HandsNotificationsTest {
         owner.accept(event()); assertEquals(1, rows().length())
     }
 
+    @Test fun wildcardApprovesAllAppsExceptProtectedAndSuppressed() {
+        owner.configureLocal(true, CLIENT, setOf("*"), "full", 15, true)
+        assertTrue(owner.state.value.enabled)
+        assertTrue("*" in owner.state.value.packages)
+        assertEquals("All notifications are shared only with the approved client.", owner.state.value.message)
+        // Accepts normal apps
+        owner.accept(event(pkg = "com.any.app"))
+        assertEquals(1, rows().length())
+        // Suppresses Telegram, Hands/Companion self echo
+        owner.accept(event(pkg = "org.telegram.messenger"))
+        owner.accept(event(pkg = "app.hermes.hands"))
+        assertEquals(1, rows().length())
+    }
+
+    @Test fun remoteScopeCanNarrowFromWildcard() {
+        owner.configureLocal(true, CLIENT, setOf("*"), "full", 15, true)
+        val narrow = JSONObject().put("packages", JSONArray().put(APP)).put("content", "title")
+        assertEquals("title", result(send("stream.set", narrow)).getString("content"))
+        assertEquals(setOf(APP), owner.state.value.packages)
+    }
+
     @Test fun staleGenerationFutureCaptureAndExpiredRowsAreDiscarded() {
         enable(retention = 1)
         owner.accept(event(version = owner.state.value.consentVersion - 1))

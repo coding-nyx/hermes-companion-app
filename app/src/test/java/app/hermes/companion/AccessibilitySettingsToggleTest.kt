@@ -109,4 +109,44 @@ class AccessibilitySettingsToggleTest {
         assertTrue(toggle.setEnabled(false))
         assertEquals(count, writes)
     }
+
+    @Test fun rebindRestartsOnlyListedComponentAndPreservesOtherServices() {
+        services = "$other:$short"
+        assertTrue(toggle.rebindListed())
+        assertEquals("$other:$full", services)
+        assertEquals(2, writes)
+        assertEquals(1, globalEnables)
+    }
+
+    @Test fun rebindWillNotEnableAnUnlistedOrUnauthorizedService() {
+        services = other
+        assertFalse(toggle.rebindListed())
+        assertEquals(0, writes)
+        services = "$other:$full"
+        permission = false
+        assertFalse(toggle.rebindListed())
+        assertEquals("$other:$full", services)
+        assertEquals(0, writes)
+    }
+
+    @Test fun cancelledRebindDoesNotReenableAfterStop() {
+        services = "$other:$full"
+        var checks = 0
+        assertFalse(toggle.rebindListed {
+            if (++checks == 3) throw IllegalStateException("stopped")
+        })
+        assertEquals(other, services)
+        assertEquals(0, globalEnables)
+    }
+
+    @Test fun rebindPreservesOtherComponentsAddedDuringRebindAndOnCancellation() {
+        services = "$other:$full"
+        var checks = 0
+        assertFalse(toggle.rebindListed {
+            if (++checks == 3) services += ":org.example/.OtherReader"
+            if (checks == 5) throw IllegalStateException("stopped")
+        })
+        assertEquals("$other:org.example/.OtherReader", services)
+        assertEquals(0, globalEnables)
+    }
 }

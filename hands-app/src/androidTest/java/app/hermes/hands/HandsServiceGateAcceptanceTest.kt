@@ -18,6 +18,16 @@ class HandsServiceGateAcceptanceTest : HandsAcceptanceSession() {
         assertTrue(runtime.state.value.serving)
         assertFalse(runtime.state.value.consent)
 
+        val targetMismatch = command("device.arm", JSONObject().put("target", "primary"))
+        assertFalse(targetMismatch.getBoolean("ok"))
+        assertEquals("target_mismatch", targetMismatch.getJSONObject("error").getString("code"))
+        assertTrue(targetMismatch.getJSONObject("error").getString("message").contains("target=agent"))
+        val backendMismatch = command("device.arm", JSONObject().put("backend", "hybrid"))
+        assertFalse(backendMismatch.getBoolean("ok"))
+        assertEquals("backend_mismatch", backendMismatch.getJSONObject("error").getString("code"))
+        assertTrue(backendMismatch.getJSONObject("error").getString("message").contains("backend=shizuku"))
+        assertFalse(runtime.state.value.armed)
+
         val args = JSONObject().put("duration_seconds", 300).put("direct_only", true)
         val first = requireOk(command("device.arm", args)).getString("lease_id")
         assertTrue(runtime.state.value.armed)
