@@ -6,9 +6,10 @@ credentials, Android permissions, session consent, screen selection and stopping
 
 ## Connect and pair
 
-1. On the phone, start Hands' service. In **Clients → LAN / Tailscale**, enable
-   network access. Copy a reachable `https://PHONE_IP:8766` endpoint and the
-   displayed SHA-256 certificate fingerprint.
+1. On the phone, start Hands' service. LAN / Tailscale encrypted network access
+   starts automatically by default on port `8766`. Under **Clients → LAN / Tailscale**,
+   copy a reachable `https://PHONE_IP:8766` endpoint and the displayed SHA-256
+   certificate fingerprint.
 2. Establish TLS 1.2 or newer. Compare SHA-256 of the peer's **complete leaf X.509
    certificate in DER form** with that fingerprint **before transmitting any HTTP
    headers, pairing code or credential**. This is a certificate pin, not an SPKI

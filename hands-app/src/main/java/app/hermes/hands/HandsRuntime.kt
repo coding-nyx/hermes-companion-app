@@ -50,14 +50,20 @@ interface AgentScreenHost {
 }
 
 /** Agent-neutral policy/executor. No Hermes profile, model or gateway dependency. */
-class HandsRuntime(private val context: Context, val shizuku: ShizukuController) {
+class HandsRuntime(
+    private val context: Context,
+    val shizuku: ShizukuController,
+    private val tlsIdentityFactory: (Context) -> TlsIdentity = { TlsIdentity(it) },
+) {
     val tokens = ClientTokens(context)
     val remotePairing = RemotePairing(tokens::issue)
-    private val _remoteAccess = MutableStateFlow(RemoteAccessState())
+    private val preferences = context.getSharedPreferences("hands.settings", Context.MODE_PRIVATE)
+    private val _remoteAccess = MutableStateFlow(RemoteAccessState(
+        autoStart = preferences.getBoolean("remote_enabled", true),
+    ))
     val remoteAccess: StateFlow<RemoteAccessState> = _remoteAccess
     private val _localAuthorization = MutableStateFlow<String?>(null)
     val localAuthorization: StateFlow<String?> = _localAuthorization
-    private val preferences = context.getSharedPreferences("hands.settings", Context.MODE_PRIVATE)
     private val _state = MutableStateFlow(HandsState(
         backend = preferences.getString("backend", "hybrid") ?: "hybrid",
         target = preferences.getString("target", "agent") ?: "agent",
@@ -160,29 +166,40 @@ class HandsRuntime(private val context: Context, val shizuku: ShizukuController)
     @Synchronized fun enableRemote() {
         check(server != null) { "Start the connection service first." }
         check(isScreenOn() && !isLocked() && !DevicePrivacy.active) { "Unlock the phone before enabling remote access." }
+        preferences.edit().putBoolean("remote_enabled", true).apply()
+        startRemoteInternal()
+    }
+
+    internal fun startRemoteInternal() {
         if (remoteServer != null) return
-        _remoteAccess.value = RemoteAccessState(message = "Starting encrypted access…", starting = true)
+        _remoteAccess.value = RemoteAccessState(message = "Starting encrypted access…", starting = true, autoStart = true)
         try {
-            val identity = TlsIdentity(context)
+            val identity = tlsIdentityFactory(context)
             val next = HandsHttpServer(tokens::authenticate, { status() }, ::command,
                 port = 8766, remoteIdentity = identity, pair = remotePairing::request)
             next.start()
             remoteServer = next
             _remoteAccess.value = RemoteAccessState(true, identity.fingerprint, remoteEndpoints(),
-                "Encrypted access is available to paired agents. Screen control still needs local session approval.")
+                "Encrypted access is available to paired agents. Screen control still needs local session approval.",
+                autoStart = true)
         } catch (failure: Exception) {
-            _remoteAccess.value = RemoteAccessState(message = "Could not start encrypted access. ${failure.message ?: "Try again."}")
+            _remoteAccess.value = RemoteAccessState(message = "Could not start encrypted access. ${failure.message ?: "Try again."}",
+                autoStart = true)
             throw failure
         }
     }
 
-    @Synchronized fun disableRemote() {
+    @Synchronized fun disableRemote(clearPreference: Boolean = true) {
+        if (clearPreference) {
+            preferences.edit().putBoolean("remote_enabled", false).apply()
+        }
         remotePairing.close()
         val previous = remoteServer
         remoteServer = null
         if (_remoteAccess.value.enabled) disarmControl()
+        val auto = preferences.getBoolean("remote_enabled", true)
         try { previous?.close() }
-        finally { _remoteAccess.value = RemoteAccessState() }
+        finally { _remoteAccess.value = RemoteAccessState(autoStart = auto) }
     }
 
     fun openRemotePairing() {
@@ -292,11 +309,14 @@ class HandsRuntime(private val context: Context, val shizuku: ShizukuController)
         next.start()
         server = next
         _state.value = state.value.copy(serving = true)
+        if (preferences.getBoolean("remote_enabled", true)) {
+            runCatching { startRemoteInternal() }
+        }
     }
     @Synchronized fun stopServer() {
         disarmControl()
         notifications.close()
-        disableRemote()
+        disableRemote(clearPreference = false)
         standaloneDeadline = 0L
         standaloneHold.release()
         server?.close(); server = null

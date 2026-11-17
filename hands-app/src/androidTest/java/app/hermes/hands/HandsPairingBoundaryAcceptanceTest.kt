@@ -30,7 +30,9 @@ class HandsPairingBoundaryAcceptanceTest : HandsAcceptanceSession() {
     private lateinit var boundary: LocalPairingBoundary
 
     @Before fun prepareARealPrimaryController() {
-        assumeFalse("Disable an existing remote listener before this isolated acceptance", runtime.remoteAccess.value.enabled)
+        if (runtime.remoteAccess.value.enabled) {
+            instrumentation.runOnMainSync { runtime.disableRemote(clearPreference = false) }
+        }
         assumeFalse("Finish any independent screen-hold proof first", getStatus().getJSONObject("keep_awake").optBoolean("standalone"))
         touchedRuntime = true
         commandLock = HandsRuntime::class.java.getDeclaredField("commands").apply { isAccessible = true }.get(runtime) as ReentrantLock

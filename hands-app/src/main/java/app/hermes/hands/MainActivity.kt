@@ -510,7 +510,10 @@ fun HandsScreen(
                         }
                     } else {
                         Text(
-                            "Turn this on to accept paired agents at this phone's network addresses. Pairing needs your approval; control still needs Allow session.",
+                            if (remote.autoStart)
+                                "LAN / Tailscale encrypted access starts automatically when the service is running. Start the service on the Control tab."
+                            else
+                                "Turn this on to accept paired agents at this phone's network addresses. Pairing needs your approval; control still needs Allow session.",
                             style = HandsType.Body,
                         )
                         ActionButton(

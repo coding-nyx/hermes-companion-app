@@ -63,8 +63,8 @@ Mobile control is executed by the standalone **Hermes Hands** application (`app.
    *What this enables*: With `WRITE_SECURE_SETTINGS` granted, an armed agent can automatically enable/restore Hands Accessibility when needed without kicking the user out to system Settings, and can control supported system secure settings (e.g. `display_inversion`, hardware keyboard visibility).
 
 3. **Pairing with an Agent**:
-   - Open Hands on the phone and tap **Start service**.
-   - Go to **Clients → Enable LAN / Tailscale**, then tap **Pair remote agent**.
+   - Open Hands on the phone and tap **Start service** (LAN / Tailscale encrypted access starts automatically by default on port `8766`).
+   - Go to **Clients**, then tap **Pair remote agent**.
    - Tap **Share to agent** (or **Copy instruction**) to share the connection payload (endpoint, SHA-256 TLS fingerprint, and 8-digit one-time code) with your agent.
    - When the agent sends `POST /v1/pair`, the phone displays an explicit in-app confirmation modal (*"Allow [Agent] to connect? Request from [IP]"*).
    - Tap **Approve agent** to grant the agent its revocable bearer token and full tool access.

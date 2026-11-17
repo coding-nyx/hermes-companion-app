@@ -9,6 +9,7 @@ data class RemoteAccessState(
     val endpoints: List<String> = emptyList(),
     val message: String = "Remote access is off.",
     val starting: Boolean = false,
+    val autoStart: Boolean = true,
 )
 
 /** Include VPN interfaces: Android Tailscale addresses usually live on a tunnel. */
