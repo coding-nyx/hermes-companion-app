@@ -40,7 +40,7 @@ data class HandsState(
     val target: String = "agent",
     val displayId: Int = -1,
     val client: String = "No active controller",
-    val message: String = "Control is off. Choose a screen, then allow a session.",
+    val message: String = "Start the service and choose a screen for control.",
     val protectedPackages: Set<String> = emptySet(),
 )
 
@@ -139,6 +139,15 @@ class HandsRuntime(
 
     fun endLocalAuthorization(id: String) {
         pairingBoundary.cancelIf({ _localAuthorization.value == id }) { _localAuthorization.value = null }
+        notifications.refresh()
+    }
+
+    fun closePairingDialog() {
+        remotePairing.close()
+        pairingBoundary.cancel {
+            _localAuthorization.value = null
+        }
+        notifications.refresh()
     }
 
     fun issueLocalClient(label: String, approvalId: String, protectedAdditions: Set<String> = emptySet()): Pair<ClientTokens.Client, String> {
@@ -223,7 +232,7 @@ class HandsRuntime(
         approvedPermissions = MobilePermissions.signature(context)
         lease.approve()
         observation = null
-        refresh("Allowed for one hour. Waiting for a controller.")
+        refresh("Ready for a controller while the service is running.")
     }
 
     /** Explicit global/local Stop also stops passive sharing. Scoped holder release does not. */
@@ -241,6 +250,7 @@ class HandsRuntime(
             remotePairing.close()
         }
         revokeControl(clearAuthorization = false)
+        notifications.refresh()
     }
 
     private fun revokeControl(clearAuthorization: Boolean = true) {
@@ -293,13 +303,13 @@ class HandsRuntime(
 
     /** Local preview uses the same approved session; it never acquires a remote controller lease. */
     fun openPreview(): Int {
-        check(lease.approved() && state.value.target == "agent") { "Allow a session for the agent screen first." }
+        check(state.value.serving && state.value.target == "agent") { "Start the service and select the agent screen first." }
         check(state.value.backend != "accessibility") { "Select Shizuku or Hybrid for the separate agent screen." }
         val epoch = lease.currentEpoch()
         if (privilegedSession == 0L) privilegedSession = shizuku.beginSession()
-        check(lease.approved() && lease.currentEpoch() == epoch) { "disarmed" }
+        check(state.value.serving && lease.currentEpoch() == epoch) { "disarmed" }
         val display = checkNotNull(screenHost).start(720, 1280, 240)
-        if (!lease.approved() || lease.currentEpoch() != epoch) { disarmControl(); throw IllegalStateException("disarmed") }
+        if (!state.value.serving || lease.currentEpoch() != epoch) { disarmControl(); throw IllegalStateException("disarmed") }
         return display
     }
 
@@ -314,6 +324,7 @@ class HandsRuntime(
         }
     }
     @Synchronized fun stopServer() {
+        _state.value = state.value.copy(serving = false)
         disarmControl()
         notifications.close()
         disableRemote(clearPreference = false)
@@ -353,7 +364,7 @@ class HandsRuntime(
             else physicalHold.release()
         } catch (_: Exception) {
             disarmControl()
-            this.message("Screen hold stopped. Check the floating-screen permission and unlock the phone before allowing another session.")
+            this.message("Screen hold stopped. Check the floating-screen permission and unlock the phone before retrying.")
         }
         } finally { commands.unlock() }
     }
@@ -469,6 +480,11 @@ class HandsRuntime(
             // It is direct-only while binding: the service monitor must not treat a
             // transient missing accessibility connection as loss of an L1 session.
             acquired = synchronized(holderClassification) {
+                check(state.value.serving) { "service_unavailable" }
+                if (!lease.approved()) {
+                    approvedPermissions = MobilePermissions.signature(context)
+                    lease.approve()
+                }
                 lease.acquire(owner, args.optInt("duration_seconds", 3600)).also { directOnlyHolders.add(it.id) }
             }
             if (starting) physicalHold.renew((lease.remainingSeconds() * 1000).coerceAtLeast(1))
@@ -793,7 +809,8 @@ class HandsRuntime(
             else -> t.message?.takeIf { it.matches(Regex("[a-z_]{3,50}")) } ?: "action_failed"
         }
         val message = when (code) {
-            "local_consent_required", "disarmed" -> "Open Hands and allow a session for the selected screen"
+            "local_consent_required" -> "Use the screen and backend selected in Hands."
+            "disarmed" -> "Start the Hands service and arm a new controller lease."
             "controller_busy" -> "Another controller owns the current session"
             "agent_screen_unavailable" -> "Start the separate agent screen; actions will not fall back to the main screen"
             "screen_locked" -> "Unlock the phone before continuing"

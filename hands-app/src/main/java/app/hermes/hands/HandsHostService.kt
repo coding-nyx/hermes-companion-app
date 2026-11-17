@@ -101,7 +101,7 @@ class HandsHostService : Service(), AgentScreenHost {
             .setContentTitle(if (st.consent) "HANDS · ${if (st.target == "agent") "AGENT SCREEN" else "PHONE SCREEN"}" else "Hands · control off")
             .setContentText(if (st.armed) st.client else if (st.consent) "Waiting for a controller · tap Stop to revoke"
                 else if (runtime.notifications.state.value.enabled) "Notification sharing on · tap Stop sharing to pause"
-                else if (runtime.remoteAccess.value.enabled) "Local and network API running · control off" else "Local API running · open to allow a session")
+                else if (runtime.remoteAccess.value.enabled) "Local and network API running · ready for a controller" else "Local API running · ready for a controller")
             .setOngoing(true).setContentIntent(open).addAction(0, "STOP CONTROL", stop)
             .also { if (runtime.notifications.state.value.enabled) it.addAction(0, "STOP SHARING", stopSharing) }.build()
     }

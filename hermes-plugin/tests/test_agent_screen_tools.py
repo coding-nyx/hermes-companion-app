@@ -25,6 +25,31 @@ def status(*, active=False, armed=False, target='agent'):
 
 
 class AgentScreenToolsTests(unittest.TestCase):
+    def test_mobile_opt_out_preserves_companion_cli_without_registering_mobile(self):
+        root = Path(__file__).resolve().parents[1]
+        spec = importlib.util.spec_from_file_location('mobile_opt_out_plugin', root / '__init__.py',
+            submodule_search_locations=[str(root)])
+        plugin = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = plugin
+        try:
+            spec.loader.exec_module(plugin)
+            calls = []
+            class Context:
+                def register_tool(self, **kwargs): calls.append('tool')
+                def register_skill(self, *args, **kwargs): calls.append('skill')
+                def register_system_prompt_section(self, *args, **kwargs): calls.append('prompt')
+                def register_command(self, *args, **kwargs): calls.append('command')
+                def register_cli_command(self, **kwargs): calls.append('cli')
+            with patch.dict(os.environ, {'HERMES_COMPANION_RELAY': '0', 'HERMES_COMPANION_MOBILE_ENABLED': '0'}), \
+                    patch.object(plugin.working_lease, 'register') as lease:
+                plugin.register(Context())
+            self.assertEqual(calls, ['cli'])
+            lease.assert_not_called()
+        finally:
+            for name in list(sys.modules):
+                if name == spec.name or name.startswith(spec.name + '.'):
+                    del sys.modules[name]
+
     def handlers(self, *, armed=False, response=None):
         calls = []
         def send(action, args):
@@ -72,7 +97,7 @@ class AgentScreenToolsTests(unittest.TestCase):
                 self.assertEqual(registered[schema['name']]['schema'], schema)
                 self.assertTrue(callable(registered[schema['name']]['handler']))
             prompt = plugin._prompt()
-            for phrase in ('mobile_agent_screen_start/status/stop', 'Allow session', 'primary display', 'ASCII'):
+            for phrase in ('mobile_agent_screen_start/status/stop', 'start the service', 'primary display', 'ASCII'):
                 self.assertIn(phrase, prompt)
         finally:
             for name in list(sys.modules):
@@ -185,7 +210,7 @@ class AgentScreenToolsTests(unittest.TestCase):
         for armed in (True, False):
             hint = armed_hint(True, armed)
             self.assertIn('mobile_agent_screen_status', hint)
-            self.assertIn('Allow session', hint)
+            self.assertIn('service', hint)
             self.assertIn('primary display', hint)
 
 

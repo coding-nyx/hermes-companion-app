@@ -453,7 +453,7 @@ class ProtocolTests(unittest.TestCase):
                 self.assertEqual(result["protocolVersion"], version if version in hands.PROTOCOL_VERSIONS else hands.PROTOCOL_VERSIONS[0])
                 self.assertIn("tools", result["capabilities"])
                 self.assertEqual(result['serverInfo']['name'], 'hands')
-                self.assertIn("local consent", result["instructions"])
+                self.assertIn("Hands must be running", result["instructions"])
         self.assertEqual(self.phone.requests, [])
 
     def test_tools_require_completed_initialization(self):

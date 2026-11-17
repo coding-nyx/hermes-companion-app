@@ -2,7 +2,7 @@
 
 Hands accepts any compatible agent, application or host. This is a JSON-over-HTTPS
 interface; MCP and Companion are optional clients. The phone owns pairing,
-credentials, Android permissions, session consent, screen selection and stopping.
+credentials, Android permissions, service availability, screen selection and stopping.
 
 ## Connect and pair
 
@@ -96,7 +96,7 @@ automatic rearm after expiry or Stop.
 | `device.disarm` | Exact envelope holder for scoped release; omitting it is an intentional global Stop |
 | `device.agent_screen.start` | Optional `width:720`, `height:1280`, `density:240`; requires the locally selected agent target |
 | `device.agent_screen.status` | No arguments; passive metadata |
-| `device.agent_screen.stop` | No arguments; global Stop, closes the display and revokes consent |
+| `device.agent_screen.stop` | No arguments; global Stop, closes the display and revokes holders |
 | `device.snapshot` | No arguments; returns nodes, `snapshot_id`, display identity and logical size |
 | `device.screenshot` | Optional `max_edge`; returns native PNG as `png_b64` plus coordinate metadata |
 | `device.click` | `ref` and `snapshot_id`, or logical `x`, `y` |

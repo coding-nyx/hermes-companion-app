@@ -10,7 +10,7 @@ This directory provides an **optional** MCP stdio adapter for clients that prefe
 MCP tools. Python 3.10+ is its only host dependency; direct API clients do not
 need Python.
 
-The phone executes operations and owns Android permissions, local consent,
+The phone executes operations and owns Android permissions, service availability,
 protected applications, display selection and the exclusive controller lease.
 This adapter translates MCP tools to the phone's authenticated HTTP API. It does
 not run arbitrary shell commands.
@@ -29,7 +29,7 @@ See the [complete generic HTTP API](../docs/protocol/hands-http-api.md) for clie
 3. Keep the returned token private and send it in
    `Authorization: Bearer <token>` for status and control requests. Creating a
    credential does not arm control.
-4. After the operator selects a backend/display and uses **Allow session**, read
+4. After the operator starts the service and selects a backend/display, read
    `GET /v1/status`, then acquire a holder with `POST /v1/commands` and
    `action: "device.arm"`. Use your stable controller identity and the returned
    `lease_id` for subsequent commands. Release only your owned holder when done.
@@ -114,7 +114,7 @@ ordinary HTTPS control connections retain normal CA and hostname validation.
 Direct pairing always requires an explicit pin.
 
 Pairing adds one client credential and does not arm control. Select the intended
-backend and **Agent screen** or primary target, then use **Allow session** locally.
+backend and **Agent screen** or primary target and start the service.
 The agent calls `mobile_status` and `mobile_arm` afterward. The separate screen
 requires Android 14+ and running, locally authorized Shizuku. If phone approval
 succeeds but the token cannot be saved, revoke that named client on the phone
@@ -178,10 +178,9 @@ adb shell pm grant app.hermes.hands android.permission.WRITE_SECURE_SETTINGS
    `HANDS_TOKEN` is also supported for clients that manage secrets through
    environment variables. Do not put the token in command-line arguments or a
    committed client configuration.
-5. Select the backend and primary/agent target in Hands and use **Allow session** locally. The
+5. Start the Hands service and select the backend and primary/agent target. The
    agent calls `mobile_status`, then `mobile_arm` to acquire its controller lease.
-   Requesting a different backend/target needs matching local consent. A remote
-   arm request cannot silently grant permission or enable local consent.
+   A remote arm request cannot silently grant Android permissions.
 
 Remove only the forwarding rule you created when finished:
 
@@ -195,7 +194,7 @@ The shipped [tool catalog](tool_catalog.json) contains **79 typed tools** and
 **76 device action mappings**. It is standalone source data: the adapter never
 imports a Companion/Hermes plugin, gateway, or Android source checkout at runtime.
 Discovered tools describe the common API; the phone's returned capabilities,
-local permissions, consent and backend readiness remain authoritative.
+local permissions, service state and backend readiness remain authoritative.
 
 | Tool | Purpose |
 | --- | --- |
@@ -261,7 +260,7 @@ Long speech waits retain `wait_ms` up to 120000 with a bounded 125-second HTTP
 timeout. File operations also use a bounded 125-second timeout. ARM uses at least
 10 seconds so the phone can finish its bounded Accessibility recovery; all other
 commands retain the configured timeout. These overrides never retry a request or
-recreate consent.
+recreate a holder.
 
 `mobile_arm` accepts `backend` (`accessibility`, `shizuku`, `hybrid`), `target`
 (`primary`, `agent`) and an optional `duration_seconds` between 30 and 7200 (default
@@ -283,9 +282,8 @@ including while a model reasons between tools. It never calls ARM to recover a
 lost session. Renewals occur at most 30 seconds apart, sooner for short leases.
 
 `working_lease_managed=true` in arm/status results reports active process-based
-renewal. **Hands' absolute local-consent window still caps the session** (currently
-one hour); renewal cannot override expiry, a local stop, privacy shielding, token
-revocation or changed backend/display consent. A terminal refusal ends renewal.
+renewal. Renewal cannot override a local stop, privacy shielding, token
+revocation or a changed backend/display. A terminal refusal ends renewal.
 A failed transport request is not replayed; `working_lease_error` reports why
 background management stopped. The phone's own bounded expiry remains in force.
 
@@ -295,7 +293,7 @@ holder. End your MCP process or disarm when work is done. If the process or
 connection dies, phone-side expiry and the local kill switch remain authoritative.
 `mobile_agent_screen_stop` is a separate explicit **global stop**: it closes the
 agent display and disarms Hands, including other controllers, and may run while
-disarmed. New work then requires local **Allow session** consent again.
+disarmed. New work requires a new holder while the Hands service is running.
 
 `mobile_keep_awake(action="set", enabled=true, duration_seconds=3600)` requests a
 separate hold on an already-on physical screen without arming or enabling
@@ -317,7 +315,7 @@ HTTP on `127.0.0.1:8765`. `POST /v1/pair` is the direct TLS pairing route and ta
 It requires the open phone pairing window, a single-use code and explicit local
 approval. Success contains `{ok:true,result:{token,client_id,label}}`; only the
 private token file receives the returned token. Pairing does not grant a control
-lease or session consent. The same authenticated command/status API works after
+lease. The same authenticated command/status API works after
 pairing on either transport.
 
 `GET /v1/status` returns:

@@ -11,7 +11,7 @@ class ControlLeaseTest {
         catch (e: IllegalStateException) { assertEquals(code, e.message) }
     }
 
-    @Test fun remoteCannotGrantLocalConsent() {
+    @Test fun leaseMustBeEnabledBeforeAcquisition() {
         refuses("local_consent_required") { gate.acquire("client:agent", 300) }
         assertFalse(gate.approved())
     }
@@ -31,12 +31,12 @@ class ControlLeaseTest {
         refuses("lease_mismatch") { gate.release("two:profile", holder.id) }
         assertTrue(gate.active())
     }
-    @Test fun renewalNeverExtendsLocalApproval() {
-        gate.approve(120)
+    @Test fun renewalDoesNotRequireAnotherLocalApproval() {
+        gate.approve()
         val holder = gate.acquire("one", 60)
         time += 50_000
         val renewed = gate.renew("one", holder.id, 7200)
-        assertEquals(121_000L, renewed.deadline)
+        assertEquals(time + 7_200_000L, renewed.deadline)
         time = renewed.deadline
         refuses("disarmed") { gate.require("one", holder.id) }
         refuses("local_consent_required") { gate.acquire("one", 60) }

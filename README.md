@@ -48,7 +48,7 @@ For **Hands, notification streaming, custom rooms and the agent console**, use t
 
 ### Hands Standalone Mobile Control & Secure Settings Setup
 
-Mobile control is executed by the standalone **Hermes Hands** application (`app.hermes.hands`). Hands runs independently of any specific agent, framework, or model, exposing an authenticated TLS JSON API and optional MCP stdio adapter.
+Mobile control is executed by the standalone **Hands** application (`app.hermes.hands`). Hands runs independently of any specific agent, framework, or model, exposing an authenticated TLS JSON API and optional MCP stdio adapter.
 
 1. **Build and Install Hands**:
    ```sh

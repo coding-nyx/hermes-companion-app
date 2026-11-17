@@ -41,12 +41,11 @@ class HandsScreenRenderTest {
         rule.onNodeWithText("Control engine").performScrollTo()
         capture("hands-dark-engine")
     }
-    @Test @Config(qualifiers = "w320dp-h720dp-night-xhdpi") fun largeTextKeepsConsentAndClientControlsReachable() {
+    @Test @Config(qualifiers = "w320dp-h720dp-night-xhdpi") fun largeTextKeepsServiceAndClientControlsReachable() {
         rule.activity.resources.configuration.fontScale = 2f
-        var allowed = 0
-        show(HandsState(serving = true), allow = { allowed++ })
-        rule.onNodeWithTag("hands.allow").assertIsDisplayed().performClick()
-        assertEquals(1, allowed)
+        show(HandsState(serving = true))
+        rule.onNodeWithTag("hands.stop.service").assertIsDisplayed()
+        rule.onNodeWithTag("hands.allow").assertDoesNotExist()
         capture("hands-large-control")
         rule.onNodeWithTag("hands.tab.clients").performClick()
         rule.onNodeWithTag("hands.token.create").performScrollTo().assertIsDisplayed()

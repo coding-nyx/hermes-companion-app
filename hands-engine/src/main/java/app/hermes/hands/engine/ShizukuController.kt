@@ -74,7 +74,7 @@ class ShizukuController(context: Context) : AutoCloseable {
                 !installed -> "Install Shizuku to enable the privileged backend"
                 !running -> "Start Shizuku using Wireless debugging"
                 !supported -> "Update Shizuku to version 13 or newer"
-                !granted -> "Allow Hermes Hands in Shizuku"
+                !granted -> "Allow Hands in Shizuku"
                 service != null -> "Shizuku backend connected"
                 connecting -> "Connecting to Shizuku"
                 else -> "Shizuku is ready to connect"

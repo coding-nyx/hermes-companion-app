@@ -66,7 +66,7 @@ class ConnectActivity : ComponentActivity() {
                         if (preparing) Text("Stopping control before local approval…", style = HandsType.Body)
                         else {
                             Text("Allow $label to connect?", style = HandsType.Title)
-                            Text("$caller will receive its own revocable client token. It can request control only after you allow a session in Hands. You can stop or revoke it at any time.", style = HandsType.Body)
+                            Text("$caller will receive its own revocable client token. It can request control while the Hands service is running. You can stop the service or revoke its access at any time.", style = HandsType.Body)
                             if (incomingProtection.isNotEmpty()) Text("Add this client's ${incomingProtection.size} protected apps to Hands. Existing protection rules stay in place.", style = HandsType.Body)
                         }
                     }

@@ -24,13 +24,15 @@ import org.robolectric.annotation.GraphicsMode
 class SecureSettingsAccessRenderTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
-    private fun show(granted: Boolean, copied: () -> Unit = {}, refreshed: () -> Unit = {}) {
+    private fun show(granted: Boolean, copied: () -> Unit = {}, refreshed: () -> Unit = {},
+        accessibility: Boolean? = null, onToggle: (Boolean) -> Unit = {}) {
         rule.setContent { HandsTheme {
             HandsScreen(HandsState(serving = true), ShizukuStatus(), emptyList(),
                 onStart = {}, onStopService = {}, onAllow = {}, onDisarm = {}, onBackend = {}, onTarget = {},
-                onShizuku = {}, onOpenShizuku = {}, onAccessibility = {}, onOverlay = {}, onStartScreen = {},
+                onShizuku = {}, onOpenShizuku = {}, onAccessibility = {}, onAccessibilityToggle = onToggle, onOverlay = {}, onStartScreen = {},
                 onCreateToken = {}, onRevoke = {}, onProtect = {}, initialTab = 2,
-                permissions = listOf(HandsPermission("secure_settings", "Secure settings access",
+                permissions = listOfNotNull(accessibility?.let { HandsPermission("accessibility", "Accessibility", "Phone screen engine", it, true) },
+                    HandsPermission("secure_settings", "Secure settings access",
                     "Allows an armed agent to manage supported settings after you grant access using ADB.", granted, true)),
                 onPermission = { fail("Android app settings cannot grant this permission") },
                 onCopySecureGrant = copied, onRefreshPermissions = refreshed)
@@ -62,6 +64,13 @@ class SecureSettingsAccessRenderTest {
         rule.onNodeWithText("Allowed").performScrollTo().assertIsDisplayed()
         rule.onNodeWithTag("hands.secure_settings.copy").assertDoesNotExist()
         rule.onNodeWithTag("hands.permission.secure_settings").assertDoesNotExist()
+    }
+    @Test fun accessibilityCanBeEnabledFromAccess() {
+        var requested: Boolean? = null
+        show(true, accessibility = false, onToggle = { requested = it })
+        rule.onNodeWithTag("hands.accessibility.toggle").performScrollTo()
+            .assertContentDescriptionEquals("Hands Accessibility").assertIsOff().performClick()
+        assertEquals(true, requested)
     }
     private fun capture(name: String) {
         rule.waitForIdle()

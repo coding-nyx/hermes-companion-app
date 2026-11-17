@@ -150,15 +150,14 @@ restrictions must not be bypassed with generic shell commands.
 
 ## Consent, holders and stopping
 
-Local **Allow session** grants a one-hour maximum approval for the selected
+The running Hands service permits authenticated clients to arm for the selected
 backend and screen. Remote `device.arm` cannot change that selection or grant
-approval. One controller (client token plus controller identity) owns control at
+Android permissions. One controller (client token plus controller identity) owns control at
 a time. Every ARM returns a distinct holder UUID. A reasoning heartbeat and an
 explicit tool can therefore hold independent leases for the same controller.
 
-Holder duration defaults to 3600 seconds, accepts 30–7200 seconds, and is capped
-by local approval. `idle_timeout_seconds` reports the actual cap. Renewal requires
-an existing, unexpired holder and never restores revoked approval. Releasing a
+Holder duration defaults to 3600 seconds, accepts 30–7200 seconds, . `idle_timeout_seconds` reports the actual duration. Renewal requires
+an existing, unexpired holder and never restores a revoked holder. Releasing a
 holder cannot release another holder; the last release stops control. Local Stop,
 global authenticated stop, permission loss, display loss and process death revoke
 control. Shizuku cancellation invalidates the execution epoch and kills active
@@ -176,8 +175,7 @@ visible, non-focusable **AWAKE · STOP** overlay with `FLAG_KEEP_SCREEN_ON`, plu
 bounded partial CPU wake lock. Overlay permission, an already-on display and an
 unlocked phone are required. Its Stop action cancels the hold and control;
 screen-off, permission loss or unexpected window removal also revoke it.
-Queued renewal cannot restore a revoked owner: fresh local session approval or
-an explicit standalone enable must call `beginSession` first.
+Queued renewal cannot restore a revoked owner; a fresh ARM or explicit standalone enable starts a new hold.
 
 Armed control uses this bounded physical-screen hold for either target because
 both require an unlocked phone. Approved sessions waiting for a controller hold
@@ -227,7 +225,7 @@ including Companion's connection token. Those clients must reconnect afterward.
   60 seconds; only approval issues `{token,client_id,label}` to that connection.
   Wrong codes, requests, pending state and socket work are bounded. Denial,
   timeout, screen lock and listener shutdown close pairing without granting
-  control. Pairing does not grant session consent or an armed holder.
+  control. Pairing does not create an armed holder.
   Opening any credential approval revokes control, drains accepted commands and
   pauses arm, content reads and input before the code or approval controls appear.
   Status and Stop remain available. Android app approval and manual token dialogs
@@ -239,8 +237,7 @@ including Companion's connection token. Those clients must reconnect afterward.
 Use direct pinned TLS over LAN/Tailscale, or an existing authorized ADB/SSH
 tunnel to the local API. No cleartext network listener is created. The MCP adapter
 uses native image content for screenshots and renews only its own issued holders
-while its stdio process remains alive. Phone-side approval expiry remains the
-absolute limit. See [the MCP setup instructions](../../hands-mcp/README.md).
+while its stdio process remains alive. Phone-side holder expiry and service stop remain authoritative. See [the MCP setup instructions](../../hands-mcp/README.md).
 
 ## Build
 

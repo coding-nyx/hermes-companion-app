@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in device acceptance through the real Hands MCP stdio executable.
 
-Root/operator prepares the phone, fixture APK, local consent, private token file
+Root/operator prepares the phone, fixture APK, running service, private token file
 and ADB forwarding. This driver never runs ADB, grants permission, reads the
 primary display or sends a global stop. Nothing contacts a device until main().
 """
@@ -312,12 +312,10 @@ class Acceptance:
 
         def preflight():
             status = self.guard()
-            if status.get("consent_approved") is not True:
-                raise SmokeFailure("local_consent_required")
             engine = status.get("shizuku")
             if not isinstance(engine, dict) or engine.get("bound") is not True:
                 raise SmokeFailure("shizuku_unavailable")
-        self.step("agent_target_and_local_consent", preflight)
+        self.step("agent_target_and_shizuku", preflight)
 
         def arm():
             result = self.bridge.tool("mobile_arm", {"duration_seconds": 30, "target": "agent"}).data

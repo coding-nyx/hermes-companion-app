@@ -539,7 +539,7 @@ a direct caller cannot bypass a `silent` rule.
 
 ## Arming does not imply Accessibility
 
-Local Hands Allow session grants bounded approval; `device.arm` acquires a
+The running Hands service permits authenticated control; `device.arm` acquires a
 controller-owned holder. Screen readiness is enforced separately per action.
 `direct_only:true` intentionally blocks screen input even if a backend is ready.
 Without it, authorized Shizuku can provide `lanes:l0+l1` and
@@ -548,7 +548,7 @@ never silently overridden. The selected agent display must be created explicitly
 missing or invalid display identity never falls back to the physical screen.
 
 Companion has no local arming service or wake-lock owner. Hands owns physical
-holds, privacy, cancellation, permission signatures and lease/consent expiry.
+holds, privacy, cancellation, permission signatures and holder expiry.
 A normal scoped release retires only that holder; local/global Stop also clears
 Hands' passive notification sharing. Review the [Hands API](hands-http-api.md)
 for independent client, permission, notification and private-entry contracts.

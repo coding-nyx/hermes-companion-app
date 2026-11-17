@@ -230,7 +230,7 @@ DISARM = {
 
 AGENT_SCREEN_START = {
     "name": "mobile_agent_screen_start",
-    "description": "Create the separate agent display in standalone Hands. Requires Companion delegation to Hands, the user's local Allow session consent with target=agent, an armed controller lease and authorized Shizuku. Defaults to 720x1280 logical pixels at 240 dpi. Failure never switches to the user's primary display. Discard earlier screen refs and take a fresh snapshot after creation.",
+    "description": "Create the separate agent display in standalone Hands. Requires Companion delegation to Hands, the Hands service running with target=agent, an armed controller lease and authorized Shizuku. Defaults to 720x1280 logical pixels at 240 dpi. Failure never switches to the user's primary display. Discard earlier screen refs and take a fresh snapshot after creation.",
     "parameters": {
         "type": "object", "additionalProperties": False,
         "properties": {
@@ -244,14 +244,14 @@ AGENT_SCREEN_START = {
 
 AGENT_SCREEN_STATUS = {
     "name": "mobile_agent_screen_status",
-    "description": "Read standalone Hands' selected target, separate agent display and local consent state. Allowed while disarmed. target=primary means subsequent controls use the user's screen; an active agent display alone does not select it. Requires standalone Hands delegation; legacy Companion cannot create a separate display. Never changes target or grants consent.",
+    "description": "Read standalone Hands' selected target, separate agent display and service state. Allowed while disarmed. target=primary means subsequent controls use the user's screen; an active agent display alone does not select it. Requires standalone Hands delegation; legacy Companion cannot create a separate display. Never changes the target.",
     "parameters": {"type": "object", "additionalProperties": False,
         "properties": {"device": {"type": "string", "description": "Device id or friendly name."}}},
 }
 
 AGENT_SCREEN_STOP = {
     "name": "mobile_agent_screen_stop",
-    "description": "Close the separate agent display and globally disarm standalone Hands, cancelling its active controller session. Available while disarmed and bypasses control rate limits. Does not switch to or resume work on the primary display. A new session requires local Allow session consent again. Requires standalone Hands delegation.",
+    "description": "Close the separate agent display and globally disarm standalone Hands, cancelling its active controller session. Available while disarmed and bypasses control rate limits. Does not switch to or resume work on the primary display. A new session requires a new armed holder. Requires standalone Hands delegation.",
     "parameters": {"type": "object", "additionalProperties": False,
         "properties": {"device": {"type": "string", "description": "Device id or friendly name."}}},
 }

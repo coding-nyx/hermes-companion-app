@@ -101,7 +101,7 @@ Host CLI (outside chat): `hermes companion qr`, `hermes companion list`, `hermes
 
 **Require armed:** all phone file contents/listings/mutations/transfers and the file permission opener; snapshot, click, type, swipe, scroll, press, open_app, screenshot, wait, brightness changes, the destructive L0 tools (volume set, ringer, media control, clipboard write, notification action/reply/dismiss/snooze, stream set), the personal-data reads (sms, call log, contacts, calendar, location, app usage, clipboard read) — and any other control except the standalone keep-awake tool above. Control ops refuse with `disarmed` + hint to call `mobile_arm` first; they do not auto-arm.
 
-**Arming and accessibility are separate.** Local Allow session grants consent; mobile_arm acquires an owned holder. Screen readiness is a separate capability. In an `l0`-only armed session the direct-API tools work normally and only the L1 tools (snapshot/click/type/swipe/scroll/press) answer `a11y_unavailable`.
+**Arming and accessibility are separate.** The running Hands service permits authenticated clients to arm; mobile_arm acquires an owned holder. Screen readiness is a separate capability. In an `l0`-only armed session the direct-API tools work normally and only the L1 tools (snapshot/click/type/swipe/scroll/press) answer `a11y_unavailable`.
 
 ## Arm / disarm from Hermes
 
@@ -118,13 +118,13 @@ This feature requires the standalone **Hands** app, Companion delegation to it, 
 authorized Shizuku. Companion executes no local controls. Never emulate the feature by moving work onto the user's primary display.
 
 1. The operator opens Hands, uses **Start service**, selects **Agent screen** and their intended
-   backend, authorizes Shizuku and uses **Allow session** locally. Companion is a separate client;
+   backend and authorizes Shizuku. Companion is a separate client;
    direct MCP clients use **Create MCP token** and the standalone `hands-mcp` adapter. Never request
    pairing tokens or Android permission grants through model-visible tool arguments.
 2. Call `mobile_agent_screen_status`. Its `target` names the selected control display;
    `agent_screen.active` says whether the separate display exists. **An active agent display does
-   not imply target=agent.** If target is primary or local consent is absent, ask the operator to
-   select/allow the intended session. Do not change to primary as recovery.
+   not imply target=agent.** If target is primary or the service is stopped, ask the operator to
+   select the intended screen or start the service. Do not change to primary as recovery.
 3. Call `mobile_arm`, then `mobile_agent_screen_start(width=720, height=1280, density=240)` when the
    separate screen is not active. Start requires armed consent and supports widths/heights 320–2560
    and density 120–640. Confirm a positive, non-primary `display_id` and `target=agent`; a generic
@@ -132,17 +132,16 @@ authorized Shizuku. Companion executes no local controls. Never emulate the feat
 4. Obtain a fresh `mobile_snapshot` or `mobile_screenshot`, then use the ordinary screen tools.
    References and coordinates belong to that display and session only. Discard them on another
    snapshot, target/backend change, arm/session change or display recreation. The phone enforces
-   display routing, protected apps, local consent and the kill switch. Failures never authorize
+   display routing, protected apps, the running service and the kill switch. Failures never authorize
    a tap, launch or screenshot on the primary display. Secure or unreadable screens remain failures.
 5. Current Shizuku text entry supports printable ASCII only. Unsupported Unicode is a refusal;
    do not silently transliterate, paste through the user's clipboard or use shell/adb input.
 6. `mobile_agent_screen_stop` closes the display and **globally disarms** Hands, including any active
    controller. It works while disarmed and bypasses control rate limits. It never resumes primary
-   display control. A new session needs the user's local **Allow session** again.
+   display control. A new session needs a new armed holder while the service runs.
 
 `mobile_agent_screen_status` is passive and may run disarmed. Start requires an armed session;
-stop is an explicit stop action. All three follow room-turn restrictions. Standalone Hands' local
-consent and per-client lease remain authoritative even when a host cache says ARMED.
+stop is an explicit stop action. All three follow room-turn restrictions. Standalone Hands' service state and per-client lease remain authoritative even when a host cache says ARMED.
 
 ## Private values: phone-local entry
 

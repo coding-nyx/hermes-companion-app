@@ -1,4 +1,4 @@
-# Hermes Hands (`app.hermes.hands`)
+# Hands (`app.hermes.hands`)
 
 Standalone Android control service and UI. Hands executes phone automation, screen observation, telephony, SMS, notifications, files, and system tools independently of any specific AI model, gateway, or framework.
 

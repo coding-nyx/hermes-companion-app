@@ -107,11 +107,11 @@ def _prompt(_info=None) -> str:
         "Companion separately opts in to forwarding to one explicit gateway/profile. Passive deliveries never wake or inject. "
         "mobile_agent_screen_start/status/stop use Hands. "
         "Inspect status.target and status.agent_screen: target=agent is required to work separately "
-        "from the user's primary display. The user must authorize Shizuku, select Agent screen and "
-        "Allow session locally in Hands; mobile_arm then acquires its controller lease. Start defaults "
+        "from the user's primary display. The user must authorize Shizuku, select Agent screen in "
+        "Hands; start the service and mobile_arm acquires its controller lease. Start defaults "
         "to 720x1280 at 240 dpi. Read a fresh snapshot afterward; old refs are invalid. Agent-display "
         "actions never fall back to the primary display. Stop closes the agent screen and globally "
-        "disarms Hands; ask for local consent again before a new session. Shizuku text entry supports "
+        "disarms Hands; acquire a new holder before a new session. Shizuku text entry supports "
         "printable ASCII only; never invent a shell/clipboard/primary-display workaround for Unicode. "
         "Screen readiness is status.screen_control_available, falling back to a11y_bound only on older protocols. "
         "Shizuku screen control and private entry may work while a11y_bound=false. "
@@ -234,7 +234,9 @@ def _prompt(_info=None) -> str:
 
 
 def register(ctx):
-    working_lease.register(ctx)
+    mobile_enabled = os.environ.get("HERMES_COMPANION_MOBILE_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+    if mobile_enabled:
+        working_lease.register(ctx)
     for schema in (
         DEVICES, SELECT_DEVICE, STATUS, ARM, DISARM, KEEP_AWAKE, BRIGHTNESS_GET, BRIGHTNESS_SET,
         SNAPSHOT, CLICK, TYPE, SECURE_ENTRY, PRESS, SWIPE, SCROLL,
@@ -265,16 +267,16 @@ def register(ctx):
         ACCESSIBILITY_STATUS, ACCESSIBILITY_ENABLE, ACCESSIBILITY_DISABLE,
         ACCESSIBILITY_SERVICES, ACCESSIBILITY_SERVICE_SET, SECURE_SETTINGS, SECURE_SETTINGS_SET,
         AGENT_SCREEN_START, AGENT_SCREEN_STATUS, AGENT_SCREEN_STOP,
-    ):
+    ) if mobile_enabled else ():
         ctx.register_tool(
             name=schema["name"],
             toolset=TOOLSET,
             schema=schema,
             handler=HANDLERS[schema["name"]],
         )
-    if _SKILL.exists() and hasattr(ctx, "register_skill"):
+    if mobile_enabled and _SKILL.exists() and hasattr(ctx, "register_skill"):
         ctx.register_skill("hermes-companion", _SKILL, description="Drive the paired Android companion.")
-    if hasattr(ctx, "register_system_prompt_section"):
+    if mobile_enabled and hasattr(ctx, "register_system_prompt_section"):
         ctx.register_system_prompt_section("hermes-companion", _prompt)
     if hasattr(ctx, "register_cli_command"):
         try:
@@ -289,7 +291,7 @@ def register(ctx):
             handler_fn=handle,
             description="approve/list/revoke/lanes/default/rename for paired phones",
         )
-    if hasattr(ctx, "register_command"):
+    if mobile_enabled and hasattr(ctx, "register_command"):
         ctx.register_command("companion", lambda raw: HANDLERS["mobile_status"]({}), description="Android companion status")
     def _attach_http():
         """Point the broker at whatever already owns :9120. Never fatal."""

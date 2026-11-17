@@ -688,7 +688,7 @@ class PrivilegedHandsService @Keep constructor(context: Context) : IHandsService
     }
 
     private fun checkOwner() {
-        if (Binder.getCallingUid() != ownerUid) throw SecurityException("Caller is not the Hermes Hands application")
+        if (Binder.getCallingUid() != ownerUid) throw SecurityException("Caller is not the Hands application")
     }
 
     /** Independent displays have no primary status/navigation inset to inherit in a relay. */

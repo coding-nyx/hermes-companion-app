@@ -404,7 +404,7 @@
     },
     {
       "name": "mobile_arm",
-      "description": "Acquire a unique controller holder after local Hands consent. The process renews its issued holders during reasoning; local consent expiry still caps them. duration_seconds defaults to 3600, range 30..7200. Does not grant Android permissions. Choose agent to keep work off the primary display. With WRITE_SECURE_SETTINGS and no explicit Accessibility OFF, a screen-capable primary Accessibility or Hybrid holder may recover Hands Accessibility when needed. Auto-recovery never runs for direct-only holders, the agent display or the Shizuku backend. A direct-only holder stays direct-only; acquire a new explicit holder under the same client to request screen control.",
+      "description": "Acquire a unique controller holder while the Hands service is running. The process renews its issued holders during reasoning. duration_seconds defaults to 3600, range 30..7200. Does not grant Android permissions. Choose agent to keep work off the primary display. With WRITE_SECURE_SETTINGS and no explicit Accessibility OFF, a screen-capable primary Accessibility or Hybrid holder may recover Hands Accessibility when needed. Auto-recovery never runs for direct-only holders, the agent display or the Shizuku backend. A direct-only holder stays direct-only; acquire a new explicit holder under the same client to request screen control.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -572,7 +572,7 @@
     },
     {
       "name": "mobile_agent_screen_stop",
-      "description": "Explicitly close the agent display and globally disarm Hands, cancelling active controllers. Available while disarmed. Never resumes primary-display control; new work needs local consent again.",
+      "description": "Explicitly close the agent display and globally disarm Hands, cancelling active controllers. Available while disarmed. Never resumes primary-display control; new work requires a new holder while the service is running.",
       "inputSchema": {
         "type": "object",
         "properties": {},

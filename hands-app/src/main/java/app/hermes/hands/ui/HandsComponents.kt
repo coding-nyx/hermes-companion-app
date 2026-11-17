@@ -1,5 +1,6 @@
 package app.hermes.hands.ui
 
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -9,6 +10,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -484,13 +486,185 @@ fun SheetHeading(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, style = HandsType.Title.copy(color = HandsTheme.colors.textPrimary))
+        Text(
+            text = title,
+            style = HandsType.Title.copy(color = HandsTheme.colors.textPrimary),
+            modifier = Modifier.weight(1f, fill = false).padding(end = 12.dp),
+        )
         GlassButton(
             label = "Done",
             onClick = onClose,
             kind = GlassButtonKind.GHOST,
             shape = RoundedCornerShape(100.dp),
-            modifier = Modifier.defaultMinSize(minWidth = 60.dp, minHeight = 36.dp),
+            modifier = Modifier.wrapContentWidth().defaultMinSize(minHeight = 40.dp),
         )
     }
 }
+
+/**
+ * iOS-styled grouped section container with an optional section header.
+ */
+@Composable
+fun GlassGroupedSection(
+    title: String,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionHeader(title)
+        GlassCard(padded = true, content = content)
+    }
+}
+
+/**
+ * iOS-styled preference row with interactive tap, title, optional summary, and trailing selected status pill.
+ */
+@Composable
+fun GlassPreferenceRow(
+    title: String,
+    summary: String? = null,
+    value: String? = null,
+    selected: Boolean = false,
+    onClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    val colors = HandsTheme.colors
+    val clickableModifier = if (onClick != null) {
+        Modifier.clickable(role = Role.Button, onClick = onClick)
+    } else Modifier
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .then(clickableModifier)
+            .padding(vertical = 10.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(
+            modifier = Modifier.weight(1f).padding(end = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = title,
+                style = HandsType.Body.copy(
+                    color = colors.textPrimary,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                ),
+            )
+            if (!summary.isNullOrBlank()) {
+                Text(
+                    text = summary,
+                    style = HandsType.Caption.copy(color = colors.textSecondary),
+                )
+            }
+        }
+        if (selected) {
+            GlassStatusPill(label = "", statusText = value ?: "Selected", active = true)
+        } else if (!value.isNullOrBlank()) {
+            Text(
+                text = value,
+                style = HandsType.Subtitle.copy(color = colors.accent, fontWeight = FontWeight.Medium),
+            )
+        }
+    }
+}
+
+/**
+ * iOS-styled toggle row with title, optional summary, and an iOS frosted switch.
+ */
+@Composable
+fun GlassPreferenceToggle(
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    summary: String? = null,
+    modifier: Modifier = Modifier,
+) {
+    val colors = HandsTheme.colors
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(role = Role.Switch, onClick = { onCheckedChange(!checked) })
+            .padding(vertical = 10.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(
+            modifier = Modifier.weight(1f).padding(end = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = title,
+                style = HandsType.Body.copy(
+                    color = colors.textPrimary,
+                    fontWeight = FontWeight.Medium,
+                ),
+            )
+            if (!summary.isNullOrBlank()) {
+                Text(
+                    text = summary,
+                    style = HandsType.Caption.copy(color = colors.textSecondary),
+                )
+            }
+        }
+        GlassSwitch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+/**
+ * iOS-styled frosted switch component.
+ */
+@Composable
+fun GlassSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = HandsTheme.colors
+    val trackWidth = 51.dp
+    val trackHeight = 31.dp
+    val thumbSize = 27.dp
+    val thumbPadding = 2.dp
+
+    val thumbOffset by animateDpAsState(
+        targetValue = if (checked) trackWidth - thumbSize - thumbPadding else thumbPadding,
+        label = "thumbOffset",
+    )
+
+    val trackBg = if (checked) colors.accent else (if (colors.isDark) Color(0x33FFFFFF) else Color(0x1F000000))
+    val trackBorder = if (checked) null else BorderStroke(1.dp, colors.strokeGlass)
+
+    Box(
+        modifier = modifier
+            .size(width = trackWidth, height = trackHeight)
+            .clip(RoundedCornerShape(100.dp))
+            .background(trackBg)
+            .then(if (trackBorder != null) Modifier.border(trackBorder, RoundedCornerShape(100.dp)) else Modifier)
+            .clickable(role = Role.Switch, onClick = { onCheckedChange(!checked) }),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(start = thumbOffset)
+                .size(thumbSize)
+                .clip(CircleShape)
+                .background(Color.White),
+        )
+    }
+}
+
+/**
+ * iOS-styled status strip using an inset glass card.
+ */
+@Composable
+fun GlassStatusStrip(
+    text: String,
+    tone: Color = HandsTheme.colors.accent,
+    modifier: Modifier = Modifier,
+) {
+    GlassInsetCard(modifier = modifier) {
+        Text(text, style = HandsType.Body.copy(color = tone))
+    }
+}
+

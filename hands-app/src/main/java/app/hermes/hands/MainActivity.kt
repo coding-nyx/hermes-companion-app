@@ -55,10 +55,21 @@ import kotlinx.coroutines.withContext
 private const val SECURE_SETTINGS_GRANT_COMMAND =
     "adb shell pm grant app.hermes.hands android.permission.WRITE_SECURE_SETTINGS"
 
+@Composable
+private fun AccessibilitySwitch(enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().defaultMinSize(minHeight = 48.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text("Hands Accessibility", modifier = Modifier.weight(1f), style = HandsType.Body)
+        Switch(checked = enabled, onCheckedChange = onChange,
+            modifier = Modifier.testTag("hands.accessibility.toggle")
+                .semantics { contentDescription = "Hands Accessibility" })
+    }
+}
+
 fun buildAgentPairingInstruction(code: String, endpoints: List<String>, fingerprint: String): String {
     val endpoint = endpoints.firstOrNull() ?: "https://<PHONE_IP>:8766"
     return """
-Connect to my phone via Hermes Hands:
+Connect to my phone via Hands:
 - Endpoint: $endpoint
 - TLS Fingerprint (SHA-256): $fingerprint
 - Pairing Code: $code
@@ -114,7 +125,7 @@ class MainActivity : ComponentActivity() {
                         act {
                             if (!Settings.canDrawOverlays(this)) {
                                 overlaySettings()
-                                runtime.message("Allow Display over other apps, then return and allow a session.")
+                                runtime.message("Allow Display over other apps, then return to Hands.")
                             } else runtime.approve()
                         }
                     },
@@ -136,11 +147,12 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     onAccessibility = { permissions.request("accessibility") },
+                    onAccessibilityToggle = permissions::toggleAccessibility,
                     onOverlay = { permissions.request("overlay") },
                     onStartScreen = {
                         lifecycleScope.launch {
                             actSuspend {
-                                check(state.consent) { "Allow a session before opening the agent screen." }
+                                check(state.serving) { "Start the service before opening the agent screen." }
                                 withContext(Dispatchers.IO) { runtime.openPreview() }
                             }
                         }
@@ -197,11 +209,12 @@ class MainActivity : ComponentActivity() {
 
                 if (pairing.open || pairing.pending != null) {
                     Dialog(
-                        onDismissRequest = runtime.remotePairing::close,
+                        onDismissRequest = runtime::closePairingDialog,
                         properties = DialogProperties(
                             usePlatformDefaultWidth = false,
                             decorFitsSystemWindows = false,
                             securePolicy = SecureFlagPolicy.SecureOn,
+                            dismissOnClickOutside = false,
                         ),
                     ) {
                         Box(
@@ -211,7 +224,7 @@ class MainActivity : ComponentActivity() {
                                 .clickable(
                                     interactionSource = remember { MutableInteractionSource() },
                                     indication = null,
-                                    onClick = runtime.remotePairing::close,
+                                    onClick = runtime::closePairingDialog,
                                 )
                                 .padding(horizontal = 20.dp, vertical = 24.dp),
                             contentAlignment = Alignment.Center,
@@ -229,7 +242,7 @@ class MainActivity : ComponentActivity() {
                                     remote = remote,
                                     onApprove = runtime.remotePairing::approve,
                                     onDeny = runtime.remotePairing::deny,
-                                    onClose = runtime.remotePairing::close,
+                                    onClose = runtime::closePairingDialog,
                                     onShare = ::sharePrompt,
                                     onCopyPrompt = ::copyPrompt,
                                 )
@@ -319,7 +332,7 @@ class MainActivity : ComponentActivity() {
     private fun sharePrompt(text: String) {
         val sendIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "Hermes Hands Agent Connection")
+            putExtra(Intent.EXTRA_SUBJECT, "Hands Agent Connection")
             putExtra(Intent.EXTRA_TEXT, text)
         }
         startActivity(Intent.createChooser(sendIntent, "Share Agent Connection Instructions"))
@@ -382,6 +395,7 @@ fun HandsScreen(
     privacyActive: Boolean = false,
     onPrivateEntry: () -> Unit = {},
     initialTab: Int = 0,
+    onAccessibilityToggle: (Boolean) -> Unit = { onAccessibility() },
 ) {
     var tab by remember(initialTab) { mutableIntStateOf(initialTab) }
     var protectDraft by remember(state.protectedPackages) { mutableStateOf(state.protectedPackages.joinToString("\n")) }
@@ -420,14 +434,13 @@ fun HandsScreen(
                     }
                     ProtocolStatus(
                         "${if (state.armed) "Active controller" else "Control"}",
-                        if (state.armed) state.client else if (state.consent) "Allowed · waiting for a controller" else "Off"
+                        if (state.armed) state.client else if (state.serving) "Ready for a controller" else "Off"
                     )
                     Text(state.message, style = HandsType.Body, modifier = Modifier.testTag("hands.message"))
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (!state.serving) ActionButton("Start service", onStart, Modifier.testTag("hands.start"), ActionKind.PRIMARY)
-                        else if (!state.consent) ActionButton("Allow session", onAllow, Modifier.testTag("hands.allow"), ActionKind.PRIMARY)
-                        if (state.consent) ActionButton("Stop control", onDisarm, Modifier.testTag("hands.disarm"), ActionKind.DANGER)
-                        if (state.serving && !state.consent) ActionButton("Stop service", onStopService, kind = ActionKind.GHOST)
+                        if (state.armed) ActionButton("Stop control", onDisarm, Modifier.testTag("hands.disarm"), ActionKind.DANGER)
+                        if (state.serving) ActionButton("Stop service", onStopService, Modifier.testTag("hands.stop.service"), kind = ActionKind.GHOST)
                     }
                 }
 
@@ -443,7 +456,7 @@ fun HandsScreen(
                             if (state.displayId > 0) "Stop agent screen" else "Open agent screen",
                             if (state.displayId > 0) onDisarm else onStartScreen,
                             Modifier.testTag("hands.agent.open"),
-                            enabled = state.consent,
+                            enabled = state.serving,
                         )
                     }
                 }
@@ -456,10 +469,10 @@ fun HandsScreen(
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         ActionButton(if (engine.permissionGranted) "Connect Shizuku" else "Allow Shizuku", onShizuku, enabled = engine.running)
                         ActionButton(if (engine.installed) "Open Shizuku" else "Get Shizuku", onOpenShizuku)
-                        ActionButton("Accessibility settings", onAccessibility)
                         ActionButton("Floating screen permission", onOverlay)
                         ActionButton("Notifications", onNotifications)
                     }
+                    AccessibilitySwitch(permissions.firstOrNull { it.id == "accessibility" }?.granted == true, onAccessibilityToggle)
                 }
 
                 HandsSection("Protected apps") {
@@ -513,7 +526,7 @@ fun HandsScreen(
                             if (remote.autoStart)
                                 "LAN / Tailscale encrypted access starts automatically when the service is running. Start the service on the Control tab."
                             else
-                                "Turn this on to accept paired agents at this phone's network addresses. Pairing needs your approval; control still needs Allow session.",
+                                "Turn this on to accept paired agents at this phone's network addresses. Pairing needs your approval and control requires the service to be running.",
                             style = HandsType.Body,
                         )
                         ActionButton(
@@ -578,6 +591,8 @@ fun HandsScreen(
                                 }
                                 ActionButton("Refresh status", onRefreshPermissions,
                                     Modifier.testTag("hands.secure_settings.refresh"))
+                            } else if (access.id == "accessibility") {
+                                AccessibilitySwitch(access.granted, onAccessibilityToggle)
                             } else {
                                 ActionButton(
                                     if (access.granted) "Manage" else "Allow",

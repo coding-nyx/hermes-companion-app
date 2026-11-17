@@ -56,8 +56,8 @@ ERROR_HINTS = {
     "privacy_active": "private entry is shielding the phone; wait for the user to finish and release it locally, then ask them to arm Hands again; never bypass via screenshots, clipboard, files or adb",
     "invalid_secure_entry_result": "update the phone app and plugin together; private-entry responses must contain status metadata only",
     "invalid_agent_screen_result": "update Hands, Companion and plugin together; check mobile_agent_screen_status and do not resume on the primary display or repeat an action blindly",
-    "local_consent_required": "open standalone Hands, select the intended backend and Agent screen, then use Allow session locally before mobile_arm",
-    "need_local_consent": "open standalone Hands, select the intended backend and Agent screen, then use Allow session locally before mobile_arm",
+    "local_consent_required": "start the Hands service and select the intended backend and screen before mobile_arm",
+    "need_local_consent": "start the Hands service and select the intended backend and screen before mobile_arm",
     "agent_screen_unavailable": "with target=agent and an armed Hands session, call mobile_agent_screen_start; never fall back to the primary display",
     "target_mismatch": "the phone's selected target does not match this action; ask the user to select Agent screen in Hands and allow a new session, never switch to the primary display",
     "shizuku_unavailable": "start Shizuku and authorize standalone Hands locally; never use adb/shell input as a fallback",
@@ -1394,7 +1394,7 @@ def armed_hint(paired: bool, armed: bool) -> str | None:
             "Normal ARM may recover Hands Accessibility only for primary Accessibility, or Hybrid with Shizuku unavailable, "
             "when no OFF is saved; never for direct-only, agent-display or Shizuku-backed ARM. "
             "Separate agent-screen tools use Hands: inspect "
-            "mobile_agent_screen_status, require target=agent and prior local Allow session consent, "
+            "mobile_agent_screen_status, require target=agent and the Hands service running, "
             "then mobile_agent_screen_start and obtain a fresh snapshot. Shizuku must be authorized. "
             "Actions never fall back to the primary display; mobile_agent_screen_stop closes it and "
             "globally disarms Hands. Shizuku typing currently accepts printable ASCII only. "
@@ -1427,13 +1427,13 @@ def armed_hint(paired: bool, armed: bool) -> str | None:
         )
     return (
         "Hands is DISARMED or not freshly checked. Companion forwards to Hands with no local fallback. "
-        "Open Hands for local session consent; Access owns Android grants and Alerts pins notification sharing to one client. "
+        "Start the Hands service; Access owns Android grants and Alerts pins notification sharing to one client. "
         "Call mobile_status, then mobile_arm "
         "before snapshot/gestures or personal-data reads (including clipboard), and before reasoning "
         "about phone work so the screen stays awake. Screen readiness is screen_control_available "
         "(authorized Accessibility or Shizuku), with a11y_bound fallback for older protocols. "
         "mobile_keep_awake can separately hold an already-on screen awake "
         "without arming; it never authorizes phone control. For a separate agent display, check "
-        "mobile_agent_screen_status and ask the user to select Agent screen and Allow session in "
+        "mobile_agent_screen_status and ask the user to select Agent screen and start the service in "
         "standalone Hands before mobile_arm; never resume on the primary display."
     )

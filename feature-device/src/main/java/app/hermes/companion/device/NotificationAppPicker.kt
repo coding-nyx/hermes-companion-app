@@ -28,10 +28,10 @@ import app.hermes.companion.domain.NotificationStreamPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-internal data class NotificationApp(val packageName: String, val label: String, val icon: Bitmap? = null)
+data class NotificationApp(val packageName: String, val label: String, val icon: Bitmap? = null)
 
 /** Package visibility is scoped to launchable apps; no broad installed-package permission. */
-internal fun notificationApps(context: Context, selected: Set<String>): List<NotificationApp> {
+fun notificationApps(context: Context, selected: Set<String>): List<NotificationApp> {
     val pm = context.packageManager
     val launchable = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
         .map { it.activityInfo.applicationInfo }
@@ -47,7 +47,7 @@ internal fun notificationApps(context: Context, selected: Set<String>): List<Not
         .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
 }
 
-internal fun filterNotificationApps(apps: List<NotificationApp>, query: String): List<NotificationApp> =
+fun filterNotificationApps(apps: List<NotificationApp>, query: String): List<NotificationApp> =
     apps.filter { it.label.contains(query.trim(), ignoreCase = true) || it.packageName.contains(query.trim(), ignoreCase = true) }
 
 @Composable

@@ -15,6 +15,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import app.hermes.companion.device.DirectToolbox
 import app.hermes.companion.device.CompanionAccessibilityService
+import app.hermes.companion.device.AccessibilitySettingsToggle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -131,6 +132,36 @@ class HandsPermissionController(private val activity: ComponentActivity, private
         close(); refresh()
     }
     fun refresh() { mutable.value = MobilePermissions.states(activity) }
+    fun toggleAccessibility(enabled: Boolean) {
+        if (enabled && !CompanionAccessibilityService.canWriteSecureSettings(activity)) {
+            request("accessibility")
+            return
+        }
+        try {
+            if (enabled) {
+                val wasOff = CompanionAccessibilityService.explicitlyOff(activity)
+                CompanionAccessibilityService.setExplicitlyOff(activity, false)
+                val success = try { AccessibilitySettingsToggle.forContext(activity).setEnabled(true) }
+                    catch (failure: Exception) {
+                        CompanionAccessibilityService.setExplicitlyOff(activity, wasOff)
+                        throw failure
+                    }
+                if (!success) {
+                    CompanionAccessibilityService.setExplicitlyOff(activity, wasOff)
+                    runtime.message("Android could not enable Hands Accessibility. Check secure settings access.")
+                }
+            } else {
+                runtime.disarm()
+                CompanionAccessibilityService.setExplicitlyOff(activity, true)
+                if (!CompanionAccessibilityService.requestOff(activity)) {
+                    runtime.message("Accessibility is off for Hands; finish disabling it in Android settings.")
+                    request("accessibility")
+                }
+            }
+        } catch (failure: Exception) {
+            runtime.message(failure.message ?: "Could not change Hands Accessibility.")
+        } finally { refresh() }
+    }
     fun returned() { if (externalSettings) close(); refresh() }
     fun request(id: String) {
         if (preparing || scopeId != null) return
