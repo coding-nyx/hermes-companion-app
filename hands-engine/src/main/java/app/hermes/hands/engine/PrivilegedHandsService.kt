@@ -87,12 +87,11 @@ class PrivilegedHandsService @Keep constructor(context: Context) : IHandsService
         // OWN_CONTENT_ONLY prevents mirroring the operator's phone. DESTROY_CONTENT_ON_REMOVAL
         // prevents Android moving agent tasks to the operator display when the screen closes.
         // OWN_FOCUS + STEAL_TOP_FOCUS_DISABLED keep targeted input off the operator's focus.
-        // OWN_DISPLAY_GROUP (1 shl 11) + ALWAYS_UNLOCKED (1 shl 12) + CAN_SHOW_WITH_INSECURE_KEYGUARD (1 shl 5)
-        // allow the agent display to render and remain visible even while the physical device is
-        // locked or the primary display is off.
+        // OWN_DISPLAY_GROUP (1 shl 11) + ALWAYS_UNLOCKED (1 shl 12) allow the agent display
+        // to render and remain visible even while the physical device is locked or the primary display is off.
+        // NOTE: CAN_SHOW_WITH_INSECURE_KEYGUARD (1 shl 5) must NOT be combined with VIRTUAL_DISPLAY_FLAG_PUBLIC.
         val flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or
             DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or
-            (1 shl 5) or  // VIRTUAL_DISPLAY_FLAG_CAN_SHOW_WITH_INSECURE_KEYGUARD
             (1 shl 6) or  // VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH
             (1 shl 8) or  // VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL
             (1 shl 10) or // VIRTUAL_DISPLAY_FLAG_TRUSTED

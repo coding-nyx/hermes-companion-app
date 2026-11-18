@@ -629,9 +629,12 @@ class HandsRuntime(
             val notificationVersion = notifications.state.value.consentVersion
             val result = when {
                 action == "device.agent_screen.start" -> {
-                    check(state.value.target == "agent") { "target_mismatch" }
+                    check(state.value.target in setOf("agent", "auto")) { "target_mismatch" }
                     val width = args.optInt("width", 720); val height = args.optInt("height", 1280); val density = args.optInt("density", 240)
                     require(width in 320..1600 && height in 320..2400 && density in 120..480 && width.toLong() * height <= 2_560_000)
+                    if (shizuku.status.value.bound) {
+                        runCatching { privilegedSession = shizuku.beginSession() }
+                    }
                     val id = checkNotNull(screenHost) { "service_unavailable" }.start(width, height, density)
                     screenOpened(id)
                     ok(JSONObject().put("display_id", id).put("width", width).put("height", height).put("density", density)
@@ -732,7 +735,7 @@ class HandsRuntime(
             }
             if (shizuku.status.value.bound) {
                 runCatching {
-                    if (privilegedSession == 0L) privilegedSession = shizuku.beginSession()
+                    privilegedSession = shizuku.beginSession()
                     val width = args.optInt("width", 720)
                     val height = args.optInt("height", 1280)
                     val density = args.optInt("density", 240)
