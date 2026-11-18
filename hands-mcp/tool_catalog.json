@@ -1995,6 +1995,9 @@
             "type": "integer",
             "minimum": 5000,
             "maximum": 2147483647
+          },
+          "shizuku_connect": {
+            "type": "boolean"
           }
         },
         "required": [],
@@ -2056,6 +2059,21 @@
         "additionalProperties": false
       },
       "action": "device.keyguard.dismiss",
+      "passive": true
+    },
+    {
+      "name": "mobile_shizuku_connect",
+      "description": "Connect or re-bind Hands to Shizuku's privileged background service. Use when Shizuku is running and authorized but not connected, or when screen control is active and Shizuku disconnected. Allowed while disarmed or armed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "action": "device.shizuku.connect",
       "passive": true
     }
   ]

@@ -22,6 +22,7 @@ class SuperchargedToolsTest(unittest.TestCase):
             "device.shell.exec",
             "device.power.wake",
             "device.keyguard.dismiss",
+            "device.shizuku.connect",
         }
         for action in new_actions:
             self.assertIn(action, ALLOWLIST)
@@ -32,6 +33,7 @@ class SuperchargedToolsTest(unittest.TestCase):
             "device.gates.get",
             "device.power.wake",
             "device.keyguard.dismiss",
+            "device.shizuku.connect",
         }
         for action in passive_actions:
             self.assertIn(action, L0_PASSIVE)
@@ -54,6 +56,8 @@ class SuperchargedToolsTest(unittest.TestCase):
                     return {"screen_on": True}
                 if action == "device.keyguard.dismiss":
                     return {"dismissed": True, "locked": False}
+                if action == "device.shizuku.connect":
+                    return {"connected": True, "bound": True, "running": True}
                 return super().execute(action, arguments, **kwargs)
 
         device = RecordingDevice(armed=True)
@@ -90,6 +94,11 @@ class SuperchargedToolsTest(unittest.TestCase):
         res = json.loads(handlers["mobile_keyguard_dismiss"]({}))
         self.assertTrue(res["ok"])
         self.assertEqual(calls[-1][0], "device.keyguard.dismiss")
+
+        # 7. Shizuku Connect
+        res = json.loads(handlers["mobile_shizuku_connect"]({}))
+        self.assertTrue(res["ok"])
+        self.assertEqual(calls[-1][0], "device.shizuku.connect")
 
 
 if __name__ == "__main__":

@@ -1006,6 +1006,7 @@ GATE_SET = {
             },
             "stay_awake_plugged": {"type": "boolean", "description": "Keep phone awake while plugged into charger (via WRITE_SECURE_SETTINGS)."},
             "screen_off_timeout_ms": {"type": "integer", "minimum": 5000, "maximum": 2147483647, "description": "Set display sleep timeout in milliseconds."},
+            "shizuku_connect": {"type": "boolean", "description": "Connect or re-bind Hands to Shizuku if running and permitted."},
         },
     },
 }
@@ -1043,6 +1044,17 @@ KEYGUARD_DISMISS = {
         "properties": {
             "device": DEV,
             "pin": {"type": "string", "description": "Optional lockscreen PIN to enter via Shizuku if keyguard is PIN-locked."},
+        },
+    },
+}
+
+SHIZUKU_CONNECT = {
+    "name": "mobile_shizuku_connect",
+    "description": "Connect or re-bind Hands to Shizuku's privileged background service. Use when Shizuku is running and authorized but not connected, or when screen control is active and Shizuku disconnected. Allowed while disarmed or armed.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "device": DEV,
         },
     },
 }

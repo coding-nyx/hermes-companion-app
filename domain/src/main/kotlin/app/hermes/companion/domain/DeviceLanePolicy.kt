@@ -104,6 +104,7 @@ object DeviceLanePolicy {
         "device.shell.exec",
         "device.power.wake",
         "device.keyguard.dismiss",
+        "device.shizuku.connect",
     )
 
     /**
@@ -177,6 +178,7 @@ object DeviceLanePolicy {
         "device.shell.exec",
         "device.power.wake",
         "device.keyguard.dismiss",
+        "device.shizuku.connect",
     )
 
     /**
@@ -210,6 +212,7 @@ object DeviceLanePolicy {
         "device.gates.get",
         "device.power.wake",
         "device.keyguard.dismiss",
+        "device.shizuku.connect",
         // NOTE: calendar.list, location.last and apps.usage are reads but are deliberately NOT
         // passive — they are personal data, so they sit behind arming exactly like sms.list.
         // NOTE: sms.list, calls.log and contacts.search are reads but are deliberately NOT

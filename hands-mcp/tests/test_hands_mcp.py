@@ -491,7 +491,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(response["error"]["code"], -32002)
         self.initialize()
         tools = self.server.handle({"jsonrpc": "2.0", "id": "list", "method": "tools/list"})
-        self.assertEqual(len(tools["result"]["tools"]), 85)
+        self.assertEqual(len(tools["result"]["tools"]), 86)
 
     def test_protocol_errors_and_tool_execution_errors_are_distinct(self):
         self.initialize()

@@ -33,6 +33,9 @@ object HandsGates {
         root.put("accessibility_enabled", CompanionAccessibilityService.bound)
         root.put("accessibility_listed", CompanionAccessibilityService.listed(context) == true)
         root.put("shizuku_available", shizuku.running && shizuku.permissionGranted)
+        root.put("shizuku_running", shizuku.running)
+        root.put("shizuku_permission_granted", shizuku.permissionGranted)
+        root.put("shizuku_bound", shizuku.bound)
         root.put("secure_settings_available", CompanionAccessibilityService.canWriteSecureSettings(context))
         root.put("protected_packages", JSONArray(st.protectedPackages.sorted()))
 
@@ -72,7 +75,15 @@ object HandsGates {
             runtime.configure(target = target)
         }
 
-        // 3. Accessibility service toggle via WRITE_SECURE_SETTINGS or Shizuku
+        // 3. Shizuku connection
+        if (args.optBoolean("shizuku_connect", false)) {
+            val status = runtime.shizuku.status.value
+            if (!status.running) throw IllegalStateException("shizuku_not_running")
+            if (!status.permissionGranted) throw IllegalStateException("shizuku_permission_denied")
+            runtime.shizuku.connect(waitMs = 1500)
+        }
+
+        // 4. Accessibility service toggle via WRITE_SECURE_SETTINGS or Shizuku
         if (args.has("accessibility_enabled")) {
             val enabled = args.getBoolean("accessibility_enabled")
             val toggle = AccessibilitySettingsToggle.forContext(context)

@@ -61,6 +61,10 @@ class HandsTelemetryAndGatesTest {
         assertEquals("agent", gates.getString("target"))
         assertTrue(gates.has("effective_target"))
         assertTrue(gates.has("accessibility_enabled"))
+        assertTrue(gates.has("shizuku_available"))
+        assertTrue(gates.has("shizuku_running"))
+        assertTrue(gates.has("shizuku_permission_granted"))
+        assertTrue(gates.has("shizuku_bound"))
         assertTrue(gates.has("protected_packages"))
         assertTrue(gates.has("notification_stream"))
         assertTrue(gates.has("stay_awake_plugged"))
@@ -93,6 +97,7 @@ class HandsTelemetryAndGatesTest {
             "device.shell.exec",
             "device.power.wake",
             "device.keyguard.dismiss",
+            "device.shizuku.connect",
         )
         assertTrue(HandsRuntime.CAPABILITIES.containsAll(newActions))
     }

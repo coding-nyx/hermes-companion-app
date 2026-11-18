@@ -101,6 +101,7 @@ ALLOWLIST = frozenset(
         "device.shell.exec",
         "device.power.wake",
         "device.keyguard.dismiss",
+        "device.shizuku.connect",
     }
 )
 
@@ -173,6 +174,7 @@ L0_NO_A11Y = frozenset(
         "device.shell.exec",
         "device.power.wake",
         "device.keyguard.dismiss",
+        "device.shizuku.connect",
     }
 )
 
@@ -207,6 +209,7 @@ L0_PASSIVE = frozenset(
         "device.gates.get",
         "device.power.wake",
         "device.keyguard.dismiss",
+        "device.shizuku.connect",
     }
 )
 

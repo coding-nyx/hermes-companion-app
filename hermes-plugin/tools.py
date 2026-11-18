@@ -1133,6 +1133,10 @@ def make_handlers(broker: Broker, working_lease=None):
         del kwargs
         return _dispatch("device.keyguard.dismiss", params)
 
+    def mobile_shizuku_connect(params, **kwargs):
+        del kwargs
+        return _dispatch("device.shizuku.connect", params)
+
     # ---------- L0 voice out ----------
 
     def mobile_speak(params, **kwargs):
@@ -1403,6 +1407,7 @@ def make_handlers(broker: Broker, working_lease=None):
         "mobile_shell": mobile_shell,
         "mobile_power_wake": mobile_power_wake,
         "mobile_keyguard_dismiss": mobile_keyguard_dismiss,
+        "mobile_shizuku_connect": mobile_shizuku_connect,
     }
 
 

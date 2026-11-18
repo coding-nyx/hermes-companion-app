@@ -47,7 +47,10 @@ class ShizukuController(context: Context) : AutoCloseable {
             refresh()
         }
     }
-    private val received = Shizuku.OnBinderReceivedListener { refresh() }
+    private val received = Shizuku.OnBinderReceivedListener {
+        refresh()
+        autoConnectIfPermitted()
+    }
     private val dead = Shizuku.OnBinderDeadListener {
         service = null
         connecting = false
@@ -62,6 +65,13 @@ class ShizukuController(context: Context) : AutoCloseable {
         Shizuku.addBinderDeadListener(dead)
         Shizuku.addRequestPermissionResultListener(permission)
         refresh()
+        autoConnectIfPermitted()
+    }
+
+    fun autoConnectIfPermitted() {
+        if (mutableStatus.value.running && mutableStatus.value.permissionGranted && service?.asBinder()?.isBinderAlive != true && !connecting) {
+            runCatching { connect() }
+        }
     }
 
     fun refresh() {
@@ -88,16 +98,25 @@ class ShizukuController(context: Context) : AutoCloseable {
         if (status.value.permissionGranted) connect() else Shizuku.requestPermission(REQUEST_CODE)
     }
 
-    fun connect() {
+    fun connect(waitMs: Long = 0) {
         refresh()
+        check(status.value.running) { "shizuku_not_running" }
         check(status.value.permissionGranted) { "shizuku_permission_denied" }
         check(Shizuku.getVersion() >= 13) { "shizuku_version_unsupported" }
-        if (service != null || connecting) return
-        connecting = true
-        try { Shizuku.bindUserService(args, connection) } catch (error: RuntimeException) {
-            connecting = false
-            refresh()
-            throw error
+        if (service?.asBinder()?.isBinderAlive == true) return
+        if (!connecting) {
+            connecting = true
+            try { Shizuku.bindUserService(args, connection) } catch (error: RuntimeException) {
+                connecting = false
+                refresh()
+                throw error
+            }
+        }
+        if (waitMs > 0 && (service == null || service?.asBinder()?.isBinderAlive != true) && Looper.myLooper() != Looper.getMainLooper()) {
+            val deadline = System.currentTimeMillis() + waitMs
+            while ((service == null || service?.asBinder()?.isBinderAlive != true) && System.currentTimeMillis() < deadline) {
+                try { Thread.sleep(50) } catch (_: InterruptedException) { break }
+            }
         }
         refresh()
     }

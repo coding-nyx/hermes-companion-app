@@ -546,10 +546,15 @@ class HandsRuntime(
                 }
             }
             if (!args.optBoolean("direct_only", false) && screenReady()) directOnlyHolders.remove(acquired.id)
-            if (starting && shizuku.status.value.bound) {
-                val nextSession = shizuku.beginSession()
-                lease.require(owner, acquired.id)
-                privilegedSession = nextSession
+            if (starting) {
+                if (shizuku.status.value.let { it.running && it.permissionGranted && !it.bound }) {
+                    runCatching { shizuku.connect(waitMs = 1000) }
+                }
+                if (shizuku.status.value.bound) {
+                    val nextSession = shizuku.beginSession()
+                    lease.require(owner, acquired.id)
+                    privilegedSession = nextSession
+                }
             }
             activeClientId = client.id
             controllerLabel = client.label
@@ -724,6 +729,9 @@ class HandsRuntime(
         val protected = st.protectedPackages + context.packageName
         check(!DeviceLanePolicy.isProtected(targetPkg, protected)) { "protected_package" }
         if (privileged) {
+            if (!shizuku.status.value.bound && shizuku.status.value.running && shizuku.status.value.permissionGranted) {
+                runCatching { shizuku.connect(waitMs = 1000) }
+            }
             check(shizuku.status.value.bound) { "shizuku_unavailable" }
             if (privilegedSession == 0L) privilegedSession = shizuku.beginSession()
             val foreground = shizuku.foregroundPackage(display)
@@ -879,6 +887,20 @@ class HandsRuntime(
                     JSONObject().put("dismissed", !locked).put("locked", locked)
                 }
             }
+            "device.shizuku.connect" -> {
+                val status = shizuku.status.value
+                if (!status.installed) return error("shizuku_not_installed", "Shizuku is not installed on this device")
+                if (!status.running) return error("shizuku_not_running", "Shizuku server is not running. Start it using Wireless Debugging or adb")
+                if (!status.permissionGranted) return error("shizuku_permission_denied", "Hands is not authorized in Shizuku. Grant permission in Shizuku app")
+                shizuku.connect(waitMs = 1500)
+                val updated = shizuku.status.value
+                JSONObject()
+                    .put("connected", updated.bound)
+                    .put("bound", updated.bound)
+                    .put("running", updated.running)
+                    .put("permission_granted", updated.permissionGranted)
+                    .put("message", updated.message)
+            }
             "device.wait" -> { val ms = args.optLong("ms", 250); require(ms in 0..5000); Thread.sleep(ms); JSONObject().put("ms", ms) }
             else -> return error("unsupported_action", "This Hands version does not expose $action; no fallback was performed")
         }
@@ -938,13 +960,13 @@ class HandsRuntime(
         private val PASSIVE_ACTIONS = setOf("device.display.brightness.get", "device.device.info", "device.audio.volume.get",
             "device.media.sessions", "device.media.now_playing", "device.notifications.nls", "device.power.battery", "device.battery",
             "device.power.state", "device.power.thermal", "device.thermal",
-            "device.telemetry", "device.gates.get", "device.power.wake", "device.keyguard.dismiss")
+            "device.telemetry", "device.gates.get", "device.power.wake", "device.keyguard.dismiss", "device.shizuku.connect")
         val CAPABILITIES = SCREEN_ACTIONS + HandsDeviceTools.ACTIONS + HandsNotifications.ACTIONS + HandsSecureSettingsTools.ACTIONS + setOf("device.secure_entry", "device.permissions", "device.status", "device.arm", "device.arm.renew", "device.disarm",
             "device.agent_screen.start", "device.agent_screen.status", "device.agent_screen.stop", "device.device.info",
             "device.audio.volume.get", "device.audio.volume.set", "device.audio.ringer", "device.media.sessions",
             "device.media.now_playing", "device.media.control", "device.clipboard.get", "device.clipboard.set",
             "device.notifications.nls", "device.display.brightness.get", "device.display.brightness.set",
             "device.power.battery", "device.battery", "device.power.state", "device.power.thermal", "device.thermal", "device.wait", "device.display.keep_awake",
-            "device.telemetry", "device.gates.get", "device.gates.set", "device.shell.exec", "device.power.wake", "device.keyguard.dismiss")
+            "device.telemetry", "device.gates.get", "device.gates.set", "device.shell.exec", "device.power.wake", "device.keyguard.dismiss", "device.shizuku.connect")
     }
 }
