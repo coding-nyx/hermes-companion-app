@@ -218,9 +218,11 @@ class BrokerTests(unittest.TestCase):
     def test_intent_lane_and_reads_need_no_a11y(self):
         echo = lambda action, args: {"action": action}
         for action in (
-            "device.alarm.set", "device.timer.set", "device.media.play_search",
-            "device.calendar.add", "device.share", "device.settings.open",
-            "device.apps.uninstall", "device.calendar.list", "device.location.last",
+            "device.alarm.set", "device.alarm.dismiss", "device.alarm.show", "device.alarm.snooze",
+            "device.timer.set", "device.timer.dismiss", "device.timer.reset", "device.timer.show",
+            "device.media.play_search", "device.calendar.add", "device.share", "device.settings.open",
+            "device.apps.install", "device.apps.uninstall", "device.torch",
+            "device.calendar.list", "device.location.last",
             "device.battery", "device.power.state", "device.thermal",
             "device.apps.usage", "device.audio.dnd", "device.audio.dnd.set",
         ):
@@ -472,6 +474,29 @@ class BrokerTests(unittest.TestCase):
             with self.assertRaises(BrokerError) as ctx:
                 broker.dispatch("device.open_app", {"package": pkg})
             self.assertEqual(ctx.exception.code, "protected_package")
+
+
+    def test_new_clock_app_and_torch_tools(self):
+        recorded = []
+        def handler(action, args):
+            recorded.append((action, args))
+            return {"ok": True, "action": action, "args": args}
+        handlers = make_handlers(Broker(device=MockDevice(armed=True, handler=handler)))
+        tool_invocations = [
+            ("mobile_alarm_dismiss", {"search_mode": "all", "skip_ui": True}, "device.alarm.dismiss"),
+            ("mobile_alarm_show", {}, "device.alarm.show"),
+            ("mobile_alarm_snooze", {"duration_minutes": 10}, "device.alarm.snooze"),
+            ("mobile_timer_dismiss", {"skip_ui": True}, "device.timer.dismiss"),
+            ("mobile_timer_reset", {"skip_ui": True}, "device.timer.reset"),
+            ("mobile_timer_show", {}, "device.timer.show"),
+            ("mobile_app_install", {"path": "/sdcard/Download/app.apk"}, "device.apps.install"),
+            ("mobile_torch", {"state": "on"}, "device.torch"),
+        ]
+        for tool_name, args, expected_action in tool_invocations:
+            resp = json.loads(handlers[tool_name](args))
+            self.assertTrue(resp["ok"], (tool_name, resp))
+            self.assertEqual(resp["result"]["action"], expected_action)
+        self.assertEqual(len(recorded), len(tool_invocations))
 
 
 if __name__ == "__main__":

@@ -25,12 +25,30 @@
             <action android:name="android.intent.action.CALL" />
             <data android:scheme="tel" />
         </intent>
-        <!-- device.alarm.set / device.timer.set. -->
+        <!-- device.alarm.* / device.timer.* -->
         <intent>
             <action android:name="android.intent.action.SET_ALARM" />
         </intent>
         <intent>
+            <action android:name="android.intent.action.DISMISS_ALARM" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SHOW_ALARMS" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SNOOZE_ALARM" />
+        </intent>
+        <intent>
             <action android:name="android.intent.action.SET_TIMER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DISMISS_TIMER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.RESET_TIMER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SHOW_TIMERS" />
         </intent>
         <!-- device.media.play_search: start playback when no media session exists yet. -->
         <intent>
@@ -65,6 +83,15 @@
         <service android:name=".HandsHostService" android:exported="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-started authenticated phone automation and independent agent display" />
         </service>
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
         <service android:name="app.hermes.companion.device.HandsService" tools:node="remove" />
         <receiver android:name="app.hermes.companion.device.DisarmReceiver" tools:node="remove" />
     </application>

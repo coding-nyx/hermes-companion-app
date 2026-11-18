@@ -81,6 +81,17 @@ and pinned gateway/profile. Permissions granted to Companion do not grant them t
 | `mobile_power_wake` | wakes the display via wake lock and wakeup keyevent | yes | turns on screen if sleeping |
 | `mobile_keyguard_dismiss` `pin=…` | dismisses or unlocks keyguard / lockscreen | yes | dismisses swipe keyguard; enters PIN via Shizuku if provided |
 | `mobile_shizuku_connect` | connects or re-binds Hands to Shizuku background service | yes | ensures privileged backend is connected |
+| `mobile_torch` `state=on\|off\|toggle` | controls flashlight / torch via CameraManager | no (destructive) | genuine L0 tool, no permissions needed, works from background |
+| `mobile_alarm_set` `hour=…` `minute=…` `label=…` `skip_ui=true` | sets an alarm in the clock app | no (destructive) | install-time permission only |
+| `mobile_alarm_dismiss` `search_mode=time\|label\|next\|all` | dismisses scheduled or sounding alarms | no (destructive) | skip_ui=true asks clock app to act silently |
+| `mobile_alarm_show` | opens clock app directly to Alarms tab | no (destructive) | intent handoff |
+| `mobile_alarm_snooze` `duration_minutes=…` | snoozes sounding alarm | no (destructive) | intent handoff |
+| `mobile_timer_set` `seconds=…` `label=…` `skip_ui=true` | starts countdown timer | no (destructive) | skip_ui=true asks clock app to act silently |
+| `mobile_timer_dismiss` `skip_ui=true` | dismisses expired timer | no (destructive) | intent handoff |
+| `mobile_timer_reset` `skip_ui=true` | resets active or expired timer | no (destructive) | intent handoff |
+| `mobile_timer_show` | opens clock app directly to Timers tab | no (destructive) | intent handoff |
+| `mobile_app_install` `path=…` \| `url=…` \| `package=…` | installs an APK file or opens store fallback | no (destructive) | silent background install with auto-granted permissions via Shizuku (pm install -r -d -g); PackageInstaller intent fallback |
+| `mobile_app_uninstall` `package=…` `silent=true\|false` | uninstalls an app package | no (destructive) | silent background uninstall via Shizuku when silent=true; system dialog fallback |
 
 The L0 lane **does not require** Hands Accessibility to be bound and is **not** blocked by a protected foreground package (it's not scoped to the foreground). It still requires the phone to be paired (`mobile_status → ok` first) and the device lane to be live on the host the plugin is attached to.
 

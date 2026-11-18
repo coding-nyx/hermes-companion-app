@@ -289,6 +289,50 @@ object SystemToolbox {
         )
     }
 
+    // ---------- torch ----------
+
+    @Volatile
+    private var lastKnownTorchState: Boolean = false
+
+    /**
+     * Controls the phone's flashlight / torch directly via CameraManager.
+     * Genuine L0, requires no CAMERA permission, works in background.
+     */
+    fun torch(ctx: Context, state: String): Map<String, Any?> {
+        val cm = ctx.getSystemService(android.hardware.camera2.CameraManager::class.java)
+            ?: throw Unavailable("no camera service")
+        val cameraId = try {
+            cm.cameraIdList.firstOrNull { id ->
+                val chars = cm.getCameraCharacteristics(id)
+                chars.get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true &&
+                    chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+            } ?: cm.cameraIdList.firstOrNull { id ->
+                cm.getCameraCharacteristics(id).get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            } ?: throw Unavailable("no camera with flash available")
+        } catch (e: Exception) {
+            if (e is Unavailable) throw e
+            throw Unavailable("cannot query camera characteristics: ${e.message}")
+        }
+
+        val targetOn = when (state.trim().lowercase(Locale.ROOT)) {
+            "on", "true", "1" -> true
+            "off", "false", "0" -> false
+            "toggle" -> !lastKnownTorchState
+            else -> throw IllegalArgumentException("state must be on/off/toggle")
+        }
+        try {
+            cm.setTorchMode(cameraId, targetOn)
+            lastKnownTorchState = targetOn
+        } catch (e: Exception) {
+            throw Unavailable("failed to set torch mode: ${e.message}")
+        }
+        return mapOf(
+            "torch" to if (targetOn) "on" else "off",
+            "enabled" to targetOn,
+            "camera_id" to cameraId,
+        )
+    }
+
     private fun filterName(v: Int) = when (v) {
         NotificationManager.INTERRUPTION_FILTER_ALL -> "all"
         NotificationManager.INTERRUPTION_FILTER_PRIORITY -> "priority"

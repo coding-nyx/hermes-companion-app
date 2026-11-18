@@ -21,9 +21,11 @@ try:
         SMS_COMPOSE, SMS_LIST, SMS_SEND,
         SNAPSHOT, STATUS, SWIPE, TYPE, SECURE_ENTRY,
         VOICE_SPEAK, VOICE_STATUS, VOICE_STOP, WAIT,
-        ALARM_SET, APP_UNINSTALL, APP_USAGE, BATTERY, CALENDAR_ADD, CALENDAR_LIST,
+        ALARM_SET, ALARM_DISMISS, ALARM_SHOW, ALARM_SNOOZE,
+        APP_INSTALL, APP_UNINSTALL, APP_USAGE, BATTERY, CALENDAR_ADD, CALENDAR_LIST,
         DND_GET, DND_SET, LOCATION_LAST, MEDIA_PLAY_SEARCH, POWER_STATE, SETTINGS_OPEN,
-        SHARE, THERMAL, TIMER_SET,
+        SHARE, THERMAL,
+        TIMER_SET, TIMER_DISMISS, TIMER_RESET, TIMER_SHOW, TORCH,
         FILES_ACCESS, FILES_ENABLE, FILES, FILE_PULL, FILE_PUSH,
         ACCESSIBILITY_STATUS, ACCESSIBILITY_ENABLE, ACCESSIBILITY_DISABLE,
         ACCESSIBILITY_SERVICES, ACCESSIBILITY_SERVICE_SET, SECURE_SETTINGS, SECURE_SETTINGS_SET,
@@ -47,9 +49,11 @@ except ImportError:  # script/tests on sys.path
         SMS_COMPOSE, SMS_LIST, SMS_SEND,
         SNAPSHOT, STATUS, SWIPE, TYPE, SECURE_ENTRY,
         VOICE_SPEAK, VOICE_STATUS, VOICE_STOP, WAIT,
-        ALARM_SET, APP_UNINSTALL, APP_USAGE, BATTERY, CALENDAR_ADD, CALENDAR_LIST,
+        ALARM_SET, ALARM_DISMISS, ALARM_SHOW, ALARM_SNOOZE,
+        APP_INSTALL, APP_UNINSTALL, APP_USAGE, BATTERY, CALENDAR_ADD, CALENDAR_LIST,
         DND_GET, DND_SET, LOCATION_LAST, MEDIA_PLAY_SEARCH, POWER_STATE, SETTINGS_OPEN,
-        SHARE, THERMAL, TIMER_SET,
+        SHARE, THERMAL,
+        TIMER_SET, TIMER_DISMISS, TIMER_RESET, TIMER_SHOW, TORCH,
         FILES_ACCESS, FILES_ENABLE, FILES, FILE_PULL, FILE_PUSH,
         ACCESSIBILITY_STATUS, ACCESSIBILITY_ENABLE, ACCESSIBILITY_DISABLE,
         ACCESSIBILITY_SERVICES, ACCESSIBILITY_SERVICE_SET, SECURE_SETTINGS, SECURE_SETTINGS_SET,
@@ -187,6 +191,9 @@ def _prompt(_info=None) -> str:
         "paths remain blocked. Disarm/revocation interrupts file work; do not re-arm just to clean up a "
         "temporary upload reported on failure. "
         "Check mobile_power_state before a snapshot run: driving UI with the screen off does nothing. "
+        "mobile_torch controls the device flashlight. Use mobile_alarm_set/dismiss/show/snooze and "
+        "mobile_timer_set/dismiss/reset/show for clock actions. mobile_app_install installs APKs silently "
+        "via Shizuku or via PackageInstaller; mobile_app_uninstall uninstalls packages (silent with silent=true). "
         "mobile_settings_open is the honest answer when the platform will not let you change something. "
         "Intent tools can open the physical phone: pass allow_primary_handoff=true only for an explicitly requested user handoff, never to bypass isolation or approve permissions. "
         "To message or call someone: mobile_contacts_search for the number, then "
@@ -276,7 +283,10 @@ def register(ctx):
         # L0 voice out
         VOICE_SPEAK, VOICE_STOP, VOICE_STATUS,
         # L2 intent lane
-        ALARM_SET, TIMER_SET, MEDIA_PLAY_SEARCH, CALENDAR_ADD, SHARE, SETTINGS_OPEN, APP_UNINSTALL,
+        ALARM_SET, ALARM_DISMISS, ALARM_SHOW, ALARM_SNOOZE,
+        TIMER_SET, TIMER_DISMISS, TIMER_RESET, TIMER_SHOW,
+        MEDIA_PLAY_SEARCH, CALENDAR_ADD, SHARE, SETTINGS_OPEN,
+        APP_INSTALL, APP_UNINSTALL, TORCH,
         # L0 read surfaces
         CALENDAR_LIST, LOCATION_LAST, BATTERY, POWER_STATE, THERMAL, APP_USAGE, DND_GET, DND_SET,
         FILES_ACCESS, FILES_ENABLE, FILES, FILE_PULL, FILE_PUSH,

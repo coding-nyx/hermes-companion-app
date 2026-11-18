@@ -89,6 +89,33 @@ object IntentToolbox {
                     putExtra(AlarmClock.EXTRA_SKIP_UI, args.bool("skip_ui") ?: true)
                 }
             }
+            "device.alarm.dismiss" -> {
+                Intent(AlarmClock.ACTION_DISMISS_ALARM).apply {
+                    val searchMode = args.str("search_mode")?.lowercase()
+                    val hour = args.int("hour")
+                    val minute = args.int("minute")
+                    val label = args.str("label")
+                    when {
+                        searchMode == "all" -> putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_ALL)
+                        searchMode == "next" -> putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_NEXT)
+                        searchMode == "label" || (label != null && hour == null) -> {
+                            putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_LABEL)
+                            if (label != null) putExtra(AlarmClock.EXTRA_MESSAGE, label)
+                        }
+                        searchMode == "time" || hour != null -> {
+                            putExtra(AlarmClock.EXTRA_ALARM_SEARCH_MODE, AlarmClock.ALARM_SEARCH_MODE_TIME)
+                            if (hour != null) putExtra(AlarmClock.EXTRA_HOUR, hour.coerceIn(0, 23))
+                            if (minute != null) putExtra(AlarmClock.EXTRA_MINUTES, minute.coerceIn(0, 59))
+                        }
+                    }
+                    if (label != null && !hasExtra(AlarmClock.EXTRA_MESSAGE)) putExtra(AlarmClock.EXTRA_MESSAGE, label)
+                    putExtra(AlarmClock.EXTRA_SKIP_UI, args.bool("skip_ui") ?: true)
+                }
+            }
+            "device.alarm.show" -> Intent(AlarmClock.ACTION_SHOW_ALARMS)
+            "device.alarm.snooze" -> Intent(AlarmClock.ACTION_SNOOZE_ALARM).apply {
+                args.int("duration_minutes")?.let { putExtra(AlarmClock.EXTRA_ALARM_SNOOZE_DURATION, it) }
+            }
             "device.timer.set" -> {
                 val seconds = args.int("seconds") ?: throw IllegalArgumentException("seconds required")
                 if (seconds <= 0) throw IllegalArgumentException("seconds must be positive")
@@ -98,6 +125,13 @@ object IntentToolbox {
                     putExtra(AlarmClock.EXTRA_SKIP_UI, args.bool("skip_ui") ?: true)
                 }
             }
+            "device.timer.dismiss" -> Intent(AlarmClock.ACTION_DISMISS_TIMER).apply {
+                putExtra(AlarmClock.EXTRA_SKIP_UI, args.bool("skip_ui") ?: true)
+            }
+            "device.timer.reset" -> Intent("android.intent.action.RESET_TIMER").apply {
+                putExtra(AlarmClock.EXTRA_SKIP_UI, args.bool("skip_ui") ?: true)
+            }
+            "device.timer.show" -> Intent(AlarmClock.ACTION_SHOW_TIMERS)
             "device.media.play_search" -> {
                 // The gap the media tools had: transport control needs an existing session, so
                 // nothing could start playback from cold. This can.
@@ -140,6 +174,27 @@ object IntentToolbox {
                 val pkg = args.str("package") ?: throw IllegalArgumentException("package required")
                 Intent(Intent.ACTION_DELETE, Uri.parse("package:$pkg"))
             }
+            "device.apps.install" -> {
+                val path = args.str("path")
+                val pkg = args.str("package")
+                when {
+                    path != null -> {
+                        val file = java.io.File(path)
+                        if (!file.exists()) throw IllegalArgumentException("file does not exist at $path")
+                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                            ctx, "${ctx.packageName}.fileprovider", file
+                        )
+                        Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, "application/vnd.android.package-archive")
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                    }
+                    pkg != null -> {
+                        Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$pkg"))
+                    }
+                    else -> throw IllegalArgumentException("path to apk or package name required")
+                }
+            }
             else -> throw IllegalArgumentException("unknown handoff $action")
         }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -181,7 +236,10 @@ object IntentToolbox {
         "display" to android.provider.Settings.ACTION_DISPLAY_SETTINGS,
     )
 
-    private val SKIP_UI_ACTIONS = setOf("device.alarm.set", "device.timer.set")
+    private val SKIP_UI_ACTIONS = setOf(
+        "device.alarm.set", "device.alarm.dismiss",
+        "device.timer.set", "device.timer.dismiss", "device.timer.reset"
+    )
 
     /** Typed accessor over the coordinator's flat argument map. */
     class Args(private val get: (String) -> String?) {

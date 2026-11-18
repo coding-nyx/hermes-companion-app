@@ -66,6 +66,9 @@
     <!-- device.apps.uninstall — the user still confirms in the system dialog. -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
+    <!-- device.apps.install — user confirms in system package installer dialog if Shizuku not bound. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- device.calendar.list. device.calendar.add is an L2 intent and needs no permission, so
          WRITE_CALENDAR stays off. -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />

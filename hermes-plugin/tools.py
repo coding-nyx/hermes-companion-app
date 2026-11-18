@@ -1051,9 +1051,33 @@ def make_handlers(broker: Broker, working_lease=None):
         del kwargs
         return _dispatch("device.alarm.set", params, need=("hour", "minute",))
 
+    def mobile_alarm_dismiss(params, **kwargs):
+        del kwargs
+        return _dispatch("device.alarm.dismiss", params)
+
+    def mobile_alarm_show(params, **kwargs):
+        del kwargs
+        return _dispatch("device.alarm.show", params)
+
+    def mobile_alarm_snooze(params, **kwargs):
+        del kwargs
+        return _dispatch("device.alarm.snooze", params)
+
     def mobile_timer_set(params, **kwargs):
         del kwargs
         return _dispatch("device.timer.set", params, need=("seconds",))
+
+    def mobile_timer_dismiss(params, **kwargs):
+        del kwargs
+        return _dispatch("device.timer.dismiss", params)
+
+    def mobile_timer_reset(params, **kwargs):
+        del kwargs
+        return _dispatch("device.timer.reset", params)
+
+    def mobile_timer_show(params, **kwargs):
+        del kwargs
+        return _dispatch("device.timer.show", params)
 
     def mobile_media_play_search(params, **kwargs):
         del kwargs
@@ -1071,9 +1095,17 @@ def make_handlers(broker: Broker, working_lease=None):
         del kwargs
         return _dispatch("device.settings.open", params, need=("page",))
 
+    def mobile_app_install(params, **kwargs):
+        del kwargs
+        return _dispatch("device.apps.install", params)
+
     def mobile_app_uninstall(params, **kwargs):
         del kwargs
         return _dispatch("device.apps.uninstall", params, need=("package",))
+
+    def mobile_torch(params, **kwargs):
+        del kwargs
+        return _dispatch("device.torch", params)
 
     def mobile_calendar_list(params, **kwargs):
         del kwargs
@@ -1387,12 +1419,20 @@ def make_handlers(broker: Broker, working_lease=None):
         "mobile_speak_stop": mobile_speak_stop,
         "mobile_speak_status": mobile_speak_status,
         "mobile_alarm_set": mobile_alarm_set,
+        "mobile_alarm_dismiss": mobile_alarm_dismiss,
+        "mobile_alarm_show": mobile_alarm_show,
+        "mobile_alarm_snooze": mobile_alarm_snooze,
         "mobile_timer_set": mobile_timer_set,
+        "mobile_timer_dismiss": mobile_timer_dismiss,
+        "mobile_timer_reset": mobile_timer_reset,
+        "mobile_timer_show": mobile_timer_show,
         "mobile_media_play_search": mobile_media_play_search,
         "mobile_calendar_add": mobile_calendar_add,
         "mobile_share": mobile_share,
         "mobile_settings_open": mobile_settings_open,
+        "mobile_app_install": mobile_app_install,
         "mobile_app_uninstall": mobile_app_uninstall,
+        "mobile_torch": mobile_torch,
         "mobile_calendar_list": mobile_calendar_list,
         "mobile_location_last": mobile_location_last,
         "mobile_battery": mobile_battery,

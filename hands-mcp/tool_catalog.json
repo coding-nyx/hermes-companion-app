@@ -1341,6 +1341,89 @@
       "action": "device.alarm.set"
     },
     {
+      "name": "mobile_alarm_dismiss",
+      "description": "Dismiss or cancel a scheduled or sounding alarm on the phone's clock app via AlarmClock.ACTION_DISMISS_ALARM. skip_ui (default true) asks the clock app to act silently. Search mode can target by label, time (hour+minute), next upcoming, or all alarms. Requires ARMED.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "search_mode": {
+            "type": "string",
+            "enum": [
+              "time",
+              "label",
+              "next",
+              "all"
+            ],
+            "description": "How to search for the alarm to dismiss: 'time' (hour+minute), 'label' (matching label string), 'next' (next upcoming alarm), or 'all' (all alarms)."
+          },
+          "hour": {
+            "type": "integer",
+            "description": "0-23, phone local time (for search_mode=time).",
+            "minimum": 0,
+            "maximum": 23
+          },
+          "minute": {
+            "type": "integer",
+            "description": "0-59 (for search_mode=time).",
+            "minimum": 0,
+            "maximum": 59
+          },
+          "label": {
+            "type": "string",
+            "description": "Alarm label to match (for search_mode=label)."
+          },
+          "skip_ui": {
+            "type": "boolean",
+            "description": "Ask the clock app not to open. Default true."
+          },
+          "allow_primary_handoff": {
+            "type": "boolean",
+            "default": false,
+            "description": "Explicitly permit this handoff to open the user's primary phone display when target=agent."
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": "device.alarm.dismiss"
+    },
+    {
+      "name": "mobile_alarm_show",
+      "description": "Open the clock app directly to the Alarms tab via AlarmClock.ACTION_SHOW_ALARMS. Requires ARMED.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "allow_primary_handoff": {
+            "type": "boolean",
+            "default": false,
+            "description": "Explicitly permit this handoff to open the user's primary phone display when target=agent."
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": "device.alarm.show"
+    },
+    {
+      "name": "mobile_alarm_snooze",
+      "description": "Snooze a currently sounding alarm on the clock app via AlarmClock.ACTION_SNOOZE_ALARM. Requires ARMED.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "duration_minutes": {
+            "type": "integer",
+            "description": "Snooze duration in minutes.",
+            "minimum": 1
+          },
+          "allow_primary_handoff": {
+            "type": "boolean",
+            "default": false,
+            "description": "Explicitly permit this handoff to open the user's primary phone display when target=agent."
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": "device.alarm.snooze"
+    },
+    {
       "name": "mobile_timer_set",
       "description": "Start a countdown timer on the phone's clock app. Same skip_ui caveat as mobile_alarm_set. Requires ARMED. When target=agent, this primary-screen handoff requires explicit allow_primary_handoff=true; otherwise it is refused before launch.",
       "inputSchema": {
@@ -1372,6 +1455,62 @@
         "additionalProperties": false
       },
       "action": "device.timer.set"
+    },
+    {
+      "name": "mobile_timer_dismiss",
+      "description": "Dismiss an expired countdown timer on the clock app via AlarmClock.ACTION_DISMISS_TIMER. Requires ARMED.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "skip_ui": {
+            "type": "boolean",
+            "description": "Ask the clock app not to open. Default true."
+          },
+          "allow_primary_handoff": {
+            "type": "boolean",
+            "default": false,
+            "description": "Explicitly permit this handoff to open the user's primary phone display when target=agent."
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": "device.timer.dismiss"
+    },
+    {
+      "name": "mobile_timer_reset",
+      "description": "Reset an active or expired countdown timer on the clock app. Requires ARMED.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "skip_ui": {
+            "type": "boolean",
+            "description": "Ask the clock app not to open. Default true."
+          },
+          "allow_primary_handoff": {
+            "type": "boolean",
+            "default": false,
+            "description": "Explicitly permit this handoff to open the user's primary phone display when target=agent."
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": "device.timer.reset"
+    },
+    {
+      "name": "mobile_timer_show",
+      "description": "Open the clock app directly to the Timers tab via AlarmClock.ACTION_SHOW_TIMERS. Requires ARMED.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "allow_primary_handoff": {
+            "type": "boolean",
+            "default": false,
+            "description": "Explicitly permit this handoff to open the user's primary phone display when target=agent."
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": "device.timer.show"
     },
     {
       "name": "mobile_media_play_search",
@@ -1496,6 +1635,11 @@
             "type": "string",
             "description": "Package name from mobile_apps."
           },
+          "silent": {
+            "type": "boolean",
+            "default": false,
+            "description": "Attempt silent background uninstall via pm uninstall when Shizuku is connected."
+          },
           "allow_primary_handoff": {
             "type": "boolean",
             "default": false,
@@ -1508,6 +1652,49 @@
         "additionalProperties": false
       },
       "action": "device.apps.uninstall"
+    },
+    {
+      "name": "mobile_app_install",
+      "description": "Install an Android application (.apk). When Shizuku is connected, performs a silent background install with runtime permissions auto-granted (pm install -r -d -g) with zero user prompts. When Shizuku is unavailable, launches the system PackageInstaller sheet (or Play Store for package ids). Requires ARMED.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Local file path to the APK on device (e.g. /sdcard/Download/app.apk)."
+          },
+          "url": {
+            "type": "string",
+            "description": "HTTP/HTTPS download URL for the APK. Hands will download and install it."
+          },
+          "package": {
+            "type": "string",
+            "description": "Package name to open in Google Play Store / Galaxy Store as a fallback."
+          },
+          "grant_permissions": {
+            "type": "boolean",
+            "default": true,
+            "description": "Auto-grant all runtime permissions at install time (pm install -g). Shizuku only."
+          },
+          "allow_downgrade": {
+            "type": "boolean",
+            "default": true,
+            "description": "Allow version downgrade (pm install -d). Shizuku only."
+          },
+          "reinstall": {
+            "type": "boolean",
+            "default": true,
+            "description": "Keep existing app data when reinstalling/updating (pm install -r). Shizuku only."
+          },
+          "allow_primary_handoff": {
+            "type": "boolean",
+            "default": false,
+            "description": "Explicitly permit PackageInstaller to open the user's primary phone display when target=agent."
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": "device.apps.install"
     },
     {
       "name": "mobile_calendar_list",
@@ -2075,6 +2262,27 @@
       },
       "action": "device.shizuku.connect",
       "passive": true
+    },
+    {
+      "name": "mobile_torch",
+      "description": "Toggle or set the device flashlight / torch via CameraManager. Genuine L0 tool, no permission required, works from the background. Requires ARMED.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "on",
+              "off",
+              "toggle"
+            ],
+            "default": "toggle",
+            "description": "Target torch state: 'on', 'off', or 'toggle' (default)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": "device.torch"
     }
   ]
 }

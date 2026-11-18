@@ -81,12 +81,20 @@ provides_tools:
   - mobile_speak_stop
   - mobile_speak_status
   - mobile_alarm_set
+  - mobile_alarm_dismiss
+  - mobile_alarm_show
+  - mobile_alarm_snooze
   - mobile_timer_set
+  - mobile_timer_dismiss
+  - mobile_timer_reset
+  - mobile_timer_show
   - mobile_media_play_search
   - mobile_calendar_add
   - mobile_share
   - mobile_settings_open
+  - mobile_app_install
   - mobile_app_uninstall
+  - mobile_torch
   - mobile_calendar_list
   - mobile_location_last
   - mobile_battery
@@ -95,3 +103,10 @@ provides_tools:
   - mobile_app_usage
   - mobile_dnd
   - mobile_dnd_set
+  - mobile_telemetry
+  - mobile_gate_get
+  - mobile_gate_set
+  - mobile_shell
+  - mobile_power_wake
+  - mobile_keyguard_dismiss
+  - mobile_shizuku_connect

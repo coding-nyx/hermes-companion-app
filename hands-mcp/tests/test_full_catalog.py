@@ -26,8 +26,8 @@ class FullCatalogTests(unittest.TestCase):
         self.phone.requests.clear()
 
     def test_discovery_covers_all_phone_families_without_host_or_gateway_tools(self):
-        self.assertEqual(len(hands.TOOLS), 86)
-        expected = '''status devices snapshot click type secure_entry press swipe scroll open_app apps wait arm keep_awake brightness_get brightness_set disarm agent_screen_start agent_screen_status agent_screen_stop accessibility_status accessibility_enable accessibility_disable accessibility_services accessibility_service_set secure_settings secure_settings_set screenshot notifications notifications_ack notifications_clear audio_volume_get audio_volume_set audio_ringer media_sessions media_now_playing media_control clipboard_get clipboard_set device_info notifications_nls notifications_nls_enable notifications_stream notifications_stream_set notification_actions notification_action notification_reply notification_dismiss notification_snooze sms_list sms_send sms_compose calls_log calls_dial calls_place contacts_search speak speak_stop speak_status alarm_set timer_set media_play_search calendar_add share settings_open app_uninstall calendar_list location_last battery power_state thermal app_usage dnd dnd_set files_access files_enable files file_pull file_push telemetry gate_get gate_set shell power_wake keyguard_dismiss shizuku_connect'''.split()
+        self.assertEqual(len(hands.TOOLS), 94)
+        expected = '''status devices snapshot click type secure_entry press swipe scroll open_app apps wait arm keep_awake brightness_get brightness_set disarm agent_screen_start agent_screen_status agent_screen_stop accessibility_status accessibility_enable accessibility_disable accessibility_services accessibility_service_set secure_settings secure_settings_set screenshot notifications notifications_ack notifications_clear audio_volume_get audio_volume_set audio_ringer media_sessions media_now_playing media_control clipboard_get clipboard_set device_info notifications_nls notifications_nls_enable notifications_stream notifications_stream_set notification_actions notification_action notification_reply notification_dismiss notification_snooze sms_list sms_send sms_compose calls_log calls_dial calls_place contacts_search speak speak_stop speak_status alarm_set alarm_dismiss alarm_show alarm_snooze timer_set timer_dismiss timer_reset timer_show media_play_search calendar_add share settings_open app_uninstall app_install calendar_list location_last battery power_state thermal app_usage dnd dnd_set files_access files_enable files file_pull file_push telemetry gate_get gate_set shell power_wake keyguard_dismiss shizuku_connect torch'''.split()
         self.assertEqual(set(hands.TOOLS_BY_NAME), {'mobile_' + name for name in expected})
         for excluded in ('mobile_select_device', 'mobile_notifications_inject', 'mobile_notification_policy',
                          'mobile_notification_policy_set', 'mobile_command'):
@@ -61,10 +61,18 @@ class FullCatalogTests(unittest.TestCase):
             ('mobile_clipboard_set', 'device.clipboard.set', {'text': 'Synthetic clipboard'}),
             ('mobile_speak', 'device.voice.speak', {'text': 'Synthetic speech', 'rate': .75, 'pitch': 1.25}),
             ('mobile_alarm_set', 'device.alarm.set', {'hour': 0, 'minute': 0, 'skip_ui': False}),
+            ('mobile_alarm_dismiss', 'device.alarm.dismiss', {'search_mode': 'all', 'skip_ui': True}),
+            ('mobile_alarm_show', 'device.alarm.show', {}),
+            ('mobile_alarm_snooze', 'device.alarm.snooze', {'duration_minutes': 10}),
             ('mobile_timer_set', 'device.timer.set', {'seconds': 10}),
+            ('mobile_timer_dismiss', 'device.timer.dismiss', {'skip_ui': True}),
+            ('mobile_timer_reset', 'device.timer.reset', {'skip_ui': True}),
+            ('mobile_timer_show', 'device.timer.show', {}),
             ('mobile_share', 'device.share', {'text': 'Synthetic share', 'subject': 'Fixture'}),
             ('mobile_settings_open', 'device.settings.open', {'page': 'accessibility'}),
             ('mobile_app_uninstall', 'device.apps.uninstall', {'package': 'app.synthetic'}),
+            ('mobile_app_install', 'device.apps.install', {'path': '/sdcard/Download/app.apk'}),
+            ('mobile_torch', 'device.torch', {'state': 'toggle'}),
             ('mobile_files_enable', 'device.files.enable', {}),
             ('mobile_accessibility_enable', 'device.accessibility.enable', {}),
         ]

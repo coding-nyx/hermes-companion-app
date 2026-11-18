@@ -648,6 +648,21 @@ class HandsRuntime(
                     require(cmd.isNotBlank()) { "bad_args" }
                     shizuku.execute("device.shell.exec", args, 0)
                 }
+                action == "device.apps.install" -> {
+                    if (shizuku.status.value.bound) {
+                        shizuku.execute("device.apps.install", args, 0)
+                    } else {
+                        checkNotNull(deviceTools.execute(action, args) { executionPermit() })
+                    }
+                }
+                action == "device.apps.uninstall" -> {
+                    val silent = args.optBoolean("silent", false)
+                    if (silent && shizuku.status.value.bound) {
+                        shizuku.execute("device.apps.uninstall", args, 0)
+                    } else {
+                        checkNotNull(deviceTools.execute(action, args) { executionPermit() })
+                    }
+                }
                 action == "device.secure_entry" -> ok(secureEntry.command(owner, args) { executionPermit(allowPrivate = true) })
                 action in HandsNotifications.ACTIONS -> checkNotNull(notifications.command(client.id, action, args) { executionPermit() })
                 action in HandsSecureSettingsTools.ACTIONS -> checkNotNull(secureSettingsTools.execute(action, args) { executionPermit() })

@@ -51,7 +51,7 @@ class HandsDeviceToolsTest {
         checkNotNull(tools().execute(action, args, permit))
 
     @Test fun ownsExactlyTheMigratedActionsAndPersonalReadsAreNotMetadata() {
-        assertEquals(29, HandsDeviceTools.ACTIONS.size)
+        assertEquals(37, HandsDeviceTools.ACTIONS.size)
         assertEquals(setOf("device.files.access", "device.voice.status", "device.audio.dnd", "device.accessibility.status"), HandsDeviceTools.META_ACTIONS)
         listOf("device.sms.list", "device.calls.log", "device.contacts.search", "device.calendar.list", "device.location.last", "device.apps.usage",
             "device.files", "device.files.enable", "device.sms.send", "device.calls.place").forEach {
@@ -119,7 +119,7 @@ class HandsDeviceToolsTest {
     }
 
     @Test fun filesProtectOwnAppAndCustomPackagesAndPreserveTransactionalHashes() {
-        val own = File(temp.root, "Android/media/${app.packageName}/private").apply { parentFile.mkdirs(); writeText("keep") }
+        val own = File(temp.root, "Android/media/${app.packageName}/private").apply { parentFile?.mkdirs(); writeText("keep") }
         val rejected = execute("device.files", JSONObject().put("action", "read").put("path", own.path))
         assertEquals("protected_package", rejected.getJSONObject("error").getString("code"))
         val write = execute("device.files", JSONObject().put("action", "write").put("path", "note").put("content", "fixture नमस्ते"))

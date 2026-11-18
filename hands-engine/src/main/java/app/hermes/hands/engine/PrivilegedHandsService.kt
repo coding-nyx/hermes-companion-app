@@ -20,6 +20,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.annotation.Keep
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -112,12 +113,20 @@ class PrivilegedHandsService @Keep constructor(context: Context) : IHandsService
                 }
             } }
         }
-        val display = displays.createVirtualDisplay("Hands agent", width, height, densityDpi,
-            surface, flags, stopped, Handler(callbacks.looper))
-            ?: throw Failure("agent_screen_failed", "Android did not create the agent display")
+        val display = try {
+            displays.createVirtualDisplay("Hands agent", width, height, densityDpi,
+                surface, flags, stopped, Handler(callbacks.looper))
+        } catch (t: Throwable) {
+            android.util.Log.e("PrivilegedHands", "createVirtualDisplay failed with flags=0x${flags.toString(16)}", t)
+            throw Failure("agent_screen_failed", "createVirtualDisplay failed: ${t.message}")
+        } ?: run {
+            android.util.Log.e("PrivilegedHands", "createVirtualDisplay returned null")
+            throw Failure("agent_screen_failed", "Android did not create the agent display")
+        }
         try { sessions.require(epoch) } catch (error: Exception) { display.release(); surface.release(); throw error }
         val requiredDisplayFlags = (1 shl 11) or (1 shl 12)
         if (display.display.displayId == 0 || display.display.flags and requiredDisplayFlags != requiredDisplayFlags) {
+            android.util.Log.e("PrivilegedHands", "Flags mismatch: displayId=${display.display.displayId}, flags=0x${Integer.toHexString(display.display.flags)}, required=0x${Integer.toHexString(requiredDisplayFlags)}")
             display.release()
             throw Failure("focus_isolation_unavailable", "This Android build did not preserve independent agent focus")
         }
@@ -304,13 +313,78 @@ class PrivilegedHandsService @Keep constructor(context: Context) : IHandsService
             if (arguments.length > 32_768) throw Failure("invalid_arguments", "Arguments exceed the command limit")
             val args = JSONObject(arguments)
             val epoch = args.optLong("_hands_session", -1)
-            val systemActions = setOf("device.shell.exec", "device.power.wake", "device.keyguard.dismiss")
+            val systemActions = setOf("device.shell.exec", "device.power.wake", "device.keyguard.dismiss", "device.apps.install", "device.apps.uninstall")
             if (action !in systemActions) {
                 sessions.require(epoch)
                 commandEpoch = epoch
                 target(displayId)
             }
             val result = when (action) {
+                "device.apps.install" -> {
+                    val rawPath = args.optString("path")
+                    val url = args.optString("url")
+                    if (rawPath.isBlank() && url.isBlank()) {
+                        throw Failure("invalid_arguments", "Supply either path or url to the APK")
+                    }
+                    var tempFile: File? = null
+                    val apkFile = if (url.isNotBlank()) {
+                        val temp = File("/data/local/tmp", "install_${System.currentTimeMillis()}.apk")
+                        tempFile = temp
+                        downloadUrlToFile(url, temp)
+                        temp
+                    } else {
+                        File(rawPath)
+                    }
+                    if (!apkFile.exists() || !apkFile.isFile) {
+                        tempFile?.delete()
+                        throw Failure("file_not_found", "APK file does not exist at ${apkFile.absolutePath}")
+                    }
+                    val grant = args.optBoolean("grant_permissions", true)
+                    val downgrade = args.optBoolean("allow_downgrade", true)
+                    val reinstall = args.optBoolean("reinstall", true)
+                    val cmd = buildList {
+                        add("/system/bin/pm")
+                        add("install")
+                        if (reinstall) add("-r")
+                        if (downgrade) add("-d")
+                        if (grant) add("-g")
+                        add(apkFile.absolutePath)
+                    }
+                    try {
+                        val output = command(cmd)
+                        if (!output.contains("Success")) {
+                            throw Failure("install_failed", "Installation failed: ${output.trim()}")
+                        }
+                        val archiveInfo = shellContext.packageManager.getPackageArchiveInfo(apkFile.absolutePath, 0)
+                        val pkg = archiveInfo?.packageName.orEmpty()
+                        val ver = archiveInfo?.versionName.orEmpty()
+                        val code = archiveInfo?.let { androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(it) } ?: 0L
+                        JSONObject()
+                            .put("installed", true)
+                            .put("package", pkg)
+                            .put("version_name", ver)
+                            .put("version_code", code)
+                            .put("output", output.trim())
+                    } finally {
+                        tempFile?.delete()
+                    }
+                }
+                "device.apps.uninstall" -> {
+                    val pkg = args.optString("package")
+                    if (pkg.isBlank()) throw Failure("invalid_arguments", "package is required")
+                    val keepData = args.optBoolean("keep_data", false)
+                    val cmd = buildList {
+                        add("/system/bin/pm")
+                        add("uninstall")
+                        if (keepData) add("-k")
+                        add(pkg)
+                    }
+                    val output = command(cmd)
+                    if (!output.contains("Success")) {
+                        throw Failure("uninstall_failed", "Uninstall failed: ${output.trim()}")
+                    }
+                    JSONObject().put("uninstalled", true).put("package", pkg).put("silent", true)
+                }
                 "device.shell.exec" -> {
                     val cmd = args.optString("command")
                     if (cmd.isBlank()) throw Failure("invalid_arguments", "Command is required")
@@ -803,6 +877,24 @@ class PrivilegedHandsService @Keep constructor(context: Context) : IHandsService
             process.destroy()
             if (activeProcess === process) activeProcess = null
             readers.shutdownNow()
+        }
+    }
+
+    private fun downloadUrlToFile(urlStr: String, dest: File) {
+        val url = java.net.URL(urlStr)
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.connectTimeout = 15_000
+        conn.readTimeout = 60_000
+        conn.instanceFollowRedirects = true
+        conn.requestMethod = "GET"
+        conn.connect()
+        if (conn.responseCode !in 200..299) {
+            throw Failure("download_failed", "HTTP ${conn.responseCode} while downloading APK from $urlStr")
+        }
+        conn.inputStream.use { input ->
+            dest.outputStream().use { output ->
+                input.copyTo(output)
+            }
         }
     }
 

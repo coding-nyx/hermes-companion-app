@@ -69,8 +69,10 @@ class HandsDeviceTools(
                     requirePermit()
                     JSONObject(IntentToolbox.launch(context, action, address, args.string("body").orEmpty()))
                 }
-                "device.alarm.set", "device.timer.set", "device.media.play_search", "device.calendar.add",
-                "device.share", "device.settings.open", "device.apps.uninstall" -> {
+                "device.alarm.set", "device.alarm.dismiss", "device.alarm.show", "device.alarm.snooze",
+                "device.timer.set", "device.timer.dismiss", "device.timer.reset", "device.timer.show",
+                "device.media.play_search", "device.calendar.add",
+                "device.share", "device.settings.open", "device.apps.uninstall", "device.apps.install" -> {
                     if (action == "device.apps.uninstall") {
                         val pkg = args.string("package") ?: throw Failure("missing_args", "package required")
                         if (DeviceLanePolicy.normalizePackage(pkg)?.endsWith(".*") != false)
@@ -102,6 +104,11 @@ class HandsDeviceTools(
                     val mode = args.string("mode") ?: throw Failure("missing_args", "mode required")
                     requirePermit()
                     JSONObject(SystemToolbox.dndSet(context, mode))
+                }
+                "device.torch" -> {
+                    val state = args.string("state") ?: "toggle"
+                    requirePermit()
+                    JSONObject(SystemToolbox.torch(context, state))
                 }
                 "device.voice.speak" -> {
                     val text = args.string("text").orEmpty()
@@ -215,9 +222,17 @@ class HandsDeviceTools(
 
     companion object {
         private val TELEPHONY = setOf("device.sms.list", "device.sms.send", "device.calls.log", "device.contacts.search")
-        private val HANDOFFS = setOf("device.sms.compose", "device.calls.dial", "device.calls.place", "device.alarm.set", "device.timer.set",
-            "device.media.play_search", "device.calendar.add", "device.share", "device.settings.open", "device.apps.uninstall")
-        private val SYSTEM = setOf("device.calendar.list", "device.location.last", "device.apps.usage", "device.audio.dnd", "device.audio.dnd.set")
+        private val HANDOFFS = setOf(
+            "device.sms.compose", "device.calls.dial", "device.calls.place",
+            "device.alarm.set", "device.alarm.dismiss", "device.alarm.show", "device.alarm.snooze",
+            "device.timer.set", "device.timer.dismiss", "device.timer.reset", "device.timer.show",
+            "device.media.play_search", "device.calendar.add", "device.share", "device.settings.open",
+            "device.apps.uninstall", "device.apps.install"
+        )
+        private val SYSTEM = setOf(
+            "device.calendar.list", "device.location.last", "device.apps.usage",
+            "device.audio.dnd", "device.audio.dnd.set", "device.torch"
+        )
         val ACTIONS = TELEPHONY + HANDOFFS + SYSTEM + setOf("device.noop", "device.files.access", "device.files.enable", "device.files",
             "device.voice.speak", "device.voice.stop", "device.voice.status", "device.accessibility.status", "device.accessibility.enable", "device.accessibility.disable")
         val META_ACTIONS = setOf("device.files.access", "device.voice.status", "device.audio.dnd", "device.accessibility.status")
