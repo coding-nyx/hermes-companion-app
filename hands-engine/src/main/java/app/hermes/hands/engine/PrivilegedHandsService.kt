@@ -487,7 +487,32 @@ class PrivilegedHandsService @Keep constructor(context: Context) : IHandsService
                 .put("nodes", nodes)
                 .also { if (displayId != 0) it.put("safe_area", emptyAgentSafeArea()) }
         }
-    } ?: throw Failure("observation_unavailable", "The selected display has no readable app window")
+    } ?: run {
+        if (displayId != 0) {
+            val (width, height) = size(displayId)
+            val id = UUID.randomUUID().toString()
+            val idleNode = JSONObject().put("ref", "e1")
+                .put("role", "AgentScreen")
+                .put("text", "Agent display is ready and idle. Launch an app with device.open_app / mobile_open_app.")
+                .put("description", "Agent workspace idle")
+                .put("clickable", false)
+                .put("editable", false)
+                .put("enabled", true)
+                .put("focused", false)
+                .put("password", false)
+                .put("scrollable", false)
+                .put("bounds", JSONArray(listOf(0, 0, width, height)))
+            val nodes = JSONArray().put(idleNode)
+            observations[displayId] = Observation(id, "android", 0, nodes)
+            JSONObject().put("snapshot_id", id).put("app", "android").put("display_id", displayId)
+                .put("window_id", 0).put("captured_at_ms", System.currentTimeMillis())
+                .put("size", JSONObject().put("w", width).put("h", height))
+                .put("nodes", nodes)
+                .put("safe_area", emptyAgentSafeArea())
+        } else {
+            throw Failure("observation_unavailable", "The selected display has no readable app window")
+        }
+    }
 
     private fun collect(node: AccessibilityNodeInfo, output: JSONArray, depth: Int, onNode: ((String, AccessibilityNodeInfo) -> Unit)? = null) {
         if (output.length() >= 160 || depth > 35 || !node.isVisibleToUser) return

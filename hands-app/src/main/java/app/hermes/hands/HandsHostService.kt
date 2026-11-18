@@ -57,11 +57,16 @@ class HandsHostService : Service(), AgentScreenHost {
             if (state.consent && (((runtime.screenControlExpected() && state.backend == "accessibility") && !accessibilityReady) ||
                     !getSystemService(NotificationManager::class.java).areNotificationsEnabled() ||
                     (state.target == "primary" && !android.provider.Settings.canDrawOverlays(this@HandsHostService)))) runtime.stopSession()
-            val approved = runtime.state.value.consent
-            if (approved && wake?.isHeld != true) {
-                wake = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:hands-session")
-                    .apply { acquire(60 * 60_000L) }
-            } else if (!approved && wake?.isHeld == true) wake?.release()
+            val serving = runtime.state.value.serving
+            if (serving && wake?.isHeld != true) {
+                wake = runCatching {
+                    getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:hands-service")
+                        .apply { setReferenceCounted(false); acquire(24 * 60 * 60_000L) }
+                }.getOrNull()
+            } else if (!serving && wake?.isHeld == true) {
+                runCatching { wake?.release() }
+                wake = null
+            }
             getSystemService(NotificationManager::class.java).notify(ID, notification())
             main.postDelayed(this, 1000)
         }
@@ -91,7 +96,8 @@ class HandsHostService : Service(), AgentScreenHost {
         runtime.stopServer()
         closeScreen()
         runtime.screenHost = null
-        if (wake?.isHeld == true) wake?.release()
+        runCatching { if (wake?.isHeld == true) wake?.release() }
+        wake = null
         displayWorker.shutdown()
         super.onDestroy()
     }

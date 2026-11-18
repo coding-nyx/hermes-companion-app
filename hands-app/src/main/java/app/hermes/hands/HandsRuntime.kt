@@ -758,8 +758,10 @@ class HandsRuntime(
             check(shizuku.status.value.bound) { "shizuku_unavailable" }
             if (privilegedSession == 0L) privilegedSession = shizuku.beginSession()
             val foreground = shizuku.foregroundPackage(display)
-            if (action != "device.open_app" && action != "device.apps") {
+            if (action !in setOf("device.open_app", "device.apps", "device.snapshot", "device.screenshot")) {
                 check(!foreground.isNullOrBlank()) { "screen_unavailable" }
+            }
+            if (!foreground.isNullOrBlank()) {
                 check(!DeviceLanePolicy.isProtected(foreground, protected)) { "protected_package" }
             }
             checkAllowed()
