@@ -955,3 +955,94 @@ for _handoff in (SMS_COMPOSE, CALL_DIAL, CALL_PLACE, ALARM_SET, TIMER_SET, MEDIA
         "type": "boolean", "default": False,
         "description": "Allow opening the physical phone only for an explicitly requested user handoff; never use to approve permissions or bypass agent-display isolation.",
     }
+
+TELEMETRY = {
+    "name": "mobile_telemetry",
+    "description": "Read comprehensive real-time device health, power, lock state, network, audio, now-playing media, foreground app, recent notification summaries, and Hands runtime status. Passive and allowed while disarmed.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "device": DEV,
+            "include_media": {"type": "boolean", "default": True, "description": "Include active media sessions and now playing metadata."},
+            "include_notifications": {"type": "boolean", "default": True, "description": "Include recent notification summaries."},
+        },
+    },
+}
+
+GATE_GET = {
+    "name": "mobile_gate_get",
+    "description": "Inspect configurable Hands system gates: control backend, target display, accessibility service state, Shizuku availability, protected packages, notification stream configuration, and screen awake settings. Passive and allowed while disarmed.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "device": DEV,
+        },
+    },
+}
+
+GATE_SET = {
+    "name": "mobile_gate_set",
+    "description": "Mutate Hands gates and system permissions remotely: control backend (hybrid/shizuku/accessibility), target display (primary/agent), accessibility service toggle (via WRITE_SECURE_SETTINGS or Shizuku), protected packages, notification stream (scope, content mode, retention), and keep-awake settings. Requires ARMED.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "device": DEV,
+            "backend": {"type": "string", "enum": ["hybrid", "shizuku", "accessibility"], "description": "Change the control backend."},
+            "target": {"type": "string", "enum": ["primary", "agent"], "description": "Change the target display (primary phone screen or virtual agent screen)."},
+            "accessibility_enabled": {"type": "boolean", "description": "Toggle Hands accessibility service on or off using WRITE_SECURE_SETTINGS or Shizuku."},
+            "protected_packages": {
+                "description": "Set protected packages. Array of package names, or object with add/remove/clear keys.",
+            },
+            "notification_stream": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                    "packages": {"type": "array", "items": {"type": "string"}, "description": "List of package names, or ['*'] for all notifications."},
+                    "content": {"type": "string", "enum": ["metadata", "title", "full"]},
+                    "retention_minutes": {"type": "integer", "minimum": 1, "maximum": 60},
+                    "include_calls": {"type": "boolean"},
+                },
+                "description": "Configure or toggle live notification streaming.",
+            },
+            "stay_awake_plugged": {"type": "boolean", "description": "Keep phone awake while plugged into charger (via WRITE_SECURE_SETTINGS)."},
+            "screen_off_timeout_ms": {"type": "integer", "minimum": 5000, "maximum": 2147483647, "description": "Set display sleep timeout in milliseconds."},
+        },
+    },
+}
+
+SHELL = {
+    "name": "mobile_shell",
+    "description": "Execute a privileged shell command via Shizuku (UID 2000, com.android.shell) with full adb shell permissions. Run system queries, radio toggles (svc wifi/bluetooth/data), package management (pm grant/revoke/enable), activity launches (am start), dumpsys, and settings. Requires ARMED and Shizuku active.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "device": DEV,
+            "command": {"type": "string", "description": "The shell command line string to execute."},
+            "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 30000, "default": 10000, "description": "Execution timeout in milliseconds."},
+        },
+        "required": ["command"],
+    },
+}
+
+POWER_WAKE = {
+    "name": "mobile_power_wake",
+    "description": "Wake the phone display if the screen is currently off or sleeping. Uses PowerManager wake lock and Shizuku wakeup keyevent. Passive and allowed while disarmed.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "device": DEV,
+        },
+    },
+}
+
+KEYGUARD_DISMISS = {
+    "name": "mobile_keyguard_dismiss",
+    "description": "Dismiss or unlock the phone lock screen / keyguard. Dismisses swipe or non-secure keyguards directly. If the phone uses a PIN and Shizuku is active, pass pin to enter it automatically. Allowed while disarmed or armed.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "device": DEV,
+            "pin": {"type": "string", "description": "Optional lockscreen PIN to enter via Shizuku if keyguard is PIN-locked."},
+        },
+    },
+}

@@ -98,6 +98,12 @@ object DeviceLanePolicy {
         "device.apps.usage",
         "device.audio.dnd",
         "device.audio.dnd.set",
+        "device.telemetry",
+        "device.gates.get",
+        "device.gates.set",
+        "device.shell.exec",
+        "device.power.wake",
+        "device.keyguard.dismiss",
     )
 
     /**
@@ -165,6 +171,12 @@ object DeviceLanePolicy {
         "device.apps.usage",
         "device.audio.dnd",
         "device.audio.dnd.set",
+        "device.telemetry",
+        "device.gates.get",
+        "device.gates.set",
+        "device.shell.exec",
+        "device.power.wake",
+        "device.keyguard.dismiss",
     )
 
     /**
@@ -194,6 +206,10 @@ object DeviceLanePolicy {
         "device.power.state",
         "device.thermal",
         "device.audio.dnd",
+        "device.telemetry",
+        "device.gates.get",
+        "device.power.wake",
+        "device.keyguard.dismiss",
         // NOTE: calendar.list, location.last and apps.usage are reads but are deliberately NOT
         // passive — they are personal data, so they sit behind arming exactly like sms.list.
         // NOTE: sms.list, calls.log and contacts.search are reads but are deliberately NOT

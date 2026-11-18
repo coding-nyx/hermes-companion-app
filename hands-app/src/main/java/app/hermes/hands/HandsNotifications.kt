@@ -85,6 +85,47 @@ class HandsNotifications internal constructor(
         refreshLocked(forceBus = true)
     }
 
+    fun recentSummaries(limit: Int = 5): List<JSONObject> = synchronized(monitor) {
+        ring.takeLast(limit).map { delivery ->
+            val ev = delivery.event
+            JSONObject().apply {
+                put("package", ev.packageName)
+                put("title", ev.title)
+                put("text", ev.text)
+                put("timestamp", ev.postTimeMs)
+                put("key", ev.key)
+            }
+        }
+    }
+
+    fun configureRemote(
+        clientId: String,
+        enabled: Boolean,
+        packages: Set<String>? = null,
+        content: String? = null,
+        retentionMinutes: Int? = null,
+        includeCalls: Boolean? = null
+    ): JSONObject = synchronized(monitor) {
+        val pkgs = packages ?: state.value.packages
+        val cont = content ?: state.value.content
+        val ret = retentionMinutes ?: state.value.retentionMinutes
+        val calls = includeCalls ?: state.value.includeCalls
+        require(pkgs.size <= MAX_PACKAGES && pkgs.all(::validPackage)) { "bad_args" }
+        require(cont in CONTENT && ret in 1..60) { "bad_args" }
+        _state.value = state.value.copy(
+            enabled = enabled,
+            clientId = if (enabled) clientId else state.value.clientId,
+            packages = pkgs.toSet(),
+            content = cont,
+            retentionMinutes = ret,
+            includeCalls = calls
+        )
+        saveChoices()
+        advanceScope()
+        refreshLocked(forceBus = true)
+        statusJson()
+    }
+
     fun refresh() = synchronized(monitor) { refreshLocked() }
 
     fun onClientRevoked(id: String) = synchronized(monitor) {

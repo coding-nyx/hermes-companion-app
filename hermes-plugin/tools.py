@@ -1107,6 +1107,32 @@ def make_handlers(broker: Broker, working_lease=None):
         del kwargs
         return _dispatch("device.audio.dnd.set", params, need=("mode",))
 
+    # ---------- Telemetry, Gates, Shell & Keyguard ----------
+
+    def mobile_telemetry(params, **kwargs):
+        del kwargs
+        return _dispatch("device.telemetry", params)
+
+    def mobile_gate_get(params, **kwargs):
+        del kwargs
+        return _dispatch("device.gates.get", params)
+
+    def mobile_gate_set(params, **kwargs):
+        del kwargs
+        return _dispatch("device.gates.set", params)
+
+    def mobile_shell(params, **kwargs):
+        del kwargs
+        return _dispatch("device.shell.exec", params, need=("command",))
+
+    def mobile_power_wake(params, **kwargs):
+        del kwargs
+        return _dispatch("device.power.wake", params)
+
+    def mobile_keyguard_dismiss(params, **kwargs):
+        del kwargs
+        return _dispatch("device.keyguard.dismiss", params)
+
     # ---------- L0 voice out ----------
 
     def mobile_speak(params, **kwargs):
@@ -1371,6 +1397,12 @@ def make_handlers(broker: Broker, working_lease=None):
         "mobile_app_usage": mobile_app_usage,
         "mobile_dnd": mobile_dnd,
         "mobile_dnd_set": mobile_dnd_set,
+        "mobile_telemetry": mobile_telemetry,
+        "mobile_gate_get": mobile_gate_get,
+        "mobile_gate_set": mobile_gate_set,
+        "mobile_shell": mobile_shell,
+        "mobile_power_wake": mobile_power_wake,
+        "mobile_keyguard_dismiss": mobile_keyguard_dismiss,
     }
 
 

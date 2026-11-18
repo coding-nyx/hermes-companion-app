@@ -1923,6 +1923,139 @@
         "additionalProperties": false
       },
       "action": "device.secure_settings.set"
+    },
+    {
+      "name": "mobile_telemetry",
+      "description": "Read comprehensive real-time device health, power, lock state, network, audio, now-playing media, foreground app, recent notification summaries, and Hands runtime status. Passive and allowed while disarmed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "include_media": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_notifications": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "action": "device.telemetry",
+      "passive": true
+    },
+    {
+      "name": "mobile_gate_get",
+      "description": "Inspect configurable Hands system gates: control backend, target display, accessibility service state, Shizuku availability, protected packages, notification stream configuration, and screen awake settings. Passive and allowed while disarmed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "action": "device.gates.get",
+      "passive": true
+    },
+    {
+      "name": "mobile_gate_set",
+      "description": "Mutate Hands gates and system permissions remotely: control backend, target display, accessibility service toggle, protected packages, notification stream, and keep-awake settings. Requires ARMED.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "backend": {
+            "type": "string",
+            "enum": [
+              "hybrid",
+              "shizuku",
+              "accessibility"
+            ]
+          },
+          "target": {
+            "type": "string",
+            "enum": [
+              "primary",
+              "agent"
+            ]
+          },
+          "accessibility_enabled": {
+            "type": "boolean"
+          },
+          "stay_awake_plugged": {
+            "type": "boolean"
+          },
+          "screen_off_timeout_ms": {
+            "type": "integer",
+            "minimum": 5000,
+            "maximum": 2147483647
+          }
+        },
+        "required": [],
+        "additionalProperties": true
+      },
+      "action": "device.gates.set",
+      "passive": false
+    },
+    {
+      "name": "mobile_shell",
+      "description": "Execute a privileged shell command via Shizuku (UID 2000, com.android.shell) with full adb shell permissions. Run system queries, radio toggles (svc wifi/bluetooth/data), package management (pm grant/revoke/enable), activity launches (am start), dumpsys, and settings. Requires ARMED and Shizuku active.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 30000,
+            "default": 10000
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "action": "device.shell.exec",
+      "passive": false
+    },
+    {
+      "name": "mobile_power_wake",
+      "description": "Wake the phone display if the screen is currently off or sleeping. Uses PowerManager wake lock and Shizuku wakeup keyevent. Passive and allowed while disarmed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "action": "device.power.wake",
+      "passive": true
+    },
+    {
+      "name": "mobile_keyguard_dismiss",
+      "description": "Dismiss or unlock the phone lock screen / keyguard. Dismisses swipe or non-secure keyguards directly. If the phone uses a PIN and Shizuku is active, pass pin to enter it automatically. Allowed while disarmed or armed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pin": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "action": "device.keyguard.dismiss",
+      "passive": true
     }
   ]
 }

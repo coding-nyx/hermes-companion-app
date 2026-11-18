@@ -95,6 +95,12 @@ ALLOWLIST = frozenset(
         "device.apps.usage",
         "device.audio.dnd",
         "device.audio.dnd.set",
+        "device.telemetry",
+        "device.gates.get",
+        "device.gates.set",
+        "device.shell.exec",
+        "device.power.wake",
+        "device.keyguard.dismiss",
     }
 )
 
@@ -161,6 +167,12 @@ L0_NO_A11Y = frozenset(
         "device.apps.usage",
         "device.audio.dnd",
         "device.audio.dnd.set",
+        "device.telemetry",
+        "device.gates.get",
+        "device.gates.set",
+        "device.shell.exec",
+        "device.power.wake",
+        "device.keyguard.dismiss",
     }
 )
 
@@ -191,6 +203,10 @@ L0_PASSIVE = frozenset(
         "device.power.state",
         "device.thermal",
         "device.audio.dnd",
+        "device.telemetry",
+        "device.gates.get",
+        "device.power.wake",
+        "device.keyguard.dismiss",
     }
 )
 

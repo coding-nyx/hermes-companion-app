@@ -159,7 +159,7 @@ class PrivilegedHandsService @Keep constructor(context: Context) : IHandsService
         sessions.require(sessionEpoch)
         try { target(displayId) } catch (failure: Failure) { throw IllegalStateException(failure.code) }
         check(privateTarget == null) { "private_target_busy" }
-        check(shellContext.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == false) { "screen_locked" }
+        check(displayId > 0 || shellContext.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == false) { "screen_locked" }
         val previous = observations[displayId] ?: throw IllegalStateException("stale_ref")
         check(previous.id == snapshotId && previous.packageName == packageName) { "stale_ref" }
         val normalized = ref.removePrefix("@")
@@ -293,10 +293,36 @@ class PrivilegedHandsService @Keep constructor(context: Context) : IHandsService
             if (arguments.length > 32_768) throw Failure("invalid_arguments", "Arguments exceed the command limit")
             val args = JSONObject(arguments)
             val epoch = args.optLong("_hands_session", -1)
-            sessions.require(epoch)
-            commandEpoch = epoch
-            target(displayId)
+            val systemActions = setOf("device.shell.exec", "device.power.wake", "device.keyguard.dismiss")
+            if (action !in systemActions) {
+                sessions.require(epoch)
+                commandEpoch = epoch
+                target(displayId)
+            }
             val result = when (action) {
+                "device.shell.exec" -> {
+                    val cmd = args.optString("command")
+                    if (cmd.isBlank()) throw Failure("invalid_arguments", "Command is required")
+                    val timeout = args.optLong("timeout_ms", 10_000)
+                    shellExec(cmd, timeout)
+                }
+                "device.power.wake" -> {
+                    command(listOf("/system/bin/input", "keyevent", "224"))
+                    JSONObject().put("screen_on", true)
+                }
+                "device.keyguard.dismiss" -> {
+                    runCatching { command(listOf("/system/bin/wm", "dismiss-keyguard")) }
+                    runCatching { command(listOf("/system/bin/input", "keyevent", "82")) }
+                    val pin = args.optString("pin")
+                    if (pin.isNotBlank()) {
+                        Thread.sleep(200)
+                        command(listOf("/system/bin/input", "text", pin))
+                        command(listOf("/system/bin/input", "keyevent", "66"))
+                    }
+                    val km = shellContext.getSystemService(android.app.KeyguardManager::class.java)
+                    val locked = km?.isKeyguardLocked == true
+                    JSONObject().put("dismissed", !locked).put("locked", locked)
+                }
                 "device.snapshot" -> snapshot(displayId)
                 "device.screenshot" -> screenshot(displayId)
                 "device.click" -> {
@@ -368,7 +394,9 @@ class PrivilegedHandsService @Keep constructor(context: Context) : IHandsService
                 }
                 else -> throw Failure("unsupported_action", "Unsupported Shizuku action")
             }
-            sessions.require(epoch)
+            if (action !in systemActions) {
+                sessions.require(epoch)
+            }
             JSONObject().put("ok", true).put("result", result).toString()
         } catch (error: Exception) {
             val code = when (error) {
@@ -644,7 +672,12 @@ class PrivilegedHandsService @Keep constructor(context: Context) : IHandsService
     }
 
     private fun command(argv: List<String>): String {
-        val process = sessions.withPermit(checkNotNull(commandEpoch)) {
+        val epoch = commandEpoch
+        val process = if (epoch != null) {
+            sessions.withPermit(epoch) {
+                ProcessBuilder(argv).start().also { activeProcess = it }
+            }
+        } else {
             ProcessBuilder(argv).start().also { activeProcess = it }
         }
         val readers = Executors.newFixedThreadPool(2)
@@ -674,6 +707,52 @@ class PrivilegedHandsService @Keep constructor(context: Context) : IHandsService
             val err = errors.get(1, TimeUnit.SECONDS)
             if (process.exitValue() != 0 || err.contains("Exception")) throw Failure("android_command_failed", "Android refused the targeted command")
             return text
+        } finally {
+            process.destroy()
+            if (activeProcess === process) activeProcess = null
+            readers.shutdownNow()
+        }
+    }
+
+    private fun shellExec(cmd: String, timeoutMs: Long = 10_000): JSONObject {
+        val epoch = commandEpoch
+        val process = if (epoch != null) {
+            sessions.withPermit(epoch) {
+                ProcessBuilder("/system/bin/sh", "-c", cmd).start().also { activeProcess = it }
+            }
+        } else {
+            ProcessBuilder("/system/bin/sh", "-c", cmd).start().also { activeProcess = it }
+        }
+        val readers = Executors.newFixedThreadPool(2)
+        val tooLarge = AtomicBoolean(false)
+        fun drain(stream: java.io.InputStream) = readers.submit<String> {
+            val out = ByteArrayOutputStream()
+            stream.use { input ->
+                val bytes = ByteArray(8192)
+                while (true) {
+                    val n = input.read(bytes)
+                    if (n < 0) break
+                    if (out.size() + n > 262_144) { tooLarge.set(true); process.destroyForcibly(); break }
+                    out.write(bytes, 0, n)
+                }
+            }
+            out.toString(Charsets.UTF_8.name())
+        }
+        val output = drain(process.inputStream)
+        val errors = drain(process.errorStream)
+        try {
+            val completed = process.waitFor(timeoutMs.coerceIn(1000, 30000), TimeUnit.MILLISECONDS)
+            if (!completed) {
+                process.destroyForcibly()
+                throw Failure("command_timeout", "Shell command timed out after ${timeoutMs}ms")
+            }
+            if (tooLarge.get()) throw Failure("output_limit", "Shell output exceeded 256KB")
+            val text = output.get(1, TimeUnit.SECONDS)
+            val err = errors.get(1, TimeUnit.SECONDS)
+            return JSONObject()
+                .put("exit_code", process.exitValue())
+                .put("stdout", text)
+                .put("stderr", err)
         } finally {
             process.destroy()
             if (activeProcess === process) activeProcess = null

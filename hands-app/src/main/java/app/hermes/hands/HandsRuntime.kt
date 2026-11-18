@@ -369,6 +369,8 @@ class HandsRuntime(
         } finally { commands.unlock() }
     }
 
+    fun leaseRemainingSeconds(): Long = lease.remainingSeconds()
+
     fun status(): JSONObject {
         refresh()
         val st = state.value
@@ -608,6 +610,13 @@ class HandsRuntime(
                         .put("target", "agent").put("active", true).put("available", true))
                 }
                 action == "device.agent_screen.stop" -> { disarm(); return status() }
+                action == "device.gates.set" -> ok(HandsGates.set(context, this, client.id, args))
+                action == "device.shell.exec" -> {
+                    check(shizuku.status.value.bound) { "shizuku_unavailable" }
+                    val cmd = args.optString("command")
+                    require(cmd.isNotBlank()) { "bad_args" }
+                    shizuku.execute("device.shell.exec", args, 0)
+                }
                 action == "device.secure_entry" -> ok(secureEntry.command(owner, args) { executionPermit(allowPrivate = true) })
                 action in HandsNotifications.ACTIONS -> checkNotNull(notifications.command(client.id, action, args) { executionPermit() })
                 action in HandsSecureSettingsTools.ACTIONS -> checkNotNull(secureSettingsTools.execute(action, args) { executionPermit() })
@@ -675,7 +684,7 @@ class HandsRuntime(
         val st = state.value
         val agent = st.target == "agent"
         val display = if (agent) st.displayId.takeIf { it > 0 } ?: throw IllegalStateException("agent_screen_unavailable") else 0
-        if (context.getSystemService(KeyguardManager::class.java).isKeyguardLocked) throw IllegalStateException("screen_locked")
+        if (display == 0 && context.getSystemService(KeyguardManager::class.java).isKeyguardLocked) throw IllegalStateException("screen_locked")
         val privileged = agent || st.backend == "shizuku" || (st.backend == "hybrid" && !accessibilityReady())
         val target = args.optString("package")
         val protected = st.protectedPackages + context.packageName
@@ -810,6 +819,31 @@ class HandsRuntime(
             "device.power.battery", "device.battery" -> JSONObject(SystemToolbox.battery(context))
             "device.power.state" -> JSONObject(SystemToolbox.powerState(context))
             "device.power.thermal", "device.thermal" -> JSONObject(SystemToolbox.thermal(context))
+            "device.telemetry" -> HandsTelemetry.collect(context, this, args.optBoolean("include_media", true), args.optBoolean("include_notifications", true))
+            "device.gates.get" -> HandsGates.get(context, this)
+            "device.power.wake" -> {
+                val pm = context.getSystemService(android.os.PowerManager::class.java)
+                val wl = pm?.newWakeLock(android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP or android.os.PowerManager.ON_AFTER_RELEASE, "hands:wake")
+                runCatching { wl?.acquire(3000) }
+                if (shizuku.status.value.bound) {
+                    runCatching { shizuku.execute("device.power.wake", args, 0) }
+                }
+                JSONObject().put("screen_on", true)
+            }
+            "device.keyguard.dismiss" -> {
+                if (shizuku.status.value.bound) {
+                    val res = shizuku.execute("device.keyguard.dismiss", args, 0)
+                    if (res.optBoolean("ok")) {
+                        res.optJSONObject("result") ?: JSONObject().put("dismissed", true)
+                    } else {
+                        return res
+                    }
+                } else {
+                    val km = context.getSystemService(KeyguardManager::class.java)
+                    val locked = km?.isKeyguardLocked == true
+                    JSONObject().put("dismissed", !locked).put("locked", locked)
+                }
+            }
             "device.wait" -> { val ms = args.optLong("ms", 250); require(ms in 0..5000); Thread.sleep(ms); JSONObject().put("ms", ms) }
             else -> return error("unsupported_action", "This Hands version does not expose $action; no fallback was performed")
         }
@@ -868,12 +902,14 @@ class HandsRuntime(
         private val SCREEN_ACTIONS = setOf("device.snapshot", "device.screenshot", "device.click", "device.swipe", "device.scroll", "device.type", "device.press", "device.open_app", "device.apps")
         private val PASSIVE_ACTIONS = setOf("device.display.brightness.get", "device.device.info", "device.audio.volume.get",
             "device.media.sessions", "device.media.now_playing", "device.notifications.nls", "device.power.battery", "device.battery",
-            "device.power.state", "device.power.thermal", "device.thermal")
+            "device.power.state", "device.power.thermal", "device.thermal",
+            "device.telemetry", "device.gates.get", "device.power.wake", "device.keyguard.dismiss")
         val CAPABILITIES = SCREEN_ACTIONS + HandsDeviceTools.ACTIONS + HandsNotifications.ACTIONS + HandsSecureSettingsTools.ACTIONS + setOf("device.secure_entry", "device.permissions", "device.status", "device.arm", "device.arm.renew", "device.disarm",
             "device.agent_screen.start", "device.agent_screen.status", "device.agent_screen.stop", "device.device.info",
             "device.audio.volume.get", "device.audio.volume.set", "device.audio.ringer", "device.media.sessions",
             "device.media.now_playing", "device.media.control", "device.clipboard.get", "device.clipboard.set",
             "device.notifications.nls", "device.display.brightness.get", "device.display.brightness.set",
-            "device.power.battery", "device.battery", "device.power.state", "device.power.thermal", "device.thermal", "device.wait", "device.display.keep_awake")
+            "device.power.battery", "device.battery", "device.power.state", "device.power.thermal", "device.thermal", "device.wait", "device.display.keep_awake",
+            "device.telemetry", "device.gates.get", "device.gates.set", "device.shell.exec", "device.power.wake", "device.keyguard.dismiss")
     }
 }

@@ -28,6 +28,7 @@ try:
         ACCESSIBILITY_STATUS, ACCESSIBILITY_ENABLE, ACCESSIBILITY_DISABLE,
         ACCESSIBILITY_SERVICES, ACCESSIBILITY_SERVICE_SET, SECURE_SETTINGS, SECURE_SETTINGS_SET,
         AGENT_SCREEN_START, AGENT_SCREEN_STATUS, AGENT_SCREEN_STOP,
+        TELEMETRY, GATE_GET, GATE_SET, SHELL, POWER_WAKE, KEYGUARD_DISMISS,
     )
     from .tools import TOOLSET, _room_guard, armed_hint, bind_stores, make_handlers
     from .working_lease import WorkingLeaseManager
@@ -53,6 +54,7 @@ except ImportError:  # script/tests on sys.path
         ACCESSIBILITY_STATUS, ACCESSIBILITY_ENABLE, ACCESSIBILITY_DISABLE,
         ACCESSIBILITY_SERVICES, ACCESSIBILITY_SERVICE_SET, SECURE_SETTINGS, SECURE_SETTINGS_SET,
         AGENT_SCREEN_START, AGENT_SCREEN_STATUS, AGENT_SCREEN_STOP,
+        TELEMETRY, GATE_GET, GATE_SET, SHELL, POWER_WAKE, KEYGUARD_DISMISS,
     )
     from tools import TOOLSET, _room_guard, armed_hint, bind_stores, make_handlers
     from working_lease import WorkingLeaseManager
@@ -166,7 +168,12 @@ def _prompt(_info=None) -> str:
         "mobile_alarm_set, mobile_timer_set, mobile_media_play_search, mobile_calendar_add, "
         "mobile_share, mobile_settings_open, mobile_app_uninstall, mobile_calendar_list, "
         "mobile_location_last, mobile_battery, mobile_power_state, mobile_thermal, "
-        "mobile_app_usage, mobile_dnd, mobile_dnd_set. "
+        "mobile_app_usage, mobile_dnd, mobile_dnd_set, "
+        "mobile_telemetry, mobile_gate_get, mobile_gate_set, mobile_shell, mobile_power_wake, mobile_keyguard_dismiss. "
+        "mobile_telemetry reads comprehensive real-time device context (battery, screen/power, lock state, network, audio, now-playing media, foreground app, notifications) while disarmed. "
+        "mobile_gate_get and mobile_gate_set inspect and toggle Hands system gates (backend, target display, accessibility service, notification streaming, protected packages, keep-awake) remotely. "
+        "mobile_shell executes privileged shell commands via Shizuku (UID 2000, com.android.shell) with full adb capabilities. "
+        "mobile_power_wake turns on the display. mobile_keyguard_dismiss dismisses or unlocks the lockscreen. "
         "Phone files: mobile_files_access reports the All files grant and mounted shared-storage roots; "
         "use mobile_arm(direct_only=true) for file/direct-API tasks without enabling Accessibility, "
         "including when the operator explicitly switched it off. This mode blocks screen tools even if "
@@ -276,6 +283,7 @@ def register(ctx):
         ACCESSIBILITY_STATUS, ACCESSIBILITY_ENABLE, ACCESSIBILITY_DISABLE,
         ACCESSIBILITY_SERVICES, ACCESSIBILITY_SERVICE_SET, SECURE_SETTINGS, SECURE_SETTINGS_SET,
         AGENT_SCREEN_START, AGENT_SCREEN_STATUS, AGENT_SCREEN_STOP,
+        TELEMETRY, GATE_GET, GATE_SET, SHELL, POWER_WAKE, KEYGUARD_DISMISS,
     ) if mobile_enabled else ():
         ctx.register_tool(
             name=schema["name"],
