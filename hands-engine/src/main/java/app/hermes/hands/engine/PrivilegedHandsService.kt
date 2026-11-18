@@ -87,8 +87,20 @@ class PrivilegedHandsService @Keep constructor(context: Context) : IHandsService
         // OWN_CONTENT_ONLY prevents mirroring the operator's phone. DESTROY_CONTENT_ON_REMOVAL
         // prevents Android moving agent tasks to the operator display when the screen closes.
         // OWN_FOCUS + STEAL_TOP_FOCUS_DISABLED keep targeted input off the operator's focus.
-        val flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or
-            (1 shl 6) or (1 shl 8) or (1 shl 10) or (1 shl 14) or (1 shl 16)
+        // OWN_DISPLAY_GROUP (1 shl 11) + ALWAYS_UNLOCKED (1 shl 12) + CAN_SHOW_WITH_INSECURE_KEYGUARD (1 shl 5)
+        // allow the agent display to render and remain visible even while the physical device is
+        // locked or the primary display is off.
+        val flags = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or
+            (1 shl 5) or  // VIRTUAL_DISPLAY_FLAG_CAN_SHOW_WITH_INSECURE_KEYGUARD
+            (1 shl 6) or  // VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH
+            (1 shl 8) or  // VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL
+            (1 shl 10) or // VIRTUAL_DISPLAY_FLAG_TRUSTED
+            (1 shl 11) or // VIRTUAL_DISPLAY_FLAG_OWN_DISPLAY_GROUP
+            (1 shl 12) or // VIRTUAL_DISPLAY_FLAG_ALWAYS_UNLOCKED
+            (1 shl 13) or // VIRTUAL_DISPLAY_FLAG_TOUCH_FEEDBACK_DISABLED
+            (1 shl 14) or // VIRTUAL_DISPLAY_FLAG_OWN_FOCUS
+            (1 shl 16)    // VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED
         var createdId = -1
         val stopped = object : VirtualDisplay.Callback() {
             override fun onStopped() { synchronized(lock) {
@@ -450,8 +462,15 @@ class PrivilegedHandsService @Keep constructor(context: Context) : IHandsService
             }
         }
         // MULTIPLE_TASK prevents an existing operator task from being moved to the agent display.
-        val output = command(listOf("/system/bin/am", "start", "--user", "0", "--display", displayId.toString(),
-            "-f", "0x18000000", "-n", resolved))
+        // On virtual displays, force fullscreen windowingMode so multi-window / popup apps render properly.
+        val startArgs = if (displayId != 0) {
+            listOf("/system/bin/am", "start", "--user", "0", "--display", displayId.toString(),
+                "--windowingMode", "1", "-f", "0x18000000", "-n", resolved)
+        } else {
+            listOf("/system/bin/am", "start", "--user", "0", "--display", displayId.toString(),
+                "-f", "0x18000000", "-n", resolved)
+        }
+        val output = command(startArgs)
         if (output.contains("Error:") || output.contains("Exception")) throw Failure("app_launch_failed", "Android refused to launch the app on the selected display")
         observations.remove(displayId)
         return JSONObject().put("package", pkg).put("display_id", displayId)
@@ -474,7 +493,9 @@ class PrivilegedHandsService @Keep constructor(context: Context) : IHandsService
 
     private fun snapshot(displayId: Int): JSONObject = withAutomation { automation ->
         withRoot(automation, displayId) { root ->
-            val pkg = root.packageName?.toString().orEmpty()
+            val pkg = root.packageName?.toString().orEmpty().ifBlank {
+                tasks(displayId).firstOrNull()?.topActivity?.packageName.orEmpty()
+            }
             if (pkg.isBlank()) throw Failure("observation_unavailable", "The selected display has no readable app window")
             val nodes = JSONArray()
             collect(root, nodes, 0)
@@ -620,11 +641,12 @@ class PrivilegedHandsService @Keep constructor(context: Context) : IHandsService
             val windows = allWindows[displayId].orEmpty()
             try {
                 val ordered = windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+                    .ifEmpty { windows.filter { it.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD } }
                     .sortedByDescending { (if (it.isFocused) 2 else 0) + if (it.isActive) 1 else 0 }
                 for (window in ordered) {
                     val root = window.root ?: continue
                     try {
-                        if (root.refresh() && root.isVisibleToUser) return block(root)
+                        if (root.isVisibleToUser || (root.refresh() && root.isVisibleToUser)) return block(root)
                     } finally { root.recycle() }
                 }
             } finally {
