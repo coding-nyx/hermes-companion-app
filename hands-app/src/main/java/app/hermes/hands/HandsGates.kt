@@ -18,9 +18,17 @@ object HandsGates {
         val notif = runtime.notifications.state.value
         val shizuku = runtime.shizuku.status.value
 
+        val km = context.getSystemService(android.app.KeyguardManager::class.java)
+        val locked = km?.isKeyguardLocked == true
+        val effectiveTarget = when (st.target) {
+            "auto" -> if ((locked || !CompanionAccessibilityService.bound) && (st.backend != "accessibility" && shizuku.running && shizuku.permissionGranted)) "agent" else "primary"
+            else -> st.target
+        }
+
         val root = JSONObject()
         root.put("backend", st.backend)
         root.put("target", st.target)
+        root.put("effective_target", effectiveTarget)
         root.put("display_id", st.displayId)
         root.put("accessibility_enabled", CompanionAccessibilityService.bound)
         root.put("accessibility_listed", CompanionAccessibilityService.listed(context) == true)
@@ -60,7 +68,7 @@ object HandsGates {
         // 2. Target display
         if (args.has("target")) {
             val target = args.getString("target")
-            require(target in setOf("primary", "agent")) { "invalid_target" }
+            require(target in setOf("primary", "agent", "auto")) { "invalid_target" }
             runtime.configure(target = target)
         }
 

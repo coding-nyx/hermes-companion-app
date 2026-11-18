@@ -445,19 +445,24 @@ fun HandsScreen(
                 }
 
                 HandsSection("Work screen") {
+                    Choice("Auto (adaptive)", "Uses virtual display when locked; phone screen when unlocked.", state.target == "auto") { onTarget("auto") }
                     Choice("Separate agent screen", "Work in another display while you use your phone. Requires Shizuku and Android 14+.", state.target == "agent") { onTarget("agent") }
                     Choice("Phone screen", "The agent operates the screen you are using.", state.target == "primary") { onTarget("primary") }
-                    if (state.target == "agent") {
+                    if (state.target in setOf("agent", "auto")) {
                         Text(
-                            if (state.displayId > 0) "Agent display ${state.displayId} · floating preview" else "No agent display open",
+                            if (state.displayId > 0) "Agent display ${state.displayId} · floating preview"
+                            else if (state.target == "auto") "Virtual display auto-launches on demand when locked"
+                            else "No agent display open",
                             style = HandsType.Caption,
                         )
-                        ActionButton(
-                            if (state.displayId > 0) "Stop agent screen" else "Open agent screen",
-                            if (state.displayId > 0) onDisarm else onStartScreen,
-                            Modifier.testTag("hands.agent.open"),
-                            enabled = state.serving,
-                        )
+                        if (state.target == "agent") {
+                            ActionButton(
+                                if (state.displayId > 0) "Stop agent screen" else "Open agent screen",
+                                if (state.displayId > 0) onDisarm else onStartScreen,
+                                Modifier.testTag("hands.agent.open"),
+                                enabled = state.serving,
+                            )
+                        }
                     }
                 }
 

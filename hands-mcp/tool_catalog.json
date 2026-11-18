@@ -1981,7 +1981,8 @@
             "type": "string",
             "enum": [
               "primary",
-              "agent"
+              "agent",
+              "auto"
             ]
           },
           "accessibility_enabled": {

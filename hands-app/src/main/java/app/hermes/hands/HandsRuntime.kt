@@ -97,7 +97,7 @@ class HandsRuntime(
 
     fun configure(backend: String = state.value.backend, target: String = state.value.target) {
         require(backend in setOf("accessibility", "shizuku", "hybrid"))
-        require(target in setOf("primary", "agent"))
+        require(target in setOf("primary", "agent", "auto"))
         disarmControl()
         preferences.edit().putString("backend", backend).putString("target", target).apply()
         _state.value = state.value.copy(backend = backend, target = target)
@@ -295,15 +295,15 @@ class HandsRuntime(
         val engine = shizuku.status.value
         val privileged = engine.bound && engine.permissionGranted && engine.running
         return when (st.backend) {
-            "accessibility" -> st.target == "primary" && accessibilityReady()
+            "accessibility" -> (st.target == "primary" || st.target == "auto") && accessibilityReady()
             "shizuku" -> privileged
-            else -> privileged || (st.target == "primary" && accessibilityReady())
+            else -> privileged || ((st.target == "primary" || st.target == "auto") && accessibilityReady())
         }
     }
 
     /** Local preview uses the same approved session; it never acquires a remote controller lease. */
     fun openPreview(): Int {
-        check(state.value.serving && state.value.target == "agent") { "Start the service and select the agent screen first." }
+        check(state.value.serving && (state.value.target == "agent" || state.value.target == "auto")) { "Start the service and select the agent screen first." }
         check(state.value.backend != "accessibility") { "Select Shizuku or Hybrid for the separate agent screen." }
         val epoch = lease.currentEpoch()
         if (privilegedSession == 0L) privilegedSession = shizuku.beginSession()
@@ -376,8 +376,15 @@ class HandsRuntime(
         val st = state.value
         val engine = shizuku.status.value
         val screenReady = screenReady()
+        val km = context.getSystemService(KeyguardManager::class.java)
+        val locked = km?.isKeyguardLocked == true
+        val effectiveTarget = when (st.target) {
+            "auto" -> if ((locked || !accessibilityReady()) && (st.backend != "accessibility" && engine.bound && engine.permissionGranted)) "agent" else "primary"
+            else -> st.target
+        }
         return ok(JSONObject().put("service", "hermes-hands").put("protocol_version", 1)
-            .put("armed", st.armed).put("consent_approved", st.consent).put("backend", st.backend).put("target", st.target)
+            .put("armed", st.armed).put("consent_approved", st.consent).put("backend", st.backend)
+            .put("target", st.target).put("effective_target", effectiveTarget)
             .put("expires_in_seconds", lease.remainingSeconds()).put("a11y_bound", CompanionAccessibilityService.bound)
             .put("screen_control_available", screenReady)
             .put("protected_packages", JSONArray(st.protectedPackages.sorted()))
@@ -682,15 +689,43 @@ class HandsRuntime(
 
     private fun screenCommand(action: String, args: JSONObject, checkAllowed: () -> Unit): JSONObject {
         val st = state.value
-        val agent = st.target == "agent"
-        val display = if (agent) st.displayId.takeIf { it > 0 } ?: throw IllegalStateException("agent_screen_unavailable") else 0
-        if (display == 0 && context.getSystemService(KeyguardManager::class.java).isKeyguardLocked) throw IllegalStateException("screen_locked")
+        val km = context.getSystemService(KeyguardManager::class.java)
+        val locked = km?.isKeyguardLocked == true
+
+        // Effective target: action arg overrides, otherwise fallback to runtime setting
+        val requestedTarget = args.optString("target").takeIf { it in setOf("primary", "agent", "auto") } ?: st.target
+        val agent = when (requestedTarget) {
+            "agent" -> true
+            "primary" -> false
+            "auto" -> (locked || !accessibilityReady()) && (st.backend != "accessibility" && shizuku.status.value.bound)
+            else -> st.target == "agent"
+        }
+
+        // Auto-start virtual display if targeting agent and not yet running
+        var effectiveDisplayId = st.displayId
+        if (agent && effectiveDisplayId <= 0 && screenHost != null && shizuku.status.value.bound) {
+            runCatching {
+                if (privilegedSession == 0L) privilegedSession = shizuku.beginSession()
+                val width = args.optInt("width", 720)
+                val height = args.optInt("height", 1280)
+                val density = args.optInt("density", 240)
+                val id = screenHost?.start(width, height, density) ?: 0
+                if (id > 0) {
+                    screenOpened(id)
+                    effectiveDisplayId = id
+                }
+            }
+        }
+
+        val display = if (agent) effectiveDisplayId.takeIf { it > 0 } ?: throw IllegalStateException("agent_screen_unavailable") else 0
+        if (display == 0 && locked) throw IllegalStateException("screen_locked")
         val privileged = agent || st.backend == "shizuku" || (st.backend == "hybrid" && !accessibilityReady())
-        val target = args.optString("package")
+        val targetPkg = args.optString("package")
         val protected = st.protectedPackages + context.packageName
-        check(!DeviceLanePolicy.isProtected(target, protected)) { "protected_package" }
+        check(!DeviceLanePolicy.isProtected(targetPkg, protected)) { "protected_package" }
         if (privileged) {
             check(shizuku.status.value.bound) { "shizuku_unavailable" }
+            if (privilegedSession == 0L) privilegedSession = shizuku.beginSession()
             val foreground = shizuku.foregroundPackage(display)
             if (action != "device.open_app" && action != "device.apps") {
                 check(!foreground.isNullOrBlank()) { "screen_unavailable" }
@@ -785,7 +820,7 @@ class HandsRuntime(
             }
             "device.type" -> service.type(args.getString("text").also { require(it.length <= 16000) })
             "device.press" -> service.press(args.getString("key"))
-            "device.open_app" -> service.openApp(target.also { require(it.matches(Regex("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+"))) })
+            "device.open_app" -> service.openApp(targetPkg.also { require(it.matches(Regex("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+"))) })
             else -> false
         }
         accessibilityPermit()

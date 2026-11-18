@@ -1,5 +1,13 @@
+from __future__ import annotations
+
 import json
+import sys
 import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import _isolate  # noqa: F401,E402
 
 from broker import ALLOWLIST, L0_NO_A11Y, L0_PASSIVE, Broker, MockDevice
 from tools import make_handlers

@@ -120,10 +120,15 @@ object HandsTelemetry {
         }
 
         // 9. Hands Runtime Status
+        val effectiveTarget = when (st.target) {
+            "auto" -> if ((km?.isKeyguardLocked == true || !CompanionAccessibilityService.bound) && (st.backend != "accessibility" && runtime.shizuku.status.value.bound)) "agent" else "primary"
+            else -> st.target
+        }
         val handsJson = JSONObject()
             .put("serving", st.serving)
             .put("armed", st.armed)
             .put("target", st.target)
+            .put("effective_target", effectiveTarget)
             .put("backend", st.backend)
             .put("display_id", st.displayId)
             .put("lease_remaining_seconds", runtime.leaseRemainingSeconds())

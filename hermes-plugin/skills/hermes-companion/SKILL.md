@@ -76,7 +76,7 @@ and pinned gateway/profile. Permissions granted to Companion do not grant them t
 | `mobile_notification_snooze` `key=…` `duration_ms=N` | re-posts it later | no (destructive) | clamped 1s..24h |
 | `mobile_telemetry` `include_media=true` `include_notifications=true` | comprehensive device state: battery, power/lock, network, audio, now-playing, foreground app, notifications, Hands status | yes | passive telemetry snapshot on demand |
 | `mobile_gate_get` | current backend, target display, accessibility status, Shizuku, protected packages, notification stream config, keep-awake settings | yes | read Hands gates |
-| `mobile_gate_set` `backend=…` `target=…` `accessibility_enabled=…` `protected_packages=…` `notification_stream=…` `stay_awake_plugged=…` `screen_off_timeout_ms=…` | mutates Hands gates and settings remotely | no (destructive) | paired agent remote management |
+| `mobile_gate_set` `backend=…` `target=primary|agent|auto` `accessibility_enabled=…` `protected_packages=…` `notification_stream=…` `stay_awake_plugged=…` `screen_off_timeout_ms=…` | mutates Hands gates and settings remotely (target=auto routes to virtual display when locked, primary when unlocked) | no (destructive) | paired agent remote management |
 | `mobile_shell` `command="…"` `timeout_ms=10000` | runs privileged shell command with UID 2000 (com.android.shell) via Shizuku | no (destructive) | full adb power: svc wifi/bluetooth, pm grant, am start |
 | `mobile_power_wake` | wakes the display via wake lock and wakeup keyevent | yes | turns on screen if sleeping |
 | `mobile_keyguard_dismiss` `pin=…` | dismisses or unlocks keyguard / lockscreen | yes | dismisses swipe keyguard; enters PIN via Shizuku if provided |

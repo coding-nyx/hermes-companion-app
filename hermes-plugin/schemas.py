@@ -988,7 +988,7 @@ GATE_SET = {
         "properties": {
             "device": DEV,
             "backend": {"type": "string", "enum": ["hybrid", "shizuku", "accessibility"], "description": "Change the control backend."},
-            "target": {"type": "string", "enum": ["primary", "agent"], "description": "Change the target display (primary phone screen or virtual agent screen)."},
+            "target": {"type": "string", "enum": ["primary", "agent", "auto"], "description": "Change the target display: 'primary' (phone screen), 'agent' (virtual display), or 'auto' (adaptive: virtual display when locked, phone screen when unlocked)."},
             "accessibility_enabled": {"type": "boolean", "description": "Toggle Hands accessibility service on or off using WRITE_SECURE_SETTINGS or Shizuku."},
             "protected_packages": {
                 "description": "Set protected packages. Array of package names, or object with add/remove/clear keys.",
