@@ -20,8 +20,10 @@ object HandsGates {
 
         val km = context.getSystemService(android.app.KeyguardManager::class.java)
         val locked = km?.isKeyguardLocked == true
+        val pm = context.getSystemService(android.os.PowerManager::class.java)
+        val screenOn = pm?.isInteractive == true
         val effectiveTarget = when (st.target) {
-            "auto" -> if ((locked || !CompanionAccessibilityService.bound) && (st.backend != "accessibility" && shizuku.running && shizuku.permissionGranted)) "agent" else "primary"
+            "auto" -> if ((locked || !screenOn || !CompanionAccessibilityService.bound) && (st.backend != "accessibility" && shizuku.running && shizuku.permissionGranted)) "agent" else "primary"
             else -> st.target
         }
 

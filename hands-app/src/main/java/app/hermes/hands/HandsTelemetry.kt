@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.os.PowerManager
 import android.provider.Settings
 import app.hermes.companion.device.CompanionAccessibilityService
 import app.hermes.companion.device.DirectToolbox
@@ -120,8 +121,9 @@ object HandsTelemetry {
         }
 
         // 9. Hands Runtime Status
+        val screenOn = context.getSystemService(PowerManager::class.java)?.isInteractive == true
         val effectiveTarget = when (st.target) {
-            "auto" -> if ((km?.isKeyguardLocked == true || !CompanionAccessibilityService.bound) && (st.backend != "accessibility" && runtime.shizuku.status.value.bound)) "agent" else "primary"
+            "auto" -> if ((km?.isKeyguardLocked == true || !screenOn || !CompanionAccessibilityService.bound) && (st.backend != "accessibility" && runtime.shizuku.status.value.bound)) "agent" else "primary"
             else -> st.target
         }
         val handsJson = JSONObject()

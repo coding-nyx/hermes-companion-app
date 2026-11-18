@@ -4,8 +4,10 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.PixelFormat
 import android.graphics.SurfaceTexture
 import android.graphics.Typeface
+import android.media.ImageReader
 import android.os.*
 import android.view.*
 import android.widget.*
@@ -35,6 +37,7 @@ class HandsHostService : Service(), AgentScreenHost {
         var manager: WindowManager? = null
         var surface: Surface? = null
         var buffer: SurfaceTexture? = null
+        var images: ImageReader? = null
         var resourcesReleased = false
         var collapsed = false
     }
@@ -53,7 +56,7 @@ class HandsHostService : Service(), AgentScreenHost {
             if (state.consent && (runtime.screenControlExpected() || state.displayId > 0) && needsShizuku && (!engine.bound || !engine.permissionGranted || !engine.running)) runtime.stopSession()
             if (state.consent && (((runtime.screenControlExpected() && state.backend == "accessibility") && !accessibilityReady) ||
                     !getSystemService(NotificationManager::class.java).areNotificationsEnabled() ||
-                    !android.provider.Settings.canDrawOverlays(this@HandsHostService))) runtime.stopSession()
+                    (state.target == "primary" && !android.provider.Settings.canDrawOverlays(this@HandsHostService)))) runtime.stopSession()
             val approved = runtime.state.value.consent
             if (approved && wake?.isHeld != true) {
                 wake = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:hands-session")
@@ -108,7 +111,6 @@ class HandsHostService : Service(), AgentScreenHost {
 
     override fun start(width: Int, height: Int, density: Int): Int {
         check(Looper.myLooper() != Looper.getMainLooper())
-        check(android.provider.Settings.canDrawOverlays(this)) { "overlay_permission_required" }
         var fresh = false
         val screen = synchronized(sessions) {
             check(!destroying) { "service_unavailable" }
@@ -119,12 +121,50 @@ class HandsHostService : Service(), AgentScreenHost {
                 fresh = true
             }
         }
-        if (fresh) main.post { showScreen(screen) }
+        if (fresh) {
+            val interactive = getSystemService(PowerManager::class.java)?.isInteractive == true
+            val canOverlay = android.provider.Settings.canDrawOverlays(this)
+            if (interactive && canOverlay) {
+                main.post { showScreen(screen) }
+            } else {
+                startHeadlessScreen(screen)
+            }
+        }
         if (!screen.ready.await(8, TimeUnit.SECONDS) || screen.failure != null || screen.displayId <= 0 || screen.closed.get()) {
             closeSession(screen)
             throw IllegalStateException("agent_screen_failed", screen.failure)
         }
         return screen.displayId
+    }
+
+    private fun startHeadlessScreen(screen: ScreenSession) {
+        displayWorker.execute {
+            synchronized(sessions) {
+                if (screen.closed.get() || currentScreen !== screen || destroying) {
+                    screen.ready.countDown()
+                    return@execute
+                }
+                try {
+                    val images = ImageReader.newInstance(screen.width, screen.height, PixelFormat.RGBA_8888, 2)
+                    images.setOnImageAvailableListener({ reader ->
+                        runCatching { reader.acquireLatestImage()?.close() }
+                    }, Handler(Looper.getMainLooper()))
+                    screen.images = images
+                    val surface = images.surface
+                    screen.surface = surface
+                    val id = runtime.shizuku.createAgentScreen(surface, screen.width, screen.height, screen.density)
+                    screen.displayId = id
+                    if (!screen.closed.get() && currentScreen === screen && !destroying) {
+                        runtime.screenOpened(id)
+                    }
+                } catch (error: Throwable) {
+                    screen.failure = error
+                    closeSession(screen)
+                } finally {
+                    screen.ready.countDown()
+                }
+            }
+        }
     }
 
     private fun showScreen(screen: ScreenSession) {
@@ -264,6 +304,7 @@ class HandsHostService : Service(), AgentScreenHost {
                             if (!screen.resourcesReleased) {
                                 screen.surface?.release()
                                 screen.buffer?.release()
+                                runCatching { screen.images?.close() }
                                 screen.resourcesReleased = true
                             }
                         }

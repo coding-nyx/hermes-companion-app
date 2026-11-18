@@ -378,8 +378,10 @@ class HandsRuntime(
         val screenReady = screenReady()
         val km = context.getSystemService(KeyguardManager::class.java)
         val locked = km?.isKeyguardLocked == true
+        val pm = context.getSystemService(android.os.PowerManager::class.java)
+        val screenOn = pm?.isInteractive == true
         val effectiveTarget = when (st.target) {
-            "auto" -> if ((locked || !accessibilityReady()) && (st.backend != "accessibility" && engine.bound && engine.permissionGranted)) "agent" else "primary"
+            "auto" -> if ((locked || !screenOn || !accessibilityReady()) && (st.backend != "accessibility" && engine.bound && engine.permissionGranted)) "agent" else "primary"
             else -> st.target
         }
         return ok(JSONObject().put("service", "hermes-hands").put("protocol_version", 1)
@@ -485,7 +487,8 @@ class HandsRuntime(
                 disarmControl(); error("permissions_changed")
             }
             val starting = !lease.active()
-            if (starting) physicalHold.beginSession()
+            val shouldHoldPhysical = starting && (selected.target == "primary" || (selected.target == "auto" && isScreenOn() && !isLocked()))
+            if (shouldHoldPhysical) runCatching { physicalHold.beginSession() }
             // It is direct-only while binding: the service monitor must not treat a
             // transient missing accessibility connection as loss of an L1 session.
             acquired = synchronized(holderClassification) {
@@ -496,7 +499,7 @@ class HandsRuntime(
                 }
                 lease.acquire(owner, args.optInt("duration_seconds", 3600)).also { directOnlyHolders.add(it.id) }
             }
-            if (starting) physicalHold.renew((lease.remainingSeconds() * 1000).coerceAtLeast(1))
+            if (shouldHoldPhysical) runCatching { physicalHold.renew((lease.remainingSeconds() * 1000).coerceAtLeast(1)) }
             val engine = shizuku.status.value
             if (AccessibilityArmPolicy.shouldRecover(args.optBoolean("direct_only", false), state.value.target,
                     state.value.backend, engine.bound && engine.running && engine.permissionGranted,
@@ -545,7 +548,6 @@ class HandsRuntime(
                     throw failure
                 }
             }
-            if (!args.optBoolean("direct_only", false) && screenReady()) directOnlyHolders.remove(acquired.id)
             if (starting) {
                 if (shizuku.status.value.let { it.running && it.permissionGranted && !it.bound }) {
                     runCatching { shizuku.connect(waitMs = 1000) }
@@ -554,8 +556,22 @@ class HandsRuntime(
                     val nextSession = shizuku.beginSession()
                     lease.require(owner, acquired.id)
                     privilegedSession = nextSession
+
+                    // Auto-start virtual display if targeting agent or in auto mode while locked/screen-off
+                    val km = context.getSystemService(KeyguardManager::class.java)
+                    val locked = km?.isKeyguardLocked == true
+                    val pm = context.getSystemService(android.os.PowerManager::class.java)
+                    val screenOn = pm?.isInteractive == true
+                    val shouldStartAgentScreen = (selected.target == "agent" || (selected.target == "auto" && (locked || !screenOn))) && state.value.displayId <= 0 && screenHost != null
+                    if (shouldStartAgentScreen) {
+                        runCatching {
+                            val id = screenHost?.start(720, 1280, 240) ?: 0
+                            if (id > 0) screenOpened(id)
+                        }
+                    }
                 }
             }
+            if (!args.optBoolean("direct_only", false) && screenReady()) directOnlyHolders.remove(acquired.id)
             activeClientId = client.id
             controllerLabel = client.label
             observation = null
@@ -696,34 +712,41 @@ class HandsRuntime(
         val st = state.value
         val km = context.getSystemService(KeyguardManager::class.java)
         val locked = km?.isKeyguardLocked == true
+        val pm = context.getSystemService(android.os.PowerManager::class.java)
+        val screenOn = pm?.isInteractive == true
 
         // Effective target: action arg overrides, otherwise fallback to runtime setting
         val requestedTarget = args.optString("target").takeIf { it in setOf("primary", "agent", "auto") } ?: st.target
         val agent = when (requestedTarget) {
             "agent" -> true
             "primary" -> false
-            "auto" -> (locked || !accessibilityReady()) && (st.backend != "accessibility" && shizuku.status.value.bound)
+            "auto" -> (locked || !screenOn || !accessibilityReady()) && (st.backend != "accessibility" && shizuku.status.value.bound)
             else -> st.target == "agent"
         }
 
         // Auto-start virtual display if targeting agent and not yet running
         var effectiveDisplayId = st.displayId
-        if (agent && effectiveDisplayId <= 0 && screenHost != null && shizuku.status.value.bound) {
-            runCatching {
-                if (privilegedSession == 0L) privilegedSession = shizuku.beginSession()
-                val width = args.optInt("width", 720)
-                val height = args.optInt("height", 1280)
-                val density = args.optInt("density", 240)
-                val id = screenHost?.start(width, height, density) ?: 0
-                if (id > 0) {
-                    screenOpened(id)
-                    effectiveDisplayId = id
+        if (agent && effectiveDisplayId <= 0 && screenHost != null) {
+            if (!shizuku.status.value.bound && shizuku.status.value.running && shizuku.status.value.permissionGranted) {
+                runCatching { shizuku.connect(waitMs = 1000) }
+            }
+            if (shizuku.status.value.bound) {
+                runCatching {
+                    if (privilegedSession == 0L) privilegedSession = shizuku.beginSession()
+                    val width = args.optInt("width", 720)
+                    val height = args.optInt("height", 1280)
+                    val density = args.optInt("density", 240)
+                    val id = screenHost?.start(width, height, density) ?: 0
+                    if (id > 0) {
+                        screenOpened(id)
+                        effectiveDisplayId = id
+                    }
                 }
             }
         }
 
         val display = if (agent) effectiveDisplayId.takeIf { it > 0 } ?: throw IllegalStateException("agent_screen_unavailable") else 0
-        if (display == 0 && locked) throw IllegalStateException("screen_locked")
+        if (display == 0 && (locked || !screenOn)) throw IllegalStateException(if (locked) "screen_locked" else "screen_off")
         val privileged = agent || st.backend == "shizuku" || (st.backend == "hybrid" && !accessibilityReady())
         val targetPkg = args.optString("package")
         val protected = st.protectedPackages + context.packageName
